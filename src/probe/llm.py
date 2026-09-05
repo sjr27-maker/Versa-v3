@@ -47,28 +47,6 @@ _DEFAULT_PROPOSALS = json.dumps(
 )
 
 
-_DEFAULT_CONCEPT_BATCH = json.dumps(
-    [
-        {
-            "id": "stub_base",
-            "name": "Stub Base Concept",
-            "prerequisites": [],
-            "common_misconceptions": [],
-            "representations": ["formal"],
-            "diagnostic_questions": ["what is the stub base concept?"],
-        },
-        {
-            "id": "stub_derived",
-            "name": "Stub Derived Concept",
-            "prerequisites": ["stub_base"],
-            "common_misconceptions": [],
-            "representations": ["formal"],
-            "diagnostic_questions": ["how does stub derived build on stub base?"],
-        },
-    ]
-)
-
-
 _DEFAULT_INTENT_BRANCHES = json.dumps(
     [
         {
@@ -135,7 +113,6 @@ _DEFAULT_RESPONSES: dict[str, str] = {
     # ExtractTeachingArtifact's "already used" list to stay accurate.
     "EXTRACT:ARTIFACT": json.dumps({"example": None, "analogy": None}),
     "PROPOSE:ACTIONS": _DEFAULT_PROPOSALS,
-    "SEED:CONCEPT_GRAPH": _DEFAULT_CONCEPT_BATCH,
     # Conservative default: no mismatch, so MismatchDetector doesn't
     # propose revisions or reweight hypotheses unless a test opts in.
     "MISMATCH:DETECT": json.dumps({"mismatch": False}),
@@ -308,27 +285,6 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
                 "rationale": {"type": "STRING"},
             },
             "required": ["action"],
-        },
-    },
-    "SEED:CONCEPT_GRAPH": {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "id": {"type": "STRING"},
-                "name": {"type": "STRING"},
-                "prerequisites": {"type": "ARRAY", "items": {"type": "STRING"}},
-                "common_misconceptions": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"},
-                },
-                "representations": {"type": "ARRAY", "items": {"type": "STRING"}},
-                "diagnostic_questions": {
-                    "type": "ARRAY",
-                    "items": {"type": "STRING"},
-                },
-            },
-            "required": ["id", "name"],
         },
     },
     "MISMATCH:DETECT": {

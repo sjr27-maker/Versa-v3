@@ -325,6 +325,55 @@ class ThinkingStyleCandidate(BaseModel):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
+class GroundingEvidence(BaseModel):
+    """One web excerpt threaded into `FinalAnswer`'s prompt — the
+    single result kept from a time-sensitivity search (grounding.py).
+
+    Not DB-backed: it lives only in this turn's `node_calls` row, which
+    is deliberate. A `learner_fact` records what the *student*
+    established; a stale-topic excerpt is a fact about the world at
+    one moment, and writing it into the durable memory layer would let
+    today's answer silently become tomorrow's remembered truth.
+    """
+
+    url: str
+    title: str | None = None
+    publish_date: str | None = None
+    excerpt: str
+
+
+class GroundingResult(BaseModel):
+    """`GroundTimeSensitive`'s output — deliberately records the
+    negative case too, not just hits.
+
+    `time_sensitive=False` with `matched_marker=None` is the normal,
+    expected shape on an ordinary turn, and it is written to
+    `node_calls` on every turn this node runs. That is the point: the
+    check's real firing rate is a measurable property of the audit
+    trail rather than something inferred from how often a search
+    happened to appear.
+
+    `error` is set when a search was attempted and failed — the
+    explicit, logged record of a degradation to an ungrounded answer,
+    so the fallback can never be a silent one.
+
+    `evidence` is a ranked list, not a single excerpt. It was a single
+    excerpt originally, and that was a measured mistake: on a live
+    comparison run the top-ranked result for "latest stable Python
+    version" was the authoritative domain but its excerpt was a
+    glossary of release *phases* containing no version number, while
+    results 2 and 3 both carried the answer and were discarded. The
+    grounded answer came out less accurate than the ungrounded one AND
+    wearing a citation. Ranked-but-diverse beats single-best here.
+    """
+
+    time_sensitive: bool = False
+    matched_marker: str | None = None
+    searched: bool = False
+    evidence: list[GroundingEvidence] = Field(default_factory=list)
+    error: str | None = None
+
+
 class EvidenceSourceType(str, Enum):
     # A deliberate scripted run to exercise a code path — proves a
     # mechanism functions, never that the system adapted to a real

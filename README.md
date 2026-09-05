@@ -34,7 +34,7 @@ Every claim in the system is backed by a stored, readable trace — nothing is t
 
 **Databases:** PostgreSQL 16 with the `pgvector` extension (Cloud SQL in production, Docker locally)
 
-**APIs / SDKs:** Google Gen AI SDK (`google-genai`), Gemini API
+**APIs / SDKs:** Google Gen AI SDK (`google-genai`), Gemini API, Parallel Web Systems Search API (optional — time-sensitive grounding)
 
 **Infra:** Google Cloud SQL, Google Cloud Run, Google Artifact Registry, Google Secret Manager
 
@@ -146,6 +146,7 @@ uv run probe chat --learner test-user --stub
 | Credential | Required for | Where to get it |
 |---|---|---|
 | `GEMINI_API_KEY` | Any real (non-`--stub`) session | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `PARALLEL_API_KEY` | **Optional** — time-sensitive web grounding only. Without it, grounding stays off and everything else works unchanged | [parallel.ai](https://parallel.ai) |
 | `DATABASE_URL` | All local testing | Provided automatically by `docker compose up` |
 
 No credentials are required to run the automated test suite — it runs entirely against a stub LLM client with no external calls.
@@ -167,3 +168,23 @@ No credentials are required to run the automated test suite — it runs entirely
 ## Deployment
 
 Deployed on Google Cloud Run, backed by Cloud SQL (Postgres + pgvector) and Secret Manager for credentials. See `Dockerfile` for the container build; the app reads `PORT` from the environment to bind correctly under Cloud Run.
+
+Credentials are held in Secret Manager and mounted as environment variables. `PARALLEL_API_KEY` follows exactly the same pattern as `GEMINI_API_KEY`, with one difference: it is optional, so the deploy stays valid without it (grounding simply stays off).
+
+```bash
+# One-time: create the secret
+printf '%s' "$PARALLEL_API_KEY" | gcloud secrets create parallel-api-key --data-file=-
+
+# Grant the Cloud Run runtime service account read access
+gcloud secrets add-iam-policy-binding parallel-api-key \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/secretmanager.secretAccessor"
+
+# Mount it alongside the existing secrets on deploy
+gcloud run deploy probe \
+  --set-secrets=GEMINI_API_KEY=gemini-api-key:latest,\
+PARALLEL_API_KEY=parallel-api-key:latest,\
+DATABASE_URL=database-url:latest
+```
+
+To disable grounding in a deployed revision without rebuilding the image, drop `PARALLEL_API_KEY` from `--set-secrets`; the app logs that grounding is off at session start.

@@ -18,10 +18,16 @@ from probe.embeddings import (
     build_embedding_client,
 )
 from probe.learner import LearnerStore
+from probe.grounding import GroundingConfig
 from probe.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from probe.loop import SessionLoop
 from probe.memory import LearnerFactStore, ThinkingStyleStore
 from probe.models import Learner
+from probe.websearch import (
+    StubWebSearchClient,
+    WebSearchClient,
+    build_web_search_client,
+)
 from probe import migrate as _migrate
 
 
@@ -60,6 +66,25 @@ def _build_embedding_client(use_stub: bool) -> EmbeddingClient:
     return build_embedding_client(_require_gemini_api_key())
 
 
+def _build_web_search_client(use_stub: bool) -> WebSearchClient | None:
+    """PARALLEL_API_KEY is OPTIONAL, unlike GEMINI_API_KEY: without it
+    the loop simply gets no search client and time-sensitive grounding
+    stays off, which is the pre-feature behaviour. Absence is reported
+    on stdout rather than being silently inferred — the one thing this
+    feature must never do is degrade without saying so."""
+    if use_stub:
+        return StubWebSearchClient()
+    load_dotenv()
+    key = os.getenv("PARALLEL_API_KEY")
+    if not key:
+        print(
+            "probe: PARALLEL_API_KEY not set — time-sensitive grounding "
+            "is OFF for this session (answers come from model memory only)"
+        )
+        return None
+    return build_web_search_client(key)
+
+
 async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
     """--learner accepts either an existing learner's UUID or a label.
 
@@ -85,7 +110,13 @@ async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
     return await store.create(label=spec)
 
 
-def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient) -> SessionLoop:
+def _build_loop(
+    pool,
+    tiers: ModelTierClients,
+    embedding_client: EmbeddingClient,
+    web_search_client: WebSearchClient | None = None,
+    grounding_config: GroundingConfig | None = None,
+) -> SessionLoop:
     return SessionLoop(
         transcript=TranscriptStore(pool),
         node_calls=NodeCallStore(pool),
@@ -96,19 +127,27 @@ def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient
         learner_fact_store=LearnerFactStore(pool),
         thinking_style_store=ThinkingStyleStore(pool),
         embedding_client=embedding_client,
+        web_search_client=web_search_client,
+        grounding_config=grounding_config,
     )
 
 
-async def _chat(learner_spec: str, use_stub: bool) -> None:
+async def _chat(learner_spec: str, use_stub: bool, no_grounding: bool = False) -> None:
     tiers = _build_tier_clients(use_stub)
     embedding_client = _build_embedding_client(use_stub)
+    grounding_config = GroundingConfig(enabled=not no_grounding)
+    web_search_client = (
+        None if no_grounding else _build_web_search_client(use_stub)
+    )
     pool = await create_pool(_database_url(), min_size=1, max_size=4)
     try:
         learner = await _resolve_learner(LearnerStore(pool), learner_spec)
         label_suffix = f" (label={learner.label!r})" if learner.label else ""
         print(f"probe: learner {learner.id}{label_suffix}")
         print("probe: minimal_branch mode — no concept graph")
-        loop = _build_loop(pool, tiers, embedding_client)
+        loop = _build_loop(
+            pool, tiers, embedding_client, web_search_client, grounding_config
+        )
         await loop.run_interactive(learner.id)
     finally:
         await pool.close()
@@ -211,6 +250,13 @@ def main() -> None:
         help="use StubLLMClient/StubEmbeddingClient instead of the "
         "real Gemini API (no GEMINI_API_KEY needed, no cost)",
     )
+    chat_parser.add_argument(
+        "--no-grounding",
+        action="store_true",
+        help="force time-sensitive web grounding OFF for this session "
+        "even if PARALLEL_API_KEY is set — the control arm of the "
+        "grounded-vs-ungrounded comparison, no code change needed",
+    )
     consolidate_parser = subparsers.add_parser(
         "consolidate-session",
         help="background step 6-8 of the memory layer (memory.py) for "
@@ -256,7 +302,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "chat":
-        asyncio.run(_chat(args.learner, args.stub))
+        asyncio.run(_chat(args.learner, args.stub, args.no_grounding))
     elif args.command == "consolidate-session":
         asyncio.run(_consolidate_session(args.session_id, args.stub))
     elif args.command == "migrate":

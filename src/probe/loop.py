@@ -13,6 +13,13 @@ architectures remain, chosen once per session by
   `_handle_bypass_turn`: one plain-LLM call per turn, no scaffolding at
   all. The floor MINIMAL_BRANCH is measured against.
 
+Optionally, and only when a `WebSearchClient` is supplied, one further
+check runs immediately before `FinalAnswer`: `GroundTimeSensitive`
+(grounding.py), which grounds an answer in a live web excerpt when the
+student's message plausibly concerns something that changes over time.
+Off by default in the absence of a search client — see
+`_ground_if_time_sensitive`.
+
 All node invocations flow through `_call_node`, which records inputs
 and outputs to `node_calls` per CLAUDE.md invariant 2. `turn_diagnostics`
 (diagnostics.py) is written once per turn, opt-in via `diagnostics_store`.
@@ -45,6 +52,7 @@ from probe.disambiguate import (
 )
 from probe import embeddings as _embeddings
 from probe.embeddings import EmbeddingClient
+from probe.grounding import GroundingConfig, GroundTimeSensitive
 from probe.llm import LLMClient, ModelTierClients
 from probe.memory import (
     ConfirmFactMatch,
@@ -63,11 +71,14 @@ from probe.models import (
     ExtractedFact,
     FactMatchConfirmation,
     FactSearchResult,
+    GroundingEvidence,
+    GroundingResult,
     LearnerFactType,
     Option,
     OptionStatus,
     TurnDiagnostics,
 )
+from probe.websearch import WebSearchClient
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +127,8 @@ class SessionLoop:
         thinking_style_store: ThinkingStyleStore | None = None,
         embedding_client: EmbeddingClient | None = None,
         memory_config: MemoryConfig | None = None,
+        web_search_client: WebSearchClient | None = None,
+        grounding_config: GroundingConfig | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -176,6 +189,23 @@ class SessionLoop:
             self.embed_and_search_facts = None
             self.confirm_fact_match = None
             self.write_learner_fact = None
+        # Time-sensitive grounding (grounding.py) — additive on top of
+        # minimal_branch, never required by it, and gated the same
+        # two-part way the memory layer is: it needs both a place to
+        # search (`web_search_client`) and a config that allows it.
+        # Absent either, `ground_time_sensitive` stays None and
+        # `_run_final_answer` is byte-for-byte the path it was before
+        # this feature existed — which is what keeps a deployment with
+        # no PARALLEL_API_KEY, and the whole existing test suite,
+        # completely unaffected.
+        self._grounding_config = grounding_config or GroundingConfig()
+        if web_search_client is not None and self._grounding_config.enabled:
+            self.ground_time_sensitive = GroundTimeSensitive(
+                web_search_client, self._grounding_config
+            )
+        else:
+            self.ground_time_sensitive = None
+
         # Background-only (see consolidate_session) — needs the fact
         # store, the thinking-style store, and an embedding client.
         if (
@@ -644,7 +674,15 @@ class SessionLoop:
 
         `recent_history` is the same window `AssessAndBranch` was given
         this turn — FinalAnswer must not judge a poorer context than
-        AssessAndBranch already reasoned against."""
+        AssessAndBranch already reasoned against.
+
+        This is also the single choke point for time-sensitive
+        grounding (grounding.py): every path that reaches an answer
+        reaches it through here, so the check cannot be bypassed by one
+        branch of the flow and cannot be applied twice."""
+        grounding_context = await self._ground_if_time_sensitive(
+            session_id, turn_index, turn_text, node_call_counts, warnings
+        )
         try:
             message = await self._call_node(
                 self.final_answer,
@@ -654,6 +692,7 @@ class SessionLoop:
                 branch_context=branch_context,
                 recent_history=recent_history,
                 memory_context=memory_context,
+                grounding_context=grounding_context,
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
             return message, False
@@ -668,6 +707,59 @@ class SessionLoop:
             )
             node_call_counts["FinalAnswer"] = 0
             return _TEACH_FAILURE_MESSAGE, True
+
+    async def _ground_if_time_sensitive(
+        self,
+        session_id: UUID,
+        turn_index: int,
+        turn_text: str,
+        node_call_counts: dict[str, int],
+        warnings: list[str],
+    ) -> list[GroundingEvidence] | None:
+        """A ranked list of web excerpts, or None — see grounding.py.
+
+        Returns None immediately when the feature is off (no
+        `WebSearchClient`, or `GroundingConfig(enabled=False)`), which
+        is the state every existing test and every deployment without a
+        `PARALLEL_API_KEY` runs in: not one extra call, not one extra
+        `node_calls` row, not one extra millisecond.
+
+        When it IS on, the node runs on every turn and records a row
+        each time, including the ~always case where it fires on nothing.
+        That is a deliberate, disclosed departure from the originating
+        spec's "zero extra calls" on non-firing turns: zero extra *API*
+        calls and sub-millisecond added latency still hold (the check is
+        pure lexical matching — see grounding.py), but the audit row is
+        not skipped. Invariant 2 requires it, and skipping it on
+        negative turns would make the check's real firing rate — the one
+        number that decides whether this feature is miscalibrated —
+        unmeasurable from the trail.
+
+        A failure here is recorded as a warning and swallowed: an
+        ungrounded answer is always better than a lost turn.
+        """
+        if self.ground_time_sensitive is None:
+            return None
+        result = await self._call_node_or_warn(
+            self.ground_time_sensitive,
+            session_id,
+            turn_index,
+            "GroundTimeSensitive",
+            GroundingResult(),
+            warnings,
+            student_message=turn_text,
+        )
+        node_call_counts["GroundTimeSensitive"] = (
+            self.ground_time_sensitive.last_call_count
+        )
+        if result.error:
+            # Never a silent degradation: the turn's diagnostics say the
+            # check fired and the answer went out ungrounded anyway.
+            warnings.append(
+                f"GroundTimeSensitive fired on {result.matched_marker!r} but "
+                f"produced no evidence ({result.error}) -- answering ungrounded"
+            )
+        return result.evidence or None
 
     async def _build_thinking_style_hint(self, learner_id: UUID) -> str:
         """Step 8's "only once promoted does it get fed into future

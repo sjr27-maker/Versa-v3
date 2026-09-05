@@ -19,6 +19,18 @@ Copy `.env.example` to `.env` and fill in:
   calls an LLM (`chat`, `seed-graph`) accepts `--stub` to run against
   `StubLLMClient` instead, which needs no key and costs nothing.
 
+- `PARALLEL_API_KEY` — **optional**. Enables time-sensitive grounding
+  (`src/probe/grounding.py`): when a student's message plausibly
+  concerns something that changes over time, one Parallel Web Systems
+  Search call runs before `FinalAnswer` and its top excerpt is threaded
+  into the answer's prompt, cited if used. Get one at
+  https://parallel.ai. Without the key the feature stays off and the
+  system behaves exactly as it did before it existed — the absence is
+  logged at session start, never silent. `probe chat --no-grounding`
+  forces it off even when the key is present (the control arm of the
+  grounded-vs-ungrounded comparison, no code change needed). The test
+  suite never touches it: `StubWebSearchClient` covers every path.
+
 `GEMINI_MODEL_FAST` / `GEMINI_MODEL_CAPABLE` / `GEMINI_MODEL_BEST` are
 optional overrides for the tier→model mapping in `model_config.py` —
 only needed if the defaults there go stale (Gemini preview model ids
@@ -90,28 +102,27 @@ terms actually matter. If turning one off requires editing code, we
 can't run apples-to-apples ablations. Keep the config knob, keep the
 breakdown, don't collapse to a single float.
 
-### 4. The concept graph is append-only
+### 4. RETIRED — the concept graph is gone
 
-`ConceptGraph` must never delete rows. Concretely:
+This invariant governed `ConceptGraph` and `concept_nodes`, both of
+which no longer exist: `src/probe/concept_graph.py` and
+`src/probe/seed.py` were deleted in commit 5451b95, and migration
+`032_retire_full_mode.sql` drops `concept_nodes`, `concept_graphs`,
+`concept_prerequisites`, and `learner_overlay`. There is no
+`ConceptNode` model, no `ConceptGraph` class, and no `probe seed-graph`
+command; `probe chat` reports "minimal_branch mode — no concept graph".
 
-- No `delete` / `remove` methods on the class.
-- No `DELETE` SQL anywhere in the `concept_graph` module or its
-  migrations.
-- Verified by the same AST-based check used for invariant 1 (scan for
-  delete/remove-prefixed function names and DELETE inside string
-  literals, excluding docstrings).
+The entry is kept as a numbered tombstone rather than deleted so the
+later invariants keep the numbers they are cross-referenced by —
+invariants 6-11 each say "the same AST-based check used for invariants
+1, 4, ..." and renumbering would silently break every one of those
+references.
 
-This is a separate invariant from #1, not a restatement of it: the
-rationale is different, so it gets its own entry rather than being
-folded into the hypothesis-store rule.
-
-Why: the concept graph is seeded once (`probe seed-graph`) and frozen —
-it isn't a record of evolving belief the way hypotheses are. The reason
-it can't be deleted from is referential, not auditability: `LearnerOverlay`
-holds an FK to `concept_nodes.id`. Removing a concept out from under it
-would either orphan overlay rows or require a cascade that silently
-destroys learner state. `ON DELETE RESTRICT` on that FK enforces this at
-the schema level; no delete method enforces it at the code level.
+Do not restore the concept graph in order to satisfy a task that
+assumes it exists. It was removed on measured evidence (it lost to a
+plain-LLM baseline at 20-40x the cost), and nothing in the current
+architecture reads one — so any structure rebuilt here would have zero
+consumers by construction.
 
 ### 5. World-model revisions are append-only
 
