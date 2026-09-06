@@ -18,15 +18,15 @@ from probe.embeddings import (
     build_embedding_client,
 )
 from probe.learner import LearnerStore
-from probe.grounding import GroundingConfig
 from probe.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from probe.loop import SessionLoop
+from probe.interactions import InteractionAbstractStore
 from probe.memory import LearnerFactStore, ThinkingStyleStore
 from probe.models import Learner
-from probe.websearch import (
-    StubWebSearchClient,
-    WebSearchClient,
-    build_web_search_client,
+from probe.population_patterns import (
+    PopulationAggregationConfig,
+    PopulationPatternStore,
+    aggregate_population_patterns,
 )
 from probe import migrate as _migrate
 
@@ -66,25 +66,6 @@ def _build_embedding_client(use_stub: bool) -> EmbeddingClient:
     return build_embedding_client(_require_gemini_api_key())
 
 
-def _build_web_search_client(use_stub: bool) -> WebSearchClient | None:
-    """PARALLEL_API_KEY is OPTIONAL, unlike GEMINI_API_KEY: without it
-    the loop simply gets no search client and time-sensitive grounding
-    stays off, which is the pre-feature behaviour. Absence is reported
-    on stdout rather than being silently inferred — the one thing this
-    feature must never do is degrade without saying so."""
-    if use_stub:
-        return StubWebSearchClient()
-    load_dotenv()
-    key = os.getenv("PARALLEL_API_KEY")
-    if not key:
-        print(
-            "probe: PARALLEL_API_KEY not set — time-sensitive grounding "
-            "is OFF for this session (answers come from model memory only)"
-        )
-        return None
-    return build_web_search_client(key)
-
-
 async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
     """--learner accepts either an existing learner's UUID or a label.
 
@@ -110,13 +91,58 @@ async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
     return await store.create(label=spec)
 
 
-def _build_loop(
-    pool,
-    tiers: ModelTierClients,
-    embedding_client: EmbeddingClient,
-    web_search_client: WebSearchClient | None = None,
-    grounding_config: GroundingConfig | None = None,
-) -> SessionLoop:
+def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict:
+    """The interaction/retrieval pipeline (interactions.py, retrieval.py,
+    history_block.py) -- wired into `probe chat` (and, since _build_loop
+    is shared, `probe consolidate-session`'s session-end deferred-marking
+    hook) but deliberately NOT into `probe serve` (webserver.py has its
+    own separate _build_loop, untouched) until the hand-read described in
+    this feature's own review has actually happened there too.
+
+    No longer a dry run as of history_block.py: FinalAnswer's own prompt
+    now reads retrieval's output directly (learner_history_block) and,
+    when this learner has explicitly stated one, a structural requirement
+    built from `stated_preferences` -- see history_block.py's and
+    disambiguate.FinalAnswer's own docstrings for the read side, and
+    StatedPreference's docstring for the write side. Predictions
+    (interaction_nodes.LLMSelectionPredictor) still feed nothing back
+    into what the learner sees. The critical-path additions are: the
+    entry_state similarity comparison, the history-block assembly's own
+    embedding call, the stated-preference lookup, and the option
+    shuffle; classification/abstraction/stated-preference classification
+    itself all still run off the critical path.
+    """
+    from probe.interactions import (
+        InteractionAbstractStore,
+        InteractionOptionStore,
+        InteractionRecorder,
+        InteractionStore,
+        PredictionStore,
+        StatedPreferenceStore,
+        TurnOutcomeStore,
+    )
+    from probe.retrieval_config import RetrievalConfig
+
+    interaction_store = InteractionStore(pool)
+    turn_outcome_store = TurnOutcomeStore(pool)
+    recorder = InteractionRecorder(
+        interaction_store,
+        turn_outcome_store,
+        embedding_client,
+        same_subject_threshold=RetrievalConfig().same_subject_threshold,
+    )
+    return {
+        "interaction_recorder": recorder,
+        "interaction_option_store": InteractionOptionStore(pool),
+        "interaction_abstract_store": InteractionAbstractStore(pool),
+        "turn_outcome_store": turn_outcome_store,
+        "prediction_store": PredictionStore(pool),
+        "retrieval_pool": pool,
+        "stated_preference_store": StatedPreferenceStore(pool),
+    }
+
+
+def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient) -> SessionLoop:
     return SessionLoop(
         transcript=TranscriptStore(pool),
         node_calls=NodeCallStore(pool),
@@ -127,27 +153,25 @@ def _build_loop(
         learner_fact_store=LearnerFactStore(pool),
         thinking_style_store=ThinkingStyleStore(pool),
         embedding_client=embedding_client,
-        web_search_client=web_search_client,
-        grounding_config=grounding_config,
+        **_build_interaction_pipeline(pool, embedding_client),
     )
 
 
-async def _chat(learner_spec: str, use_stub: bool, no_grounding: bool = False) -> None:
+async def _chat(learner_spec: str, use_stub: bool) -> None:
     tiers = _build_tier_clients(use_stub)
     embedding_client = _build_embedding_client(use_stub)
-    grounding_config = GroundingConfig(enabled=not no_grounding)
-    web_search_client = (
-        None if no_grounding else _build_web_search_client(use_stub)
-    )
     pool = await create_pool(_database_url(), min_size=1, max_size=4)
     try:
         learner = await _resolve_learner(LearnerStore(pool), learner_spec)
         label_suffix = f" (label={learner.label!r})" if learner.label else ""
         print(f"probe: learner {learner.id}{label_suffix}")
         print("probe: minimal_branch mode — no concept graph")
-        loop = _build_loop(
-            pool, tiers, embedding_client, web_search_client, grounding_config
+        print(
+            "probe: interaction/retrieval pipeline ON (dry run -- writes "
+            "interactions/topics/outcomes/abstracts/predictions; nothing "
+            "it produces reaches this session's own responses yet)"
         )
+        loop = _build_loop(pool, tiers, embedding_client)
         await loop.run_interactive(learner.id)
     finally:
         await pool.close()
@@ -184,6 +208,41 @@ async def _consolidate_session(session_id_str: str, use_stub: bool) -> None:
             f"status={result.status.value}\n"
             f"  session_ids: {[str(s) for s in result.session_ids]}"
         )
+    finally:
+        await pool.close()
+
+
+async def _aggregate_patterns() -> None:
+    """`probe aggregate-patterns` — the on-demand batch step of
+    population_patterns.py's pipeline (raw interaction -> abstract form
+    -> aggregation -> multi-learner support -> retrieval). Deliberately
+    explicit and on-demand, same "no automatic per-turn trigger"
+    precedent as `probe consolidate-session`: clustering every
+    learner's abstracts against every other learner's is a global
+    operation, not something to redo on every turn.
+    """
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        abstract_store = InteractionAbstractStore(pool)
+        pattern_store = PopulationPatternStore(pool)
+        written = await aggregate_population_patterns(
+            abstract_store, pattern_store, PopulationAggregationConfig()
+        )
+        if not written:
+            print(
+                "probe: no readable population patterns this run -- every "
+                "cluster fell short of >=20 distinct learners or exceeded "
+                "the 25% single-learner share cap"
+            )
+            return
+        print(f"probe: wrote {len(written)} readable population pattern(s):")
+        for pattern in written:
+            print(
+                f"  {pattern.id}: {pattern.abstract_form!r} "
+                f"(support={pattern.support_count}, "
+                f"distinct_learners={pattern.distinct_learner_count}, "
+                f"max_share={pattern.max_per_learner_share:.2f})"
+            )
     finally:
         await pool.close()
 
@@ -250,13 +309,6 @@ def main() -> None:
         help="use StubLLMClient/StubEmbeddingClient instead of the "
         "real Gemini API (no GEMINI_API_KEY needed, no cost)",
     )
-    chat_parser.add_argument(
-        "--no-grounding",
-        action="store_true",
-        help="force time-sensitive web grounding OFF for this session "
-        "even if PARALLEL_API_KEY is set — the control arm of the "
-        "grounded-vs-ungrounded comparison, no code change needed",
-    )
     consolidate_parser = subparsers.add_parser(
         "consolidate-session",
         help="background step 6-8 of the memory layer (memory.py) for "
@@ -269,6 +321,13 @@ def main() -> None:
         action="store_true",
         help="use StubLLMClient/StubEmbeddingClient instead of the "
         "real Gemini API (no GEMINI_API_KEY needed, no cost)",
+    )
+    subparsers.add_parser(
+        "aggregate-patterns",
+        help="cluster every learner's latest interaction_abstracts row "
+        "and write readable (>=20 distinct learners, <=25% single-"
+        "learner share) clusters to population_patterns -- the "
+        "on-demand aggregation step retrieval reads from",
     )
     migrate_parser = subparsers.add_parser(
         "migrate",
@@ -302,9 +361,11 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "chat":
-        asyncio.run(_chat(args.learner, args.stub, args.no_grounding))
+        asyncio.run(_chat(args.learner, args.stub))
     elif args.command == "consolidate-session":
         asyncio.run(_consolidate_session(args.session_id, args.stub))
+    elif args.command == "aggregate-patterns":
+        asyncio.run(_aggregate_patterns())
     elif args.command == "migrate":
         asyncio.run(_run_migrations(args.status, args.baseline))
     elif args.command == "serve":

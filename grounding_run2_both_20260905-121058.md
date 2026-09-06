@@ -482,3 +482,64 @@ In economics, this price is highly watched because gold acts as a hedge against 
 When studying precious metals, it is helpful to know that gold is measured in "troy ounces" rather than the standard ounces we use for everyday items. A troy ounce is slightly heavier, weighing about 31.1 grams, whereas a standard avoirdupois ounce is about 28.3 grams. 
 
 Because the "spot price" of gold reacts in real-time to economic data, currency values, and global events, you can find the exact live price at any given second on financial tracking websites like Kitco, Bloomberg, or APMEX. Let me know if you want to explore the economic factors that cause these prices to rise and fall.
+
+
+## [FRESH (never debugged against)] Q5: Which country won the most recent FIFA World Cup?
+
+### grounding ON — run 1
+
+- ok: `True` | attempts: 1 | 28141 ms | 7 calls `{'FinalAnswer': 1, 'AssessAndBranch': 2, 'WriteLearnerFact': 2, 'EmbedAndSearchFacts': 1, 'GroundTimeSensitive': 1}`
+- fired: `True` | marker: `most recent`
+- sources: ['https://www.topendsports.com/events/worldcupsoccer/winners.htm', 'https://en.wikipedia.org/wiki/FIFA_World_Cup', 'https://www.fifa.com/en/tournaments/mens/worldcup/articles/teams-most-wins-titles-trophies']
+
+> Spain won the most recent FIFA World Cup in 2026, defeating Argentina 1-0 after extra time in the final match (https://www.topendsports.com/events/worldcupsoccer/winners.htm). This tournament was historic as it was the first to feature 48 teams and was co-hosted across three nations: the United States, Canada, and Mexico. Let me know if you would like to explore the history of other winning nations or how the tournament has evolved over the years!
+
+### grounding ON — run 2
+
+- ok: `True` | attempts: 1 | 64922 ms | 7 calls `{'FinalAnswer': 1, 'AssessAndBranch': 2, 'WriteLearnerFact': 2, 'EmbedAndSearchFacts': 1, 'GroundTimeSensitive': 1}`
+- fired: `True` | marker: `most recent`
+- sources: ['https://www.topendsports.com/events/worldcupsoccer/winners.htm', 'https://en.wikipedia.org/wiki/FIFA_World_Cup', 'https://www.fifa.com/en/tournaments/mens/worldcup/articles/teams-most-wins-titles-trophies']
+
+> Spain won the most recent FIFA World Cup in 2026, defeating Argentina 1-0 after extra time in the final match (https://www.topendsports.com/events/worldcupsoccer/winners.htm). This historic tournament was co-hosted across North America by the United States, Canada, and Mexico. Let me know if you would like to explore more of the tournament's history or look at other past champions!
+
+### grounding OFF — run 1
+
+- ok: `True` | attempts: 1 | 52843 ms | 6 calls `{'FinalAnswer': 1, 'AssessAndBranch': 2, 'WriteLearnerFact': 2, 'EmbedAndSearchFacts': 1}`
+- fired: `False` | marker: `None`
+- sources: (none)
+
+> Argentina won the most recent FIFA World Cup, which took place in Qatar in December 2022. They secured the championship after an incredibly dramatic final against France, which ended in a 3-3 draw before Argentina won 4-2 in a penalty shootout. This was Argentina's third World Cup title in their history, led by their captain Lionel Messi.
+
+### grounding OFF — run 2
+
+- ok: `True` | attempts: 1 | 93047 ms | 6 calls `{'FinalAnswer': 1, 'AssessAndBranch': 2, 'WriteLearnerFact': 2, 'EmbedAndSearchFacts': 1}`
+- fired: `False` | marker: `None`
+- sources: (none)
+
+> Argentina won the most recent FIFA World Cup, which took place in Qatar in late 2022. They defeated France in an incredibly exciting final match that was decided by a penalty shootout after ending in a 3-3 tie. This victory marked Argentina's third World Cup title in their history and was a major milestone for Lionel Messi, who led the team to the championship. If you would like to explore more about the history of the tournament or how the upcoming 2026 World Cup will work, we can certainly look into that next.
+
+
+# COST SUMMARY — FRESH (never debugged against)
+
+| Q | fired | on ms (r1/r2) | off ms (r1/r2) | on calls | off calls |
+|---|---|---|---|---|---|
+| 1 | True | 37094/23031 | 22703/25282 | 6/6 | 5/5 |
+| 2 | True | 44031/17000 | 29328/12594 | 6/6 | 5/5 |
+| 3 | True | 20547/37891 | 37015/23579 | 6/6 | 5/5 |
+| 4 | True | 38250/33578 | 41234/22547 | 6/6 | 5/5 |
+| 5 | True | 28141/64922 | 52843/93047 | 7/7 | 6/6 |
+
+mean latency delta on firing questions: -1569 ms (NOTE: end-to-end, includes Gemini variance/retries — see the isolated search-latency measurement for the clean number)
+
+
+# EXCERPT STABILITY — FRESH (never debugged against)
+
+Did the two identical grounded runs retrieve the same sources? If not, a single-run verdict is noise.
+
+| Q | run1 sources | run2 sources | identical |
+|---|---|---|---|
+| 1 | ['https://doc.rust-lang.org/beta/releases.html', 'https://releases.rs/', 'https://www.infoworld.com/article/2266609/whats-new-in-the-rust-language.html'] | ['https://doc.rust-lang.org/beta/releases.html', 'https://releases.rs/', 'https://www.infoworld.com/article/2266609/whats-new-in-the-rust-language.html'] | True |
+| 2 | ['https://en.wikipedia.org/wiki/Secretary_General_of_NATO', 'https://www.nato.int/en/about-us/organization/who-we-are/nato-secretaries-general', 'https://www.nato.int/en/about-us/organization/nato-structure/nato-secretary-general'] | ['https://en.wikipedia.org/wiki/Secretary_General_of_NATO', 'https://www.nato.int/en/about-us/organization/who-we-are/nato-secretaries-general', 'https://www.nato.int/en/about-us/organization/nato-structure/nato-secretary-general'] | True |
+| 3 | ['https://www.apple.com/apple-events/', 'https://www.macrumors.com/guide/apple-event/', 'https://www.cnet.com/apple-event/'] | ['https://www.apple.com/apple-events/', 'https://www.macrumors.com/guide/apple-event/', 'https://www.cnet.com/apple-event/'] | True |
+| 4 | ['https://www.apmex.com/gold-price', 'http://www.kitco.com/charts/gold', 'https://www.jmbullion.com/charts/gold-price/'] | ['https://www.apmex.com/gold-price', 'http://www.kitco.com/charts/gold', 'https://www.jmbullion.com/charts/gold-price/'] | True |
+| 5 | ['https://www.topendsports.com/events/worldcupsoccer/winners.htm', 'https://en.wikipedia.org/wiki/FIFA_World_Cup', 'https://www.fifa.com/en/tournaments/mens/worldcup/articles/teams-most-wins-titles-trophies'] | ['https://www.topendsports.com/events/worldcupsoccer/winners.htm', 'https://en.wikipedia.org/wiki/FIFA_World_Cup', 'https://www.fifa.com/en/tournaments/mens/worldcup/articles/teams-most-wins-titles-trophies'] | True |

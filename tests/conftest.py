@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from dotenv import load_dotenv
 
 from probe.audit import NodeCallStore, TranscriptStore
 from probe.db import create_pool
@@ -12,6 +13,17 @@ from probe.embeddings import StubEmbeddingClient
 from probe.learner import LearnerStore
 from probe.memory import LearnerFactStore, ThinkingStyleStore
 
+# Root cause of two real data-loss incidents in this project's history:
+# `.env` has defined a genuinely separate PROBE_TEST_DATABASE_URL
+# (pointing at `probe_test`, not the dev database `probe`) the whole
+# time, but nothing here ever called load_dotenv() -- os.getenv() was
+# silently reading an unset environment variable and falling through
+# to the SAME hardcoded default DATABASE_URL also falls back to,
+# meaning the "isolated" test database and the dev database were the
+# same physical database whenever neither var was exported into the
+# shell by hand. Loading .env here is the actual fix; the fallback
+# below now only matters if .env itself is missing.
+load_dotenv()
 DATABASE_URL = os.getenv(
     "PROBE_TEST_DATABASE_URL",
     "postgresql://probe:probe@localhost:5434/probe",
@@ -38,6 +50,20 @@ async def pool():
         # comprehensive (includes the tables migration 032 retires) so
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
+        await conn.execute("DROP TABLE IF EXISTS predictions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS stated_preferences CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS turn_outcomes CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS interaction_abstracts CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS interaction_options CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS interactions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS population_patterns CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topics CASCADE")  # pre-removal schema cleanup
+        await conn.execute("DROP TYPE IF EXISTS interaction_turn_outcome")
+        await conn.execute("DROP TYPE IF EXISTS interaction_help_level")
+        await conn.execute("DROP TYPE IF EXISTS interaction_prior_outcome")
+        await conn.execute("DROP TYPE IF EXISTS interaction_entry_state")
+        await conn.execute("DROP TYPE IF EXISTS interaction_question_author")
+        await conn.execute("DROP TYPE IF EXISTS stated_preference_label")
         await conn.execute("DROP TABLE IF EXISTS evidence_records CASCADE")
         await conn.execute("DROP TABLE IF EXISTS node_calls CASCADE")
         await conn.execute("DROP TABLE IF EXISTS turn_diagnostics CASCADE")
@@ -95,7 +121,9 @@ async def clean_pool(pool):
         await conn.execute(
             "TRUNCATE evidence_records, node_calls, turn_diagnostics, turns, "
             "sessions, learners, disambiguation_options, disambiguation_branches, "
-            "disambiguation_turns, learner_facts, thinking_style_candidates "
+            "disambiguation_turns, learner_facts, thinking_style_candidates, "
+            "predictions, stated_preferences, turn_outcomes, interaction_abstracts, "
+            "interaction_options, interactions, population_patterns "
             "RESTART IDENTITY CASCADE"
         )
     return pool
@@ -136,6 +164,61 @@ async def learner_fact_store(clean_pool):
 @pytest_asyncio.fixture(loop_scope="session")
 async def thinking_style_store(clean_pool):
     return ThinkingStyleStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def interaction_store(clean_pool):
+    from probe.interactions import InteractionStore
+
+    return InteractionStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def interaction_option_store(clean_pool):
+    from probe.interactions import InteractionOptionStore
+
+    return InteractionOptionStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def interaction_abstract_store(clean_pool):
+    from probe.interactions import InteractionAbstractStore
+
+    return InteractionAbstractStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def turn_outcome_store(clean_pool):
+    from probe.interactions import TurnOutcomeStore
+
+    return TurnOutcomeStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def prediction_store(clean_pool):
+    from probe.interactions import PredictionStore
+
+    return PredictionStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def stated_preference_store(clean_pool):
+    from probe.interactions import StatedPreferenceStore
+
+    return StatedPreferenceStore(clean_pool)
+
+
+@pytest_asyncio.fixture
+def interaction_recorder(interaction_store, turn_outcome_store, embedding_client):
+    from probe.interactions import InteractionRecorder
+    from probe.retrieval_config import RetrievalConfig
+
+    return InteractionRecorder(
+        interaction_store,
+        turn_outcome_store,
+        embedding_client,
+        same_subject_threshold=RetrievalConfig().same_subject_threshold,
+    )
 
 
 @pytest.fixture

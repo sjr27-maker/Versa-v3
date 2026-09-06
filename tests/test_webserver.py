@@ -132,10 +132,14 @@ async def test_inspect_and_history_payloads_track_a_branch_then_click(
     }
     assert inspect["diagnostics"]["node_call_counts"]  # trace is populated
 
-    # turn 1: click the first option -> its branch matched, sibling
-    # superseded, a real answer this time
+    # turn 1: click the power-rule option -> its branch matched, sibling
+    # superseded, a real answer this time. Selected by TEXT, not
+    # position: SessionLoop shuffles option order before persisting
+    # them (loop.py's minimal-branch options-offered path), so which
+    # index the power-rule option lands at is intentionally random.
+    power_rule_option = next(o for o in pending if o["text"] == "Explain the power rule?")
     answer = await loop.handle_turn(
-        session_id, 1, pending[0]["text"], uuid.UUID(pending[0]["id"])
+        session_id, 1, power_rule_option["text"], uuid.UUID(power_rule_option["id"])
     )
     assert answer == "here is the power rule"
 

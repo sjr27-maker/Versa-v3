@@ -16,20 +16,8 @@ Copy `.env.example` to `.env` and fill in:
   does not use this path.
 - `GEMINI_API_KEY` — required for any real (non-stub) LLM call. Get one
   at https://aistudio.google.com/apikey. Every `probe` command that
-  calls an LLM (`chat`, `seed-graph`) accepts `--stub` to run against
+  calls an LLM (`chat`, `consolidate-session`) accepts `--stub` to run against
   `StubLLMClient` instead, which needs no key and costs nothing.
-
-- `PARALLEL_API_KEY` — **optional**. Enables time-sensitive grounding
-  (`src/probe/grounding.py`): when a student's message plausibly
-  concerns something that changes over time, one Parallel Web Systems
-  Search call runs before `FinalAnswer` and its top excerpt is threaded
-  into the answer's prompt, cited if used. Get one at
-  https://parallel.ai. Without the key the feature stays off and the
-  system behaves exactly as it did before it existed — the absence is
-  logged at session start, never silent. `probe chat --no-grounding`
-  forces it off even when the key is present (the control arm of the
-  grounded-vs-ungrounded comparison, no code change needed). The test
-  suite never touches it: `StubWebSearchClient` covers every path.
 
 `GEMINI_MODEL_FAST` / `GEMINI_MODEL_CAPABLE` / `GEMINI_MODEL_BEST` are
 optional overrides for the tier→model mapping in `model_config.py` —

@@ -181,6 +181,15 @@ class TurnDiagnostics(BaseModel):
     memory_match_confirmed_resolution: bool = False
     branching_skipped_by_memory: bool = False
     matched_fact_id: UUID | None = None
+    # history_block.py's own visibility fields -- whether a learner-
+    # history block was actually threaded into FinalAnswer this turn,
+    # which interactions/patterns it drew from (mixed interactions.id
+    # and population_patterns.id, as strings), and which template
+    # rendered it. The rendered TEXT itself is already in node_calls
+    # (FinalAnswer's own input_json); these are the structured half.
+    history_block_used: bool = False
+    history_block_source_ids: list[str] = Field(default_factory=list)
+    history_block_template_version: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -325,55 +334,6 @@ class ThinkingStyleCandidate(BaseModel):
     updated_at: datetime = Field(default_factory=_utcnow)
 
 
-class GroundingEvidence(BaseModel):
-    """One web excerpt threaded into `FinalAnswer`'s prompt — the
-    single result kept from a time-sensitivity search (grounding.py).
-
-    Not DB-backed: it lives only in this turn's `node_calls` row, which
-    is deliberate. A `learner_fact` records what the *student*
-    established; a stale-topic excerpt is a fact about the world at
-    one moment, and writing it into the durable memory layer would let
-    today's answer silently become tomorrow's remembered truth.
-    """
-
-    url: str
-    title: str | None = None
-    publish_date: str | None = None
-    excerpt: str
-
-
-class GroundingResult(BaseModel):
-    """`GroundTimeSensitive`'s output — deliberately records the
-    negative case too, not just hits.
-
-    `time_sensitive=False` with `matched_marker=None` is the normal,
-    expected shape on an ordinary turn, and it is written to
-    `node_calls` on every turn this node runs. That is the point: the
-    check's real firing rate is a measurable property of the audit
-    trail rather than something inferred from how often a search
-    happened to appear.
-
-    `error` is set when a search was attempted and failed — the
-    explicit, logged record of a degradation to an ungrounded answer,
-    so the fallback can never be a silent one.
-
-    `evidence` is a ranked list, not a single excerpt. It was a single
-    excerpt originally, and that was a measured mistake: on a live
-    comparison run the top-ranked result for "latest stable Python
-    version" was the authoritative domain but its excerpt was a
-    glossary of release *phases* containing no version number, while
-    results 2 and 3 both carried the answer and were discarded. The
-    grounded answer came out less accurate than the ungrounded one AND
-    wearing a citation. Ranked-but-diverse beats single-best here.
-    """
-
-    time_sensitive: bool = False
-    matched_marker: str | None = None
-    searched: bool = False
-    evidence: list[GroundingEvidence] = Field(default_factory=list)
-    error: str | None = None
-
-
 class EvidenceSourceType(str, Enum):
     # A deliberate scripted run to exercise a code path — proves a
     # mechanism functions, never that the system adapted to a real
@@ -409,3 +369,421 @@ class EvidenceRecord(BaseModel):
     learner_id: UUID | None = None
     session_id: UUID | None = None
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+# ─────────────────────────── interactions ───────────────────────────
+#
+# The personalization/retrieval pipeline (migration 034,
+# interactions.py/topics.py/retrieval.py) — a new, separate store from
+# `learner_facts` above, built alongside it. NOT the "story"/learner-
+# memory layer: that name is already taken (the web UI's `story` panel
+# and prior verification transcripts both use "story" to mean a
+# `LearnerFact` row). See migration 034's own header comment.
+
+
+class QuestionAuthor(str, Enum):
+    LEARNER = "learner"
+    SYSTEM_OPTION = "system_option"
+
+
+class EntryState(str, Enum):
+    COLD_OPEN = "cold_open"
+    CONTINUING = "continuing"
+    RETURNING_AFTER_GAP = "returning_after_gap"
+    STUCK_REPEAT = "stuck_repeat"
+    # No similar match anywhere in the learner's recent window, on a
+    # turn that isn't cold_open -- the learner abandoned or completed
+    # one thing and moved to another. Deliberately its own state, not
+    # folded into CONTINUING: it is one of the more informative signals
+    # this table carries, and merging it into the single most common
+    # state would erase it.
+    TOPIC_SWITCH = "topic_switch"
+    # Checked FIRST, before any similarity comparison: set whenever the
+    # previous turn in the session had did_branch = True. A
+    # click-resolution turn's own question_text is the option's copy,
+    # generated FROM the immediately preceding question (see
+    # QuestionAuthor.SYSTEM_OPTION) -- comparing it against that same
+    # question would always read as maximally "similar," which is true
+    # but analytically useless, so resolution pre-empts the comparison
+    # entirely rather than let it produce a technically-correct,
+    # meaningless CONTINUING.
+    RESOLUTION = "resolution"
+
+
+class InteractionPriorOutcome(str, Enum):
+    """The SMALL, best-effort enum written onto `Interaction` itself at
+    creation time — never backfilled. Distinct from `TurnOutcomeLabel`
+    below (the classifier's own, richer 5-value vocabulary); retrieval
+    reads the authoritative value through a view joining `turn_outcomes`,
+    not this column.
+
+    `DEFERRED` and `UNKNOWN` are NOT the same thing and must not be
+    collapsed into each other: `UNKNOWN` means "we don't know what
+    happened to the prior turn" (no classification exists yet, but one
+    could in principle exist), while `DEFERRED` means "there is nothing
+    to know yet, by construction" (the prior turn was an options-offered
+    row with no response, or the last turn of a session — see
+    `TurnOutcomeLabel.DEFERRED`). Merging them erases exactly the
+    distinction `entry_state`'s STUCK_REPEAT-style rules (and any future
+    consumer of this column) need to tell "genuinely unclassified" apart
+    from "structurally has no classification to give."
+    """
+
+    RESOLVED = "resolved"
+    CONTRADICTED = "contradicted"
+    # Mirrors TurnOutcomeLabel.MOVED_ON's own collapse (see that enum's
+    # docstring): replaces the old ABANDONED, which nothing produces
+    # any more now that TurnOutcomeLabel no longer distinguishes
+    # "abandoned" from "understood, moved on." Mapping MOVED_ON onto
+    # either RESOLVED or ABANDONED here would just reintroduce the
+    # same unwarranted-precision problem one enum downstream.
+    MOVED_ON = "moved_on"
+    DEFERRED = "deferred"
+    UNKNOWN = "unknown"
+
+
+class HelpLevel(str, Enum):
+    NONE = "none"
+    HINT = "hint"
+    WORKED_EXAMPLE = "worked_example"
+    DIRECT_ANSWER = "direct_answer"
+
+
+class Interaction(BaseModel):
+    """One row per `handle_turn` call — same granularity `turns`/
+    `disambiguation_turns` already use, not a different unit. A
+    branching exchange is TWO rows: Turn A (the ambiguous message —
+    `did_branch=True`, `response_text=None`, options attach here via
+    `InteractionOption`) and Turn A+1 (the click — `did_branch=False`,
+    `question_author=SYSTEM_OPTION` since `question_text` is the
+    clicked option's own button copy, `response_text` set once
+    FinalAnswer's output lands).
+
+    `originating_question` is set only when `question_author =
+    SYSTEM_OPTION`: Turn A's own `question_text`. `question_embedding`
+    is computed from `originating_question` in that case, never from
+    `question_text` — embedding the option generator's own phrasing
+    would make retrieval match on its stylistic tics rather than on
+    anything about the learner (see migration 034's header comment).
+
+    `response_text` is None both on an options-offered turn (nothing
+    generated yet) and on a turn where FinalAnswer failed (nothing
+    genuine was produced — treated as no-response, not fabricated
+    content). Either way this is also what makes outcome
+    classification resolve to DEFERRED for the row: no response, no
+    N+1 evidence to classify yet.
+
+    `abstract_form`/`abstract_embedding` are always None here by
+    construction — see `InteractionAbstract`, appended separately so
+    this row is never mutated after insert.
+
+    `entry_state` is computed from `prev_question_sim`/
+    `recent_similar_count`/`last_similar_turn_gap` — no topic cluster
+    identity exists anywhere (see this class's own docstring history:
+    a per-learner running-centroid topic mechanism was built, tuned
+    across two rounds, replayed systematically against real data, and
+    removed after confirming the mechanism itself — not just its
+    threshold — cascades under a single fixed similarity threshold).
+    The three fields are stored as raw numbers, not just the derived
+    label, specifically so a wrong `same_subject_threshold`
+    (retrieval_config.py) is survivable: labels recompute from these
+    stored values, with no re-embedding and no touching an
+    already-written row.
+
+    Append-only, enforced at the database (a real trigger blocking
+    UPDATE/DELETE), not just by convention — see migration 034.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    learner_id: UUID
+    session_id: UUID
+    turn_number: int
+    question_text: str
+    question_author: QuestionAuthor
+    originating_question: str | None = None
+    did_branch: bool
+    response_text: str | None = None
+    entry_state: EntryState
+    # Count of this learner's recent questions (see InteractionConfig's
+    # window size) that clear same_subject_threshold against this one.
+    # Replaces the old turns_on_topic -- same meaning, honestly
+    # re-derived from a pairwise comparison instead of a cluster
+    # membership count.
+    recent_similar_count: int = 0
+    # Raw cosine similarity to this learner's immediately preceding
+    # interaction, regardless of session boundary. None only when
+    # there is no prior interaction at all for this learner.
+    prev_question_sim: float | None = None
+    # How many interactions back (most-recent-first) the closest
+    # above-threshold match was found, searched over a wider window
+    # than recent_similar_count's own. None when nothing in that wider
+    # window matched -- the topic_switch case.
+    last_similar_turn_gap: int | None = None
+    prior_turn_outcome: InteractionPriorOutcome = InteractionPriorOutcome.UNKNOWN
+    help_level: HelpLevel = HelpLevel.NONE
+    elapsed_ms: int | None = None
+    # Renamed from topic_embedding when topic clustering was removed --
+    # the embedding itself is unchanged and still exactly what
+    # recent_similar_count/prev_question_sim/last_similar_turn_gap (and
+    # retrieval's own stage2 ANN search) compare against; only the name
+    # tied it to a concept that no longer exists.
+    question_embedding: list[float]
+    abstract_form: str | None = None
+    abstract_embedding: list[float] | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class InteractionOption(BaseModel):
+    """One option actually shown on an options-offered turn (Turn A).
+    `shown_position` is the position AFTER shuffling — fixed ordering
+    would make selection partly a function of the UI rather than the
+    learner. `was_selected`/`selection_timestamp` are populated on a
+    LATER turn than creation (the click, a separate `handle_turn`
+    call) — a decision record, not an interaction record, so this
+    table is deliberately excluded from the immutability trigger."""
+
+    id: UUID = Field(default_factory=uuid4)
+    interaction_id: UUID
+    learner_id: UUID
+    option_id: UUID
+    branch_id: UUID
+    option_text: str
+    shown_position: int
+    was_selected: bool = False
+    selection_timestamp: datetime | None = None
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class InteractionAbstract(BaseModel):
+    """The resolved turn, rewritten with domain nouns stripped (e.g.
+    "chose the worked example over the stated rule") — generated off
+    the critical path, alongside the outcome classifier. Append-only:
+    re-running the generator writes a new row under a new
+    `generator_version`; readers resolve to the latest version per
+    `interaction_id`, same convention as `TurnOutcome`."""
+
+    id: UUID = Field(default_factory=uuid4)
+    interaction_id: UUID
+    learner_id: UUID
+    abstract_form: str
+    abstract_embedding: list[float]
+    generator_version: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class TurnOutcomeLabel(str, Enum):
+    MATCHED = "matched"
+    CONTRADICTED_INTENT = "contradicted_intent"
+    # Collapsed from two separate values (UNDERSTOOD_MOVED_ON,
+    # ABANDONED_TOPIC) after a real 12-turn evaluation session: the
+    # distinction between "left satisfied" and "left frustrated" is not
+    # recoverable from a classifier reading only the prior question,
+    # response, and next question -- there is no signal in that window
+    # that distinguishes them, and a real run showed exactly this
+    # ambiguity on 3 of 7 classifications. Guessing it per-turn and
+    # storing the guess as a typed enum value is worse than not having
+    # the distinction: it would make every downstream reader (rerank,
+    # a future trained policy) treat a coin flip as fact. If this
+    # distinction is ever needed, it needs its own explicit signal (a
+    # later return to the topic, an affect read) -- not a finer label
+    # squeezed out of the same three fields that already can't support
+    # the ones kept here.
+    MOVED_ON = "moved_on"
+    # Emitted (never omitted) whenever no N+1 evidence exists yet:
+    # response_text IS NULL on the interaction being classified, OR it
+    # is the last interaction in its session. Both are the same
+    # underlying condition — stated once, not as two special cases.
+    DEFERRED = "deferred"
+
+
+class TurnOutcome(BaseModel):
+    """One classification of one interaction row ("turn N"), made at
+    turn N+1 from N's own question/selected option/response and N+1's
+    new question. Off the critical path. Append-only: re-running the
+    classifier writes a new row under a new `classifier_version`;
+    readers resolve to the latest version per `interaction_id` — never
+    an update in place."""
+
+    id: UUID = Field(default_factory=uuid4)
+    interaction_id: UUID
+    learner_id: UUID
+    next_question_text: str | None = None
+    outcome: TurnOutcomeLabel
+    confidence: float
+    classifier_version: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class StatedPreferenceLabel(str, Enum):
+    """A closed vocabulary the classifier picks ONE of, alongside the
+    raw extracted text -- see StatedPreference's own docstring for why
+    both exist side by side. `OTHER` covers any explicit standing
+    preference that doesn't fit one of the specific shapes below; it is
+    not a failure mode, it's a real, if less mappable, category.
+
+    interaction_nodes.render_structural_requirement maps each label to
+    a hand-written imperative -- the label is what makes that mapping
+    possible without needing the classifier to also invent good
+    imperative phrasing on the fly, which would reopen exactly the
+    "description, not a requirement" problem raw-text-only rendering
+    had (see disambiguate.FinalAnswer's own docstring for that record)."""
+
+    CONCRETE_BEFORE_ABSTRACT = "concrete_before_abstract"
+    RULE_BEFORE_EXAMPLE = "rule_before_example"
+    WANTS_STEPS_SHOWN = "wants_steps_shown"
+    PREFERS_BREVITY = "prefers_brevity"
+    WANTS_ANALOGIES = "wants_analogies"
+    NO_ANALOGIES = "no_analogies"
+    OTHER = "other"
+
+
+class StatedPreference(BaseModel):
+    """Fix B's write side (history_block.py's module docstring / the
+    feature's own review has the full record): did this learner
+    EXPLICITLY state a standing preference about how they want to be
+    taught, in this turn's own words? Only an explicit statement counts
+    -- a repeated click pattern is an inference and belongs in a claim
+    layer, never conflated with a fact the learner actually said.
+
+    Classified off the critical path, one fast-tier call per LEARNER-
+    authored turn (never a system_option/click turn -- there is no
+    free text from the student there to classify). Written every time,
+    `has_preference=False` included, so classifier coverage is
+    auditable the same way `TurnOutcome`'s is. `stated_preference` is
+    the preference in the student's OWN terms (classifier-extracted,
+    not paraphrased into a template) -- the faithful record of what was
+    actually said, kept verbatim regardless of `label`. `label` is the
+    classifier's own closed-vocabulary categorization of that same
+    statement, always set when `has_preference` is true (falls back to
+    `OTHER` rather than being left null if the model's own label choice
+    doesn't parse) -- it exists so the render step
+    (interaction_nodes.render_structural_requirement) can map to a
+    hand-written imperative instead of converting the raw text into a
+    requirement on the fly, which measurably failed to reliably beat
+    the model's own prior (see disambiguate.FinalAnswer's docstring).
+
+    A separate table from `interactions` despite conceptually being
+    "about" one interaction: `interactions` is immutable, and this
+    classifier -- like the abstractor and outcome classifier -- runs
+    after that row already exists."""
+
+    id: UUID = Field(default_factory=uuid4)
+    interaction_id: UUID
+    learner_id: UUID
+    has_preference: bool
+    stated_preference: str | None = None
+    label: StatedPreferenceLabel | None = None
+    classifier_version: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class Prediction(BaseModel):
+    """One asynchronous selection-prediction run over the options shown
+    on an options-offered turn. Fired after options are persisted and
+    returned to the UI — NEVER awaited before that response goes out.
+    May land after the learner has already clicked; persisted
+    regardless, since `prediction_created_at` is what makes a
+    late-arriving prediction interpretable and cannot be recovered if
+    the row is skipped.
+
+    `predicted_scores` is keyed by `option_id` (str) -> probability.
+    `retrieved_candidate_ids`/`retrieval_provenance` are what
+    `retrieval.retrieve()` surfaced as context for this prediction —
+    fixed shape regardless of what actually computes
+    `predicted_scores`, so a learned selection policy can later replace
+    the LLM predictor without changing this schema.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    interaction_id: UUID
+    learner_id: UUID
+    predicted_scores: dict
+    prediction_created_at: datetime = Field(default_factory=_utcnow)
+    model_version: str
+    retrieved_candidate_ids: list = Field(default_factory=list)
+    retrieval_provenance: list = Field(default_factory=list)
+
+
+class PopulationPattern(BaseModel):
+    """One cross-learner pattern, derived from abstract forms only —
+    never raw transcripts. Readable by retrieval only at
+    `distinct_learner_count >= 20` AND `max_per_learner_share <=
+    0.25`: the second gate matters as much as the first, since without
+    it one heavy user can supply most of a pattern's support and the
+    learner-count threshold passes on what is effectively one person's
+    behavior. Append-only: each aggregation run inserts fresh rows; a
+    stale pattern is superseded by a newer row from the next run, never
+    edited in place."""
+
+    id: UUID = Field(default_factory=uuid4)
+    abstract_form: str
+    embedding: list[float]
+    support_count: int
+    distinct_learner_count: int
+    max_per_learner_share: float
+    representative_features: dict = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+# ── node outputs (not DB-backed) ──────────────────────────────────────
+
+
+class AbstractionResult(BaseModel):
+    """GenerateAbstractForm's output — the domain-noun-stripped
+    rewrite. Not itself persisted; InteractionAbstractStore.append
+    attaches the embedding and ids around it."""
+
+    abstract_form: str
+
+
+class OutcomeClassification(BaseModel):
+    """ClassifyTurnOutcome's output. `abstains` is True on a
+    low-confidence call: the caller writes nothing rather than guessing
+    a label — an abstention leaves the interaction's outcome at
+    whatever the previous classifier_version (if any) already
+    established, not DEFERRED and not a forced guess."""
+
+    outcome: TurnOutcomeLabel
+    confidence: float
+    abstains: bool = False
+
+
+class StatedPreferenceClassification(BaseModel):
+    """ClassifyStatedPreference's output — see StatedPreference's own
+    docstring for what counts (explicit statement only, never an
+    inferred pattern) and for why `label` exists alongside the raw
+    `stated_preference` text. `label` is always set when
+    `has_preference` is true (the node itself falls back to `OTHER`
+    rather than leaving it None on a malformed label choice)."""
+
+    has_preference: bool
+    stated_preference: str | None = None
+    label: StatedPreferenceLabel | None = None
+
+
+class RetrievalCandidate(BaseModel):
+    """One candidate surfaced by `retrieval.retrieve()` — the unified
+    shape both personal and population scopes return, so the 4+1
+    quota assembly never has to special-case either. Every candidate
+    keeps enough provenance to justify why it was surfaced, per scope:
+
+    - PERSONAL: `source_id` is an `interactions.id`, `learner_id` is
+      always this learner's own id, `outcome`/`support_count` are
+      usually None (an individual interaction, not an aggregate).
+    - POPULATION: `source_id` is a `population_patterns.id`,
+      `learner_id` is None (a population pattern is not attributed to
+      any one learner), `support_count`/`distinct_learner_count` are
+      always set.
+    """
+
+    scope: str  # "personal" | "population"
+    source_id: UUID
+    retrieval_key: str  # "topic" | "abstract"
+    learner_id: UUID | None = None
+    similarity: float
+    recency_days: float | None = None
+    outcome: TurnOutcomeLabel | None = None
+    support_count: int | None = None
+    distinct_learner_count: int | None = None
+    text: str = ""
+    score: float = 0.0

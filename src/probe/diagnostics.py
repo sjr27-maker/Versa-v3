@@ -36,8 +36,10 @@ class TurnDiagnosticsStore:
                     total_call_count, guardrail_fired, entropy_bits,
                     duration_ms, warnings, teach_failed, retry_count,
                     memory_match_found, memory_match_confirmed_resolution,
-                    branching_skipped_by_memory, matched_fact_id, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    branching_skipped_by_memory, matched_fact_id, created_at,
+                    history_block_used, history_block_source_ids,
+                    history_block_template_version
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 """,
                 diagnostics.id,
                 diagnostics.session_id,
@@ -55,6 +57,9 @@ class TurnDiagnosticsStore:
                 diagnostics.branching_skipped_by_memory,
                 diagnostics.matched_fact_id,
                 diagnostics.created_at,
+                diagnostics.history_block_used,
+                diagnostics.history_block_source_ids,
+                diagnostics.history_block_template_version,
             )
         return diagnostics
 

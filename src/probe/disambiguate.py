@@ -117,7 +117,6 @@ from probe.models import (
     DisambiguationAssessment,
     DisambiguationBranch,
     DisambiguationTurn,
-    GroundingEvidence,
     Option,
     OptionProposal,
     OptionStatus,
@@ -460,19 +459,25 @@ class FinalAnswer:
     branching when it didn't would misrepresent what actually happened
     this turn).
 
-    `grounding_context` is a ranked list of web excerpts, present only
-    on a turn
-    where `GroundTimeSensitive` (grounding.py) judged the student's
-    message to concern something that changes over time AND a search
-    actually returned something usable. It is a third distinct kind of
-    context, kept separate from the two above for the same reason they
-    are kept separate from each other: `branch_context` is what the
-    student confirmed they meant, `memory_context` is what this
-    student established in the past, and `grounding_context` is a
-    claim about the world that neither the student nor this system
-    vouches for — hence the instruction to cite it rather than absorb
-    it into the tutor's own voice. On every other turn it is None and
-    this prompt is byte-for-byte what it was before grounding existed.
+    `learner_history_block` (history_block.py) is a third, separate
+    kind of context from `recent_history`/`memory_context` above: a
+    pre-rendered block of this learner's PAST -- across sessions, built
+    from `retrieval.retrieve()`'s output -- rather than the live turn's
+    own continuity. Empty string when the history-block feature is
+    disabled or nothing was retrieved; FinalAnswer does no rendering or
+    retrieval of its own, only places whatever pre-built string it is
+    given.
+
+    `structural_requirement` (interaction_nodes.render_structural_requirement)
+    is a FOURTH, deliberately different kind of context, placed ABOVE
+    everything else: a real diagnostic found that a stated learner
+    preference rendered as background prose -- even placed prominently,
+    even right before the question -- did not reliably beat the
+    model's own prior about how to explain a familiar topic. Phrasing
+    the same fact as a requirement on the answer's shape, positioned
+    at the top of the prompt rather than folded into history, measurably
+    did better. Empty string whenever this learner has never explicitly
+    stated a standing preference.
 
     Best tier: this is what the student actually sees, same tier as
     Teach/BaselineTeach.
@@ -488,8 +493,24 @@ class FinalAnswer:
         branch_context: str | None = None,
         recent_history: str = "",
         memory_context: str | None = None,
-        grounding_context: list[GroundingEvidence] | None = None,
+        learner_history_block: str = "",
+        structural_requirement: str = "",
     ) -> str:
+        """`learner_history_block` is a fully pre-rendered block from
+        history_block.py — this method never builds it, only places it
+        in the prompt. Distinct from `recent_history` below: that is
+        THIS session's own recent turns (conversation continuity, a
+        few turns back); `learner_history_block` is this learner's
+        PAST across sessions, retrieved and formatted by a separate,
+        deterministic pipeline. Placed once, verbatim -- it already
+        carries its own "do not narrate this back" instruction, so it
+        is not wrapped in another framing sentence here.
+
+        `structural_requirement` is likewise pre-rendered (this method
+        does no classification or templating of its own) and is placed
+        FIRST, above context_block/memory_block/learner_history_block
+        -- see this class's own docstring for why position and phrasing
+        both matter here, not just content."""
         self.last_call_count = 0
         context_block = ""
         if branch_context:
@@ -505,51 +526,24 @@ class FinalAnswer:
                 "and it directly applies to their current message -- "
                 f"use it, do not ask them to re-establish it: {memory_context}\n"
             )
-        history_block = ""
+        recent_history_block = ""
         if recent_history:
-            history_block = (
+            recent_history_block = (
                 "\nRecent conversation, for continuity only (do not "
                 "repeat this back or restate it — use it to correctly "
                 "resolve any reference in the student's message below, "
                 "e.g. \"that\", \"it\", or \"the one you mentioned\"):\n"
                 f"{recent_history}\n"
             )
-        grounding_block = ""
-        if grounding_context:
-            sources = []
-            for i, ev in enumerate(grounding_context, 1):
-                published = (
-                    f" (published {ev.publish_date})" if ev.publish_date else ""
-                )
-                sources.append(f"[{i}] {ev.url}{published}\n{ev.excerpt}")
-            joined = "\n\n".join(sources)
-            grounding_block = (
-                "\nThis message appears to concern something that "
-                "changes over time, so a live web search was run. The "
-                "most relevant excerpts found, in the search engine's "
-                f"own relevance order:\n\n{joined}\n\n"
-                "These sources may disagree with each other, and some "
-                "may not answer the question at all -- a highly ranked "
-                "source is not automatically the one that answers it. "
-                "Use whichever actually addresses what the student "
-                "asked, preferring the more recent and more "
-                "authoritative where they conflict, and cite that "
-                "source's URL inline. If NONE of them bear on the "
-                "question, ignore them completely, answer from what "
-                "you know, and do not cite any of them or mention that "
-                "a search was run -- do not attach a citation to a "
-                "claim the cited source does not actually support. "
-                "Never present an excerpt as more current or more "
-                "certain than it is.\n"
-            )
         prompt = (
             "FINAL:ANSWER\n"
             "You are a tutor having a conversation with a student. "
             "Respond directly and helpfully to their latest message.\n"
+            f"{structural_requirement}"
             f"{context_block}"
             f"{memory_block}"
-            f"{grounding_block}"
-            f"{history_block}"
+            f"{learner_history_block}"
+            f"{recent_history_block}"
             f"\nStudent's message: {student_message}\n\n"
             "Lead with the direct answer or key idea -- do not open "
             "with setup or a restatement of the question. Do not "

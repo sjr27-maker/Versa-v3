@@ -28,7 +28,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,13 +57,6 @@ from probe.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from probe.loop import SessionLoop
 from probe.memory import LearnerFactStore, ThinkingStyleStore
 from probe.models import Learner, OptionStatus
-from probe.websearch import (
-    StubWebSearchClient,
-    WebSearchClient,
-    build_web_search_client,
-)
-
-logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -102,23 +94,6 @@ def _embedding_client(use_stub: bool) -> EmbeddingClient:
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set (check .env)")
     return build_embedding_client(api_key)
-
-
-def _web_search_client(use_stub: bool) -> WebSearchClient | None:
-    """Optional, unlike the two above — a missing PARALLEL_API_KEY
-    leaves time-sensitive grounding off (logged, not raised) rather
-    than refusing to start a session. Grounding is strictly additive;
-    the UI must still work without it."""
-    if use_stub:
-        return StubWebSearchClient()
-    load_dotenv()
-    api_key = os.getenv("PARALLEL_API_KEY")
-    if not api_key:
-        logger.info(
-            "PARALLEL_API_KEY not set — time-sensitive grounding is OFF"
-        )
-        return None
-    return build_web_search_client(api_key)
 
 
 # ─────────────────────────── session state ───────────────────────────
@@ -183,7 +158,6 @@ def _build_loop(use_stub: bool, on_node) -> SessionLoop:
         learner_fact_store=LearnerFactStore(pool),
         thinking_style_store=ThinkingStyleStore(pool),
         embedding_client=_embedding_client(use_stub),
-        web_search_client=_web_search_client(use_stub),
     )
 
 

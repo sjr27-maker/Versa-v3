@@ -167,6 +167,17 @@ _DEFAULT_RESPONSES: dict[str, str] = {
     # Conservative default: does NOT confirm, so a test that doesn't
     # opt in never accidentally grows a thinking_style_candidates row.
     "CONFIRM:THINKING_STYLE": json.dumps({"confirms": False}),
+    # interactions.py's async pipeline. Conservative default: abstains,
+    # so a test that doesn't opt in never accidentally appends a
+    # guessed turn_outcomes row (see ClassifyTurnOutcome's own
+    # docstring on abstention).
+    "CLASSIFY:TURN_OUTCOME": json.dumps(
+        {"outcome": "deferred", "confidence": 0.0, "abstains": True}
+    ),
+    "ABSTRACT:FORM": json.dumps({"abstract_form": "stub abstract form"}),
+    # Keys are option ids decided per-call (same reasoning as
+    # SCORE:INFO_UPDATE) -- a static schema can't name them in advance.
+    "PREDICT:SELECTION": "{}",
 }
 
 
@@ -489,6 +500,26 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         "properties": {"confirms": {"type": "BOOLEAN"}},
         "required": ["confirms"],
     },
+    "CLASSIFY:TURN_OUTCOME": {
+        "type": "OBJECT",
+        "properties": {
+            "outcome": {
+                "type": "STRING",
+                "enum": ["matched", "contradicted_intent", "moved_on", "deferred"],
+            },
+            "confidence": {"type": "NUMBER"},
+            "abstains": {"type": "BOOLEAN"},
+        },
+        "required": ["outcome", "confidence"],
+    },
+    "ABSTRACT:FORM": {
+        "type": "OBJECT",
+        "properties": {"abstract_form": {"type": "STRING"}},
+        "required": ["abstract_form"],
+    },
+    # Keys are option ids decided per-call -- same reasoning as
+    # SCORE:INFO_UPDATE, no fixed schema possible.
+    "PREDICT:SELECTION": _JSON_ONLY,
 }
 
 
