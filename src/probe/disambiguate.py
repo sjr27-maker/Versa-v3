@@ -173,6 +173,7 @@ def _assess_prompt(
     typed_past_note: str = "",
     rejected_reason: str = "",
     thinking_style_hint: str = "",
+    reference_binding_hint: str = "",
 ) -> str:
     history_block = (
         f"\nRecent conversation, for context:\n{recent_history}\n" if recent_history else ""
@@ -188,6 +189,15 @@ def _assess_prompt(
             "would find genuinely ambiguous, not to assume anything "
             "about the current subject matter itself.\n"
         )
+    reference_binding_block = ""
+    if reference_binding_hint:
+        reference_binding_block = (
+            f"{reference_binding_hint}"
+            "If the student's message uses one of these known phrases "
+            "and nothing in the message suggests a different meaning "
+            "this time, treat it as already resolved — do not raise a "
+            "branch asking what they meant by it.\n"
+        )
     correction = ""
     if rejected_reason:
         correction = (
@@ -199,6 +209,7 @@ def _assess_prompt(
         "ASSESS:BRANCH\n"
         f"{history_block}"
         f"{thinking_style_block}"
+        f"{reference_binding_block}"
         f"{typed_past_note}"
         f"\nStudent's message: {message}\n\n"
         "Is this message genuinely ambiguous or under-specified -- could "
@@ -275,6 +286,7 @@ class AssessAndBranch:
         recent_history: str = "",
         typed_past_note: str = "",
         thinking_style_hint: str = "",
+        reference_binding_hint: str = "",
     ) -> DisambiguationAssessment:
         self.last_call_count = 0
         rejected_reason = ""
@@ -282,7 +294,7 @@ class AssessAndBranch:
             raw = await self._llm.complete(
                 _assess_prompt(
                     message, recent_history, typed_past_note, rejected_reason,
-                    thinking_style_hint,
+                    thinking_style_hint, reference_binding_hint,
                 )
             )
             self.last_call_count += 1
@@ -479,6 +491,18 @@ class FinalAnswer:
     did better. Empty string whenever this learner has never explicitly
     stated a standing preference.
 
+    `reference_bindings_block` (reference_bindings.py) is a FIFTH kind
+    of context, placed above `learner_history_block` (per that
+    feature's own spec): known, exact-matched meanings of this
+    learner's own recurring shorthand phrases ("the usual", "my
+    project"). Unlike `structural_requirement`, it is deliberately
+    framed as PRIOR meaning rather than a requirement -- the model is
+    told to use it only when it fits and to defer to the current
+    message when that clearly indicates something else, since an
+    incorrectly-applied binding (unlike an ignored structural
+    requirement) actively produces a wrong answer, not just a
+    differently-shaped right one.
+
     Best tier: this is what the student actually sees, same tier as
     Teach/BaselineTeach.
     """
@@ -495,6 +519,7 @@ class FinalAnswer:
         memory_context: str | None = None,
         learner_history_block: str = "",
         structural_requirement: str = "",
+        reference_bindings_block: str = "",
     ) -> str:
         """`learner_history_block` is a fully pre-rendered block from
         history_block.py — this method never builds it, only places it
@@ -510,7 +535,13 @@ class FinalAnswer:
         does no classification or templating of its own) and is placed
         FIRST, above context_block/memory_block/learner_history_block
         -- see this class's own docstring for why position and phrasing
-        both matter here, not just content."""
+        both matter here, not just content.
+
+        `reference_bindings_block` is also fully pre-rendered
+        (reference_bindings.py) and is placed directly above
+        `learner_history_block` -- the one explicit positioning
+        constraint this feature's own spec makes ("above the history
+        block")."""
         self.last_call_count = 0
         context_block = ""
         if branch_context:
@@ -542,6 +573,7 @@ class FinalAnswer:
             f"{structural_requirement}"
             f"{context_block}"
             f"{memory_block}"
+            f"{reference_bindings_block}"
             f"{learner_history_block}"
             f"{recent_history_block}"
             f"\nStudent's message: {student_message}\n\n"

@@ -35,6 +35,7 @@ from probe.models import (
     AbstractionResult,
     InteractionOption,
     OutcomeClassification,
+    ReferenceResolutionClassification,
     RetrievalCandidate,
     StatedPreferenceClassification,
     StatedPreferenceLabel,
@@ -51,6 +52,7 @@ CLASSIFIER_VERSION = "classify-turn-outcome-v1"
 ABSTRACTOR_VERSION = "generate-abstract-form-v1"
 PREDICTOR_MODEL_VERSION = "llm-selection-predictor-v1"
 STATED_PREFERENCE_CLASSIFIER_VERSION = "classify-stated-preference-v1"
+REFERENCE_BINDING_CLASSIFIER_VERSION = "classify-reference-resolution-v1"
 
 
 class ClassifierConfig(BaseModel):
@@ -379,6 +381,154 @@ def render_structural_requirement(
             "takes priority over your default explanation format."
         )
     return f"\nStructural requirement: {imperative}\n"
+
+
+class ReferenceResolutionClassifierConfig(BaseModel):
+    # Stricter than ClassifierConfig.min_confidence (0.6, ClassifyTurnOutcome's
+    # own bar): a wrong turn_outcome label costs a rerank bonus; a wrong
+    # reference binding gets fed BACK into a future turn's prompt as an
+    # assumed fact and can quietly steer an answer toward the wrong
+    # meaning entirely. The feature's own review is explicit that "a
+    # noisy table is worse than a sparse one here" -- that calls for a
+    # higher bar, not the same one every other classifier here uses.
+    min_confidence: float = 0.75
+
+
+def _reference_resolution_prompt(
+    recent_history: str,
+    turn_question: str,
+    turn_response: str | None,
+    originating_question: str | None = None,
+) -> str:
+    history_block = f"\nRecent conversation:\n{recent_history}\n" if recent_history else ""
+    # A click-resolution turn carries the strongest possible signal:
+    # `originating_question` is the earlier ambiguous message verbatim,
+    # `turn_question` is the specific reading the student confirmed --
+    # framed as a resolution event, not just another message, whenever
+    # it's available.
+    if originating_question:
+        resolution_block = (
+            f'\nThis turn resolved an earlier ambiguous message '
+            f'("{originating_question}") by confirming: "{turn_question}"\n'
+        )
+    else:
+        resolution_block = f'\nThe student\'s message this turn: "{turn_question}"\n'
+    response_block = (
+        f'\nThe tutor then responded: "{turn_response}"\n' if turn_response else ""
+    )
+    return (
+        "CLASSIFY:REFERENCE_RESOLUTION\n"
+        f"{history_block}"
+        f"{resolution_block}"
+        f"{response_block}"
+        "\nDid this exchange settle the meaning of a genuinely AMBIGUOUS, "
+        'RECURRING reference the student uses -- a short standing '
+        'phrase like "the usual", "my project", "that thing we did" -- '
+        "whose meaning needed the broader conversation, a clarification, "
+        "or a chosen option to pin down, and which the student is "
+        "likely to reuse VERBATIM in a later, otherwise unrelated turn "
+        "or session?\n\n"
+        "Do NOT count an ordinary pronoun or reference resolvable from "
+        'just the immediately preceding turn ("it", "that", "she" '
+        "referring to the last sentence) -- only a phrase that is its "
+        "own standing shorthand for something specific to this "
+        "student, worth remembering across turns, counts.\n\n"
+        "If you are not confident this happened, or the reference is "
+        "ordinary and immediately resolvable, set resolved=false -- a "
+        "missed one is fine, a wrong one is not.\n\n"
+        'Respond with JSON: {"resolved": true or false, "reference_text": '
+        '"<the exact recurring phrase, verbatim, or null>", "resolved_to": '
+        '"<plain-English statement of what it means, or null>", '
+        '"confidence": 0.0-1.0}'
+    )
+
+
+def _parse_reference_resolution(
+    raw: str, min_confidence: float
+) -> ReferenceResolutionClassification | None:
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    resolved = data.get("resolved")
+    if not isinstance(resolved, bool):
+        return None
+    if not resolved:
+        return ReferenceResolutionClassification(resolved=False)
+    reference_text = data.get("reference_text")
+    resolved_to = data.get("resolved_to")
+    confidence = data.get("confidence")
+    if (
+        not isinstance(reference_text, str)
+        or not reference_text.strip()
+        or not isinstance(resolved_to, str)
+        or not resolved_to.strip()
+        or not isinstance(confidence, (int, float))
+    ):
+        return None
+    if confidence < min_confidence:
+        # Below the bar -- treated the same as "didn't happen," not a
+        # weaker write. See ReferenceResolutionClassifierConfig's own
+        # docstring for why this bar is stricter than the other
+        # classifiers in this module.
+        return ReferenceResolutionClassification(resolved=False)
+    return ReferenceResolutionClassification(
+        resolved=True,
+        reference_text=reference_text.strip(),
+        resolved_to=resolved_to.strip(),
+        confidence=float(confidence),
+    )
+
+
+class ClassifyReferenceResolution:
+    """The reference-resolution memory's write side (see
+    `ReferenceBinding`'s own docstring for the full record). Runs off
+    the critical path, fired whenever a turn produces a real response
+    (same gate as `GenerateAbstractForm` -- see loop.py's
+    `_record_interaction`), regardless of `question_author`: a branch
+    selection (`question_author=SYSTEM_OPTION`) is explicitly one of
+    the three ways a reference gets settled, unlike
+    `ClassifyStatedPreference`, which is learner-turns-only because it
+    needs the student's own free text.
+
+    `resolved=False` (the expected outcome most turns) is a terminal
+    result here -- unlike `ClassifyStatedPreference`/`ClassifyTurnOutcome`,
+    the caller writes NOTHING to the store in that case. See
+    `ReferenceBinding`'s docstring for why: this feature explicitly
+    trades classifier coverage-auditability (every other classifier
+    here writes a row every time) for a sparse, high-precision table.
+    """
+
+    def __init__(self, llm: LLMClient, config: ReferenceResolutionClassifierConfig | None = None) -> None:
+        self._llm = llm
+        self._config = config or ReferenceResolutionClassifierConfig()
+        self.last_call_count: int = 0
+
+    async def run(
+        self,
+        recent_history: str,
+        turn_question: str,
+        turn_response: str | None = None,
+        originating_question: str | None = None,
+    ) -> ReferenceResolutionClassification:
+        self.last_call_count = 0
+        raw = await self._llm.complete(
+            _reference_resolution_prompt(
+                recent_history, turn_question, turn_response, originating_question
+            )
+        )
+        self.last_call_count = 1
+        parsed = _parse_reference_resolution(raw, self._config.min_confidence)
+        if parsed is None:
+            logger.warning(
+                "ClassifyReferenceResolution: unparseable response, "
+                "treating as unresolved: %r",
+                raw[:200],
+            )
+            return ReferenceResolutionClassification(resolved=False)
+        return parsed
 
 
 class SelectionPredictor(Protocol):

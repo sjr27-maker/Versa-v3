@@ -104,13 +104,19 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
     when this learner has explicitly stated one, a structural requirement
     built from `stated_preferences` -- see history_block.py's and
     disambiguate.FinalAnswer's own docstrings for the read side, and
-    StatedPreference's docstring for the write side. Predictions
-    (interaction_nodes.LLMSelectionPredictor) still feed nothing back
-    into what the learner sees. The critical-path additions are: the
-    entry_state similarity comparison, the history-block assembly's own
-    embedding call, the stated-preference lookup, and the option
-    shuffle; classification/abstraction/stated-preference classification
-    itself all still run off the critical path.
+    StatedPreference's docstring for the write side. `reference_bindings`
+    (reference_bindings.py) adds a third, independently-gated read: an
+    exact-match lookup of this learner's known recurring-phrase meanings,
+    fed into both AssessAndBranch (to suppress branching on something
+    already known) and FinalAnswer (as a short background section, above
+    learner_history_block). Predictions (interaction_nodes.
+    LLMSelectionPredictor) still feed nothing back into what the learner
+    sees. The critical-path additions are: the entry_state similarity
+    comparison, the history-block assembly's own embedding call, the
+    stated-preference lookup, the reference-binding lookup, and the
+    option shuffle; classification/abstraction/stated-preference/
+    reference-resolution classification itself all still run off the
+    critical path.
     """
     from probe.interactions import (
         InteractionAbstractStore,
@@ -118,6 +124,7 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
         InteractionRecorder,
         InteractionStore,
         PredictionStore,
+        ReferenceBindingStore,
         StatedPreferenceStore,
         TurnOutcomeStore,
     )
@@ -139,6 +146,7 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
         "prediction_store": PredictionStore(pool),
         "retrieval_pool": pool,
         "stated_preference_store": StatedPreferenceStore(pool),
+        "reference_binding_store": ReferenceBindingStore(pool),
     }
 
 

@@ -38,8 +38,8 @@ class TurnDiagnosticsStore:
                     memory_match_found, memory_match_confirmed_resolution,
                     branching_skipped_by_memory, matched_fact_id, created_at,
                     history_block_used, history_block_source_ids,
-                    history_block_template_version
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                    history_block_template_version, reference_bindings_injected
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
                 """,
                 diagnostics.id,
                 diagnostics.session_id,
@@ -60,6 +60,7 @@ class TurnDiagnosticsStore:
                 diagnostics.history_block_used,
                 diagnostics.history_block_source_ids,
                 diagnostics.history_block_template_version,
+                diagnostics.reference_bindings_injected,
             )
         return diagnostics
 

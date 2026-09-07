@@ -58,6 +58,7 @@ from probe.models import (
     InteractionPriorOutcome,
     Prediction,
     QuestionAuthor,
+    ReferenceBinding,
     StatedPreference,
     TurnOutcome,
     TurnOutcomeLabel,
@@ -510,6 +511,110 @@ class StatedPreferenceStore:
         mapped.pop("seq", None)
         assert_row_consumed(StatedPreference, mapped)
         return StatedPreference(**mapped)
+
+
+class ReferenceBindingStore:
+    """Append-only (see ReferenceBinding's own docstring): no delete/
+    update method, no UPDATE/DELETE SQL touching an existing row. This
+    is the one store in this module whose write path reads before it
+    writes -- `record_resolution`'s own read of the current latest row
+    for a (learner_id, reference_text) pair decides the NEW row's
+    `confirmation_count`, the same way `ThinkingStyleStore.confirm()`'s
+    growing counter depends on the row's own prior value; the
+    difference is that growth here always writes a fresh row, per this
+    feature's explicit append-only requirement, never an UPDATE."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    async def get_latest(
+        self, learner_id: UUID, reference_text: str
+    ) -> ReferenceBinding | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM reference_bindings WHERE learner_id = $1 "
+                "AND reference_text = $2 ORDER BY seq DESC LIMIT 1",
+                learner_id,
+                reference_text,
+            )
+        return None if row is None else self._row_to_binding(row)
+
+    async def list_latest_for_learner(self, learner_id: UUID) -> list[ReferenceBinding]:
+        """The read side's one query -- latest row per distinct
+        reference_text for this learner. `reference_bindings.py` does
+        the exact-match filtering against a message's text afterward,
+        in Python, deterministically -- no embedding, no LLM call."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (reference_text) *
+                FROM reference_bindings
+                WHERE learner_id = $1
+                ORDER BY reference_text, seq DESC
+                """,
+                learner_id,
+            )
+        return [self._row_to_binding(r) for r in rows]
+
+    async def record_resolution(
+        self,
+        learner_id: UUID,
+        reference_text: str,
+        resolved_to: str,
+        evidence_interaction_id: UUID,
+        classifier_version: str,
+    ) -> ReferenceBinding:
+        """The write side's one entry point (called only from loop.py's
+        background classification task). Reads this pair's current
+        latest row, if any: the SAME `resolved_to` is a genuine
+        re-confirmation (`confirmation_count` = previous + 1); a
+        DIFFERENT `resolved_to` means this phrase now means something
+        else, and starts a fresh count at 1 -- the earlier row is never
+        touched, it stays on record as what the phrase used to mean."""
+        existing = await self.get_latest(learner_id, reference_text)
+        confirmation_count = (
+            existing.confirmation_count + 1
+            if existing is not None and existing.resolved_to == resolved_to
+            else 1
+        )
+        return await self.append(
+            ReferenceBinding(
+                learner_id=learner_id,
+                reference_text=reference_text,
+                resolved_to=resolved_to,
+                evidence_interaction_id=evidence_interaction_id,
+                confirmation_count=confirmation_count,
+                classifier_version=classifier_version,
+            )
+        )
+
+    async def append(self, binding: ReferenceBinding) -> ReferenceBinding:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO reference_bindings (
+                    id, learner_id, reference_text, resolved_to,
+                    evidence_interaction_id, confirmation_count,
+                    last_confirmed_at, classifier_version, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                """,
+                binding.id,
+                binding.learner_id,
+                binding.reference_text,
+                binding.resolved_to,
+                binding.evidence_interaction_id,
+                binding.confirmation_count,
+                binding.last_confirmed_at,
+                binding.classifier_version,
+                binding.created_at,
+            )
+        return binding
+
+    def _row_to_binding(self, row) -> ReferenceBinding:
+        mapped = dict(row)
+        mapped.pop("seq", None)
+        assert_row_consumed(ReferenceBinding, mapped)
+        return ReferenceBinding(**mapped)
 
 
 class PredictionStore:

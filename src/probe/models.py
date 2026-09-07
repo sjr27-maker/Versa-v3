@@ -190,6 +190,13 @@ class TurnDiagnostics(BaseModel):
     history_block_used: bool = False
     history_block_source_ids: list[str] = Field(default_factory=list)
     history_block_template_version: str | None = None
+    # reference_bindings.py's own visibility field -- which
+    # reference_bindings rows (as strings) were actually injected into
+    # FinalAnswer's prompt this turn. AssessAndBranch's own use of the
+    # same lookup is already visible for free in node_calls' input_json
+    # (the `reference_binding_hint` kwarg) -- this column is
+    # specifically about what the learner's actual answer saw.
+    reference_bindings_injected: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -675,6 +682,65 @@ class StatedPreference(BaseModel):
     label: StatedPreferenceLabel | None = None
     classifier_version: str
     created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ReferenceBinding(BaseModel):
+    """The reference-resolution memory's write side (migration 038):
+    what a learner-specific recurring phrase (`reference_text` — "that",
+    "the usual", "my project") has meant, so a LATER turn — this
+    session or a future one — doesn't need to re-ask.
+
+    Classified off the critical path, by `interaction_nodes.
+    ClassifyReferenceResolution`, only on a turn that actually SETTLED
+    a genuinely ambiguous reference (a branch selection, a typed
+    clarification, or the answer itself establishing the meaning) —
+    never on an ordinary pronoun resolvable from the immediately
+    preceding turn. Unlike `StatedPreference`/`TurnOutcome`, a
+    non-resolution is never written at all: this feature's own review
+    is explicit that a noisy table is worse than a sparse one here,
+    since every spurious row is a chance to substitute the wrong
+    meaning into a future answer.
+
+    Append-only (same family as CLAUDE.md invariants 1, 4, 6-11): a
+    re-confirmation of the SAME `resolved_to` for a
+    (learner_id, reference_text) pair, or a change to a DIFFERENT one,
+    both write a NEW row via `ReferenceBindingStore.record_resolution`
+    rather than updating the existing one — readers resolve to the
+    latest row per pair. `confirmation_count` is computed there (prior
+    row's count + 1 on a genuine re-confirmation, reset to 1 on a
+    changed meaning) and never incremented via UPDATE.
+
+    `confirmation_count`/`last_confirmed_at` feed
+    `reference_bindings.py`'s confidence decay on the read side: a
+    binding heard once, long ago, must not be injected with the same
+    weight as one reconfirmed recently — a stale binding confidently
+    applied produces a fluent answer about the wrong thing, the
+    feature's own named worst failure mode."""
+
+    id: UUID = Field(default_factory=uuid4)
+    learner_id: UUID
+    reference_text: str
+    resolved_to: str
+    evidence_interaction_id: UUID
+    confirmation_count: int = 1
+    last_confirmed_at: datetime = Field(default_factory=_utcnow)
+    classifier_version: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ReferenceResolutionClassification(BaseModel):
+    """ClassifyReferenceResolution's output — not itself DB-backed.
+    `resolved=False` (with every other field left at its default) is
+    the expected, normal shape for most turns; only a confident,
+    genuinely-settled recurring reference produces `resolved=True`
+    with both `reference_text`/`resolved_to` set. See
+    `ReferenceBinding`'s own docstring for why an unresolved turn
+    writes nothing downstream rather than a `resolved=False` row."""
+
+    resolved: bool
+    reference_text: str | None = None
+    resolved_to: str | None = None
+    confidence: float = 0.0
 
 
 class Prediction(BaseModel):

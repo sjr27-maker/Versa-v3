@@ -48,14 +48,18 @@ from probe.disambiguate import (
 )
 from probe import embeddings as _embeddings
 from probe import history_block as _history_block
+from probe import reference_bindings as _reference_bindings
 from probe import retrieval as _retrieval
 from probe.embeddings import EmbeddingClient
 from probe.history_block import HistoryBlockConfig
+from probe.reference_bindings import ReferenceBindingConfig
 from probe.interaction_nodes import (
     ABSTRACTOR_VERSION,
     CLASSIFIER_VERSION,
+    REFERENCE_BINDING_CLASSIFIER_VERSION,
     STATED_PREFERENCE_CLASSIFIER_VERSION,
     ClassifierConfig,
+    ClassifyReferenceResolution,
     ClassifyStatedPreference,
     ClassifyTurnOutcome,
     GenerateAbstractForm,
@@ -68,6 +72,7 @@ from probe.interactions import (
     InteractionOptionStore,
     InteractionRecorder,
     PredictionStore,
+    ReferenceBindingStore,
     StatedPreferenceStore,
     TurnOutcomeStore,
 )
@@ -158,6 +163,8 @@ class SessionLoop:
         selection_predictor: SelectionPredictor | None = None,
         history_block_config: HistoryBlockConfig | None = None,
         stated_preference_store: StatedPreferenceStore | None = None,
+        reference_binding_store: ReferenceBindingStore | None = None,
+        reference_binding_config: ReferenceBindingConfig | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -257,9 +264,17 @@ class SessionLoop:
         # gated on the store the same way the abstractor/outcome
         # classifier are gated on theirs -- absent it, this is a no-op.
         self._stated_preferences = stated_preference_store
+        # reference_bindings.py -- additive on top of the interaction
+        # pipeline, same two-part gating discipline (a store to persist
+        # into, plus its own config flag, default on) as history_block
+        # above. Absent the store, every fire/read site below is a
+        # no-op.
+        self._reference_bindings = reference_binding_store
+        self._reference_binding_config = reference_binding_config or ReferenceBindingConfig()
         self.classify_turn_outcome = ClassifyTurnOutcome(tiers.fast, ClassifierConfig())
         self.generate_abstract_form = GenerateAbstractForm(tiers.fast)
         self.classify_stated_preference = ClassifyStatedPreference(tiers.fast)
+        self.classify_reference_resolution = ClassifyReferenceResolution(tiers.fast)
         self.selection_predictor = selection_predictor or LLMSelectionPredictor(tiers.fast)
         # Strong references to fire-and-forget background tasks
         # (classification, abstraction, prediction) so they cannot be
@@ -421,6 +436,7 @@ class SessionLoop:
         originating_question: str | None,
         did_branch: bool,
         response_text: str | None,
+        recent_history: str = "",
     ) -> Interaction | None:
         """The single write path every one of `_handle_disambiguation_
         turn`'s finish-points calls into, right after it already has
@@ -433,6 +449,12 @@ class SessionLoop:
         `response_text=None` covers both an options-offered turn AND a
         turn where FinalAnswer failed (nothing genuine was produced --
         see Interaction's own docstring).
+
+        `recent_history` is the same compact window `AssessAndBranch`/
+        `FinalAnswer` were given this turn -- threaded through only for
+        `ClassifyReferenceResolution` (see below), which needs it to
+        recognize a reference phrase used in an EARLIER turn that this
+        turn's exchange just settled the meaning of.
         """
         if self._interaction_recorder is None:
             return None
@@ -449,6 +471,16 @@ class SessionLoop:
         if response_text is not None:
             self._fire_background(
                 self._run_abstraction(interaction, session_id, turn_index)
+            )
+            # Fired on every response-bearing turn regardless of
+            # question_author -- unlike stated-preference classification
+            # below, a branch selection (question_author=SYSTEM_OPTION)
+            # is explicitly one of the three ways a reference gets
+            # settled (see ReferenceBinding's own docstring).
+            self._fire_background(
+                self._run_reference_binding_classification(
+                    interaction, recent_history, session_id, turn_index
+                )
             )
         target = self._interaction_recorder.last_classification_target
         if target is not None:
@@ -499,6 +531,78 @@ class SessionLoop:
                 exc,
                 exc_info=True,
             )
+
+    async def _run_reference_binding_classification(
+        self, interaction: Interaction, recent_history: str, session_id: UUID, turn_index: int
+    ) -> None:
+        """Off the critical path, same discipline as the other
+        background classifiers here: a failure is logged and
+        swallowed, never a lost turn.
+
+        Deliberately NOT written every time, unlike
+        StatedPreference/TurnOutcome (which write a `has_preference=
+        False`/DEFERRED row for coverage auditability) -- see
+        ReferenceBinding's own docstring: this feature's own review is
+        explicit that a noisy table is worse than a sparse one here,
+        so a `resolved=False` classification writes nothing at all.
+        """
+        if self._reference_bindings is None:
+            return
+        try:
+            result = await self._call_node(
+                self.classify_reference_resolution,
+                session_id,
+                turn_index,
+                recent_history=recent_history,
+                turn_question=interaction.question_text,
+                turn_response=interaction.response_text,
+                originating_question=interaction.originating_question,
+            )
+            if not result.resolved:
+                return
+            await self._reference_bindings.record_resolution(
+                learner_id=interaction.learner_id,
+                reference_text=result.reference_text,
+                resolved_to=result.resolved_to,
+                evidence_interaction_id=interaction.id,
+                classifier_version=REFERENCE_BINDING_CLASSIFIER_VERSION,
+            )
+        except Exception as exc:
+            logger.warning(
+                "ClassifyReferenceResolution background task failed for "
+                "interaction %s: %s",
+                interaction.id,
+                exc,
+                exc_info=True,
+            )
+
+    async def _build_reference_binding_hint(self, learner_id: UUID, message_text: str) -> str:
+        """AssessAndBranch's own read of reference_bindings.py, computed
+        against `turn_text` directly (always the learner's own raw
+        words at this call site -- see `_handle_disambiguation_turn`'s
+        3b path, the only one that calls AssessAndBranch at all).
+        `FinalAnswer` computes its own copy separately, inside
+        `_run_final_answer`, against `embed_text` -- not reused from
+        here, since `_run_final_answer` also serves the click-resolution
+        path, where the correct text to match against is
+        `originating_question`, never the option's own generated copy.
+        A read failure degrades to no hint, never a failed turn."""
+        if self._reference_bindings is None or not self._reference_binding_config.enabled:
+            return ""
+        try:
+            block, _ = await _reference_bindings.assemble_reference_bindings_block(
+                self._reference_bindings, learner_id, message_text,
+                config=self._reference_binding_config,
+            )
+            return block
+        except Exception as exc:
+            logger.warning(
+                "Reference binding hint lookup failed for learner %s: %s",
+                learner_id,
+                exc,
+                exc_info=True,
+            )
+            return ""
 
     async def _run_abstraction(
         self, interaction: Interaction, session_id: UUID, turn_index: int
@@ -682,17 +786,19 @@ class SessionLoop:
                 originating_question = await self._get_turn_text(
                     session_id, branch.turn_index
                 )
-                message, teach_failed, history_source_ids = await self._finish_turn_with_fact(
-                    session_id, turn_index, turn_text, turn_id, learner_id,
-                    branch_context=branch.statement,
-                    memory_context=None,
-                    recent_history=recent_history,
-                    fact_type=LearnerFactType.BRANCH_RESOLUTION,
-                    branch_statements=[b.statement for b in sibling_branches],
-                    node_call_counts=node_call_counts,
-                    warnings=warnings,
-                    question_author=QuestionAuthor.SYSTEM_OPTION,
-                    originating_question=originating_question,
+                message, teach_failed, history_source_ids, reference_binding_ids = (
+                    await self._finish_turn_with_fact(
+                        session_id, turn_index, turn_text, turn_id, learner_id,
+                        branch_context=branch.statement,
+                        memory_context=None,
+                        recent_history=recent_history,
+                        fact_type=LearnerFactType.BRANCH_RESOLUTION,
+                        branch_statements=[b.statement for b in sibling_branches],
+                        node_call_counts=node_call_counts,
+                        warnings=warnings,
+                        question_author=QuestionAuthor.SYSTEM_OPTION,
+                        originating_question=originating_question,
+                    )
                 )
                 if self._interactions_enabled:
                     await self._record_interaction(
@@ -704,12 +810,14 @@ class SessionLoop:
                         originating_question=originating_question,
                         did_branch=False,
                         response_text=None if teach_failed else message,
+                        recent_history=recent_history,
                     )
                     await self._interaction_options.mark_selected(option.id)
                 await self._record_disambiguation_diagnostics(
                     session_id, turn_index, node_call_counts, warnings,
                     teach_failed, start, retry_count_start,
                     history_source_ids=history_source_ids,
+                    reference_binding_ids=reference_binding_ids,
                 )
                 return message
 
@@ -788,15 +896,17 @@ class SessionLoop:
             # AssessAndBranch never runs this turn -- no DisambiguationTurn
             # row is created for it either (there is nothing it would
             # record beyond what turn_diagnostics already makes visible).
-            message, teach_failed, history_source_ids = await self._finish_turn_with_fact(
-                session_id, turn_index, turn_text, turn_id, learner_id,
-                branch_context=None,
-                memory_context=memory_context,
-                recent_history=recent_history,
-                fact_type=LearnerFactType.DIRECT_ANSWER,
-                branch_statements=None,
-                node_call_counts=node_call_counts,
-                warnings=warnings,
+            message, teach_failed, history_source_ids, reference_binding_ids = (
+                await self._finish_turn_with_fact(
+                    session_id, turn_index, turn_text, turn_id, learner_id,
+                    branch_context=None,
+                    memory_context=memory_context,
+                    recent_history=recent_history,
+                    fact_type=LearnerFactType.DIRECT_ANSWER,
+                    branch_statements=None,
+                    node_call_counts=node_call_counts,
+                    warnings=warnings,
+                )
             )
             if self._interactions_enabled:
                 await self._record_interaction(
@@ -808,6 +918,7 @@ class SessionLoop:
                     originating_question=None,
                     did_branch=False,
                     response_text=None if teach_failed else message,
+                    recent_history=recent_history,
                 )
             await self._record_disambiguation_diagnostics(
                 session_id, turn_index, node_call_counts, warnings,
@@ -817,10 +928,12 @@ class SessionLoop:
                 branching_skipped_by_memory=True,
                 matched_fact_id=matched_fact_id,
                 history_source_ids=history_source_ids,
+                reference_binding_ids=reference_binding_ids,
             )
             return message
 
         thinking_style_hint = await self._build_thinking_style_hint(learner_id)
+        reference_binding_hint = await self._build_reference_binding_hint(learner_id, turn_text)
         assessment = await self._call_node_or_warn(
             self.assess_and_branch,
             session_id,
@@ -832,6 +945,7 @@ class SessionLoop:
             recent_history=recent_history,
             typed_past_note=typed_past_note,
             thinking_style_hint=thinking_style_hint,
+            reference_binding_hint=reference_binding_hint,
         )
         node_call_counts["AssessAndBranch"] = self.assess_and_branch.last_call_count
 
@@ -841,15 +955,17 @@ class SessionLoop:
             await self._disambiguation.create_turn(
                 session_id, turn_index, needs_branches=False, turn_had_direct_answer=True
             )
-            message, teach_failed, history_source_ids = await self._finish_turn_with_fact(
-                session_id, turn_index, turn_text, turn_id, learner_id,
-                branch_context=None,
-                memory_context=None,
-                recent_history=recent_history,
-                fact_type=LearnerFactType.DIRECT_ANSWER,
-                branch_statements=None,
-                node_call_counts=node_call_counts,
-                warnings=warnings,
+            message, teach_failed, history_source_ids, reference_binding_ids = (
+                await self._finish_turn_with_fact(
+                    session_id, turn_index, turn_text, turn_id, learner_id,
+                    branch_context=None,
+                    memory_context=None,
+                    recent_history=recent_history,
+                    fact_type=LearnerFactType.DIRECT_ANSWER,
+                    branch_statements=None,
+                    node_call_counts=node_call_counts,
+                    warnings=warnings,
+                )
             )
             if self._interactions_enabled:
                 await self._record_interaction(
@@ -861,6 +977,7 @@ class SessionLoop:
                     originating_question=None,
                     did_branch=False,
                     response_text=None if teach_failed else message,
+                    recent_history=recent_history,
                 )
             await self._record_disambiguation_diagnostics(
                 session_id, turn_index, node_call_counts, warnings,
@@ -868,6 +985,7 @@ class SessionLoop:
                 memory_match_found=memory_match_found,
                 matched_fact_id=matched_fact_id,
                 history_source_ids=history_source_ids,
+                reference_binding_ids=reference_binding_ids,
             )
             return message
 
@@ -907,15 +1025,17 @@ class SessionLoop:
                 "ambiguous but no usable options were generated -- "
                 "answering directly instead of showing nothing"
             )
-            message, teach_failed, history_source_ids = await self._finish_turn_with_fact(
-                session_id, turn_index, turn_text, turn_id, learner_id,
-                branch_context=None,
-                memory_context=None,
-                recent_history=recent_history,
-                fact_type=LearnerFactType.DIRECT_ANSWER,
-                branch_statements=None,
-                node_call_counts=node_call_counts,
-                warnings=warnings,
+            message, teach_failed, history_source_ids, reference_binding_ids = (
+                await self._finish_turn_with_fact(
+                    session_id, turn_index, turn_text, turn_id, learner_id,
+                    branch_context=None,
+                    memory_context=None,
+                    recent_history=recent_history,
+                    fact_type=LearnerFactType.DIRECT_ANSWER,
+                    branch_statements=None,
+                    node_call_counts=node_call_counts,
+                    warnings=warnings,
+                )
             )
             if self._interactions_enabled:
                 # did_branch=True: AssessAndBranch DID judge ambiguity
@@ -934,6 +1054,7 @@ class SessionLoop:
                     originating_question=None,
                     did_branch=True,
                     response_text=None if teach_failed else message,
+                    recent_history=recent_history,
                 )
             await self._record_disambiguation_diagnostics(
                 session_id, turn_index, node_call_counts, warnings,
@@ -941,6 +1062,7 @@ class SessionLoop:
                 memory_match_found=memory_match_found,
                 matched_fact_id=matched_fact_id,
                 history_source_ids=history_source_ids,
+                reference_binding_ids=reference_binding_ids,
             )
             return message
 
@@ -987,6 +1109,7 @@ class SessionLoop:
                 originating_question=None,
                 did_branch=True,
                 response_text=None,
+                recent_history=recent_history,
             )
             interaction_options = [
                 InteractionOption(
@@ -1028,7 +1151,7 @@ class SessionLoop:
         warnings: list[str],
         question_author: QuestionAuthor = QuestionAuthor.LEARNER,
         originating_question: str | None = None,
-    ) -> tuple[str, bool, list[UUID]]:
+    ) -> tuple[str, bool, list[UUID], list[UUID]]:
         """Every path through `_handle_disambiguation_turn` that
         actually resolves something (a click, a memory-confirmed
         shortcut, an unambiguous direct answer, or the empty-options
@@ -1042,11 +1165,13 @@ class SessionLoop:
         never the student's words -- the history-block retrieval query
         (see `_run_final_answer`) must embed `originating_question`
         instead, for exactly the reason storage does."""
-        message, teach_failed, history_source_ids = await self._run_final_answer(
-            session_id, turn_index, turn_text, branch_context, recent_history,
-            node_call_counts, warnings, learner_id=learner_id,
-            question_author=question_author, originating_question=originating_question,
-            memory_context=memory_context,
+        message, teach_failed, history_source_ids, reference_binding_ids = (
+            await self._run_final_answer(
+                session_id, turn_index, turn_text, branch_context, recent_history,
+                node_call_counts, warnings, learner_id=learner_id,
+                question_author=question_author, originating_question=originating_question,
+                memory_context=memory_context,
+            )
         )
         if not teach_failed and self._memory_enabled:
             await self._call_node_or_warn(
@@ -1066,7 +1191,7 @@ class SessionLoop:
                 branch_statements=branch_statements,
             )
             node_call_counts["WriteLearnerFact"] = self.write_learner_fact.last_call_count
-        return message, teach_failed, history_source_ids
+        return message, teach_failed, history_source_ids, reference_binding_ids
 
     async def _run_final_answer(
         self,
@@ -1081,7 +1206,7 @@ class SessionLoop:
         question_author: QuestionAuthor = QuestionAuthor.LEARNER,
         originating_question: str | None = None,
         memory_context: str | None = None,
-    ) -> tuple[str, bool, list[UUID]]:
+    ) -> tuple[str, bool, list[UUID], list[UUID]]:
         """FinalAnswer has no fallback -- its output IS the turn. A
         failure here degrades to a fixed in-band message and is the
         caller's concern, not this method's.
@@ -1098,6 +1223,18 @@ class SessionLoop:
         returns). A failure here degrades to no history block, not a
         failed turn -- retrieval quality is not FinalAnswer's contract.
         """
+        # Computed unconditionally (pure, no I/O): both the history
+        # block below AND reference_bindings.py's own read need the
+        # same "the student's own words, never a system-authored
+        # option's copy" text -- see Interaction's own docstring for
+        # why originating_question is the right choice on a
+        # click-resolution turn.
+        embed_text = (
+            originating_question
+            if question_author is QuestionAuthor.SYSTEM_OPTION
+            else turn_text
+        )
+
         learner_history_block = ""
         history_source_ids: list[UUID] = []
         if (
@@ -1107,11 +1244,6 @@ class SessionLoop:
             and self._history_block_config.enabled
         ):
             try:
-                embed_text = (
-                    originating_question
-                    if question_author is QuestionAuthor.SYSTEM_OPTION
-                    else turn_text
-                )
                 query_vec = await self._embedding_client.embed(
                     embed_text, task_type=_embeddings.TASK_QUERY
                 )
@@ -1131,6 +1263,30 @@ class SessionLoop:
                     exc_info=True,
                 )
                 learner_history_block, history_source_ids = "", []
+
+        # reference_bindings.py's read side: independent of the history
+        # block's own config flag (a separate feature, gated on its own
+        # store/config) -- exact-match, no embedding, no LLM call.
+        reference_bindings_block = ""
+        reference_binding_ids: list[UUID] = []
+        if self._reference_bindings is not None and self._reference_binding_config.enabled:
+            try:
+                reference_bindings_block, reference_binding_ids = (
+                    await _reference_bindings.assemble_reference_bindings_block(
+                        self._reference_bindings, learner_id, embed_text,
+                        config=self._reference_binding_config,
+                    )
+                )
+            except Exception as exc:
+                warnings.append(f"reference binding lookup failed: {exc}")
+                logger.warning(
+                    "Reference binding lookup failed on turn %d for session %s: %s",
+                    turn_index,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+                reference_bindings_block, reference_binding_ids = "", []
 
         # Fix B's read side: the single most recent explicitly-stated
         # preference for this learner, rendered as a requirement on the
@@ -1166,9 +1322,10 @@ class SessionLoop:
                 memory_context=memory_context,
                 learner_history_block=learner_history_block,
                 structural_requirement=structural_requirement,
+                reference_bindings_block=reference_bindings_block,
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
-            return message, False, history_source_ids
+            return message, False, history_source_ids, reference_binding_ids
         except Exception as exc:
             warnings.append(f"FinalAnswer failed: {exc}")
             logger.warning(
@@ -1179,7 +1336,7 @@ class SessionLoop:
                 exc_info=True,
             )
             node_call_counts["FinalAnswer"] = 0
-            return _TEACH_FAILURE_MESSAGE, True, history_source_ids
+            return _TEACH_FAILURE_MESSAGE, True, history_source_ids, reference_binding_ids
 
     async def _build_thinking_style_hint(self, learner_id: UUID) -> str:
         """Step 8's "only once promoted does it get fed into future
@@ -1322,10 +1479,12 @@ class SessionLoop:
         branching_skipped_by_memory: bool = False,
         matched_fact_id: UUID | None = None,
         history_source_ids: list[UUID] | None = None,
+        reference_binding_ids: list[UUID] | None = None,
     ) -> None:
         if self._diagnostics is None:
             return
         history_source_ids = history_source_ids or []
+        reference_binding_ids = reference_binding_ids or []
         total_call_count = sum(node_call_counts.values())
         guardrail_fired = total_call_count > MAX_CALLS_PER_TURN
         if guardrail_fired:
@@ -1362,6 +1521,7 @@ class SessionLoop:
                 history_block_template_version=(
                     _history_block.TEMPLATE_VERSION if history_source_ids else None
                 ),
+                reference_bindings_injected=[str(i) for i in reference_binding_ids],
             )
         )
 
