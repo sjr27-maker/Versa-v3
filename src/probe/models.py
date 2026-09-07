@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
 
+from probe.domain_config import Domain
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -537,6 +539,12 @@ class Interaction(BaseModel):
     question_embedding: list[float]
     abstract_form: str | None = None
     abstract_embedding: list[float] | None = None
+    # The domain switch's one storage touch (domain_config.py, migration
+    # 040) -- set once per interaction from whichever DomainConfig the
+    # SessionLoop that wrote it was constructed with, never mixed within
+    # one row. Default EDUCATION: every interaction ever written before
+    # this field existed was, in fact, education-domain.
+    domain: Domain = Domain.EDUCATION
     created_at: datetime = Field(default_factory=_utcnow)
 
 

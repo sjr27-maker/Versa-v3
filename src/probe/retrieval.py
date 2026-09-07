@@ -81,6 +81,7 @@ from uuid import UUID
 import asyncpg
 from pydantic import BaseModel
 
+from probe.domain_config import Domain
 from probe.models import (
     EntryState,
     HelpLevel,
@@ -106,6 +107,13 @@ class RetrievalContext(BaseModel):
     min_recent_similar_count: int | None = None
     max_age_days: float | None = None
     exclude_interaction_id: UUID | None = None
+    # The domain switch's storage/retrieval exception (domain_config.py):
+    # personal-scope retrieval must never surface a different domain's
+    # interactions for the same learner_id. None means "no domain
+    # filter" -- population scope has no domain column at all (see
+    # `_population_recall`'s own docstring for that gap, left
+    # unaddressed and reported rather than silently patched).
+    domain: Domain | None = None
 
 
 @dataclass
@@ -155,6 +163,8 @@ def stage1_filter(learner_id: UUID | None, ctx: RetrievalContext) -> _WhereFragm
         )
     if ctx.exclude_interaction_id is not None:
         clauses.append(f"i.id != {_next_param(ctx.exclude_interaction_id)}")
+    if ctx.domain is not None:
+        clauses.append(f"i.domain = {_next_param(ctx.domain.value)}")
 
     sql = " AND ".join(clauses) if clauses else "TRUE"
     return _WhereFragment(sql=sql, params=params)
@@ -371,7 +381,17 @@ async def _population_recall(
     stage2_recall's SQL -- a different table, a different readability
     gate (distinct_learner_count/max_per_learner_share), and no
     learner_id predicate at all (a pattern is not attributed to one
-    learner)."""
+    learner).
+
+    NOT domain-filtered: `population_patterns` (migration 034) has no
+    `domain` column, and adding one would mean threading domain through
+    the abstraction/aggregation pipeline (interaction_abstracts ->
+    `probe aggregate-patterns`) as well as this table -- out of scope
+    for what this feature's own spec asked for ("add a domain column
+    to interactions"). This is a genuine, unaddressed gap: a population
+    pattern aggregated from a mix of education- and general-domain
+    abstracts could still surface here regardless of which domain is
+    running. Reported as a known leak, not silently fixed."""
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(f"SET LOCAL hnsw.ef_search = {int(config.hnsw_ef_search)}")
         rows = await conn.fetch(

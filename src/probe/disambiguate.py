@@ -112,6 +112,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from probe.domain_config import DomainConfig
 from probe.llm import LLMClient
 from probe.models import (
     DisambiguationAssessment,
@@ -174,7 +175,9 @@ def _assess_prompt(
     rejected_reason: str = "",
     thinking_style_hint: str = "",
     reference_binding_hint: str = "",
+    domain: DomainConfig | None = None,
 ) -> str:
+    d = domain or DomainConfig.education()
     history_block = (
         f"\nRecent conversation, for context:\n{recent_history}\n" if recent_history else ""
     )
@@ -211,17 +214,18 @@ def _assess_prompt(
         f"{thinking_style_block}"
         f"{reference_binding_block}"
         f"{typed_past_note}"
-        f"\nStudent's message: {message}\n\n"
-        "Is this message genuinely ambiguous or under-specified -- could "
-        "it reasonably mean more than one distinct thing the student "
-        "wants? A concrete question, a named problem, or an unambiguous "
+        f"\n{d.actor_noun.capitalize()}'s message: {message}\n\n"
+        f"Is this message genuinely ambiguous or under-specified "
+        f"{d.ambiguity_scope_phrase} -- could it reasonably mean more "
+        f"than one distinct thing the {d.actor_noun} wants? "
+        f"{d.concrete_noun_phrase}, or an unambiguous "
         "follow-up is NOT ambiguous, even if it is terse -- only flag it "
         "when there is a real fork in what they might mean.\n\n"
         f"If it is NOT ambiguous, return needs_branches=false and an "
         f"empty branches list. If it IS ambiguous, propose between "
         f"{_MIN_BRANCHES} and {_MAX_BRANCHES} distinct, plausible "
-        "readings of what the student means, wants, or is asking -- "
-        "genuinely different bets, not rephrasings of one idea.\n"
+        f"readings of what the {d.actor_noun} means, wants, or is asking "
+        "-- genuinely different bets, not rephrasings of one idea.\n"
         f"{correction}"
         'Respond with JSON: {"needs_branches": true or false, "branches": '
         '[{"statement": "..."}, ...]}'
@@ -275,8 +279,9 @@ class AssessAndBranch:
     GenerateOptions.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, domain_config: DomainConfig | None = None) -> None:
         self._llm = llm
+        self._domain = domain_config or DomainConfig.education()
         # Read by SessionLoop into the MAX_CALLS_PER_TURN accounting.
         self.last_call_count: int = 0
 
@@ -294,7 +299,7 @@ class AssessAndBranch:
             raw = await self._llm.complete(
                 _assess_prompt(
                     message, recent_history, typed_past_note, rejected_reason,
-                    thinking_style_hint, reference_binding_hint,
+                    thinking_style_hint, reference_binding_hint, self._domain,
                 )
             )
             self.last_call_count += 1
@@ -314,7 +319,12 @@ class AssessAndBranch:
         return DisambiguationAssessment(needs_branches=False, branch_statements=[])
 
 
-def _options_prompt(candidates: list[DisambiguationBranch], rejected_reason: str = "") -> str:
+def _options_prompt(
+    candidates: list[DisambiguationBranch],
+    rejected_reason: str = "",
+    domain: DomainConfig | None = None,
+) -> str:
+    d = domain or DomainConfig.education()
     listing = "\n".join(f"- id={b.id}: {b.statement}" for b in candidates)
     hi = min(_MAX_BRANCHES, len(candidates))
     correction = ""
@@ -326,20 +336,19 @@ def _options_prompt(candidates: list[DisambiguationBranch], rejected_reason: str
         )
     return (
         "DISAMBIGUATE:OPTIONS\n"
-        f"The student's last message could plausibly mean any of these "
-        f"distinct things:\n{listing}\n\n"
+        f"The {d.actor_noun}'s last message could plausibly mean any of "
+        f"these distinct things:\n{listing}\n\n"
         f"Propose exactly one clickable option per reading -- between "
         f"{_MIN_BRANCHES} and {hi} options total. Each option must map "
-        "to exactly ONE of the branch ids above and must be phrased as "
-        "the natural next thing a tutor would say to confirm that "
-        "specific reading -- a genuine continuation of the "
-        "conversation, not a survey question about the student and not "
-        'a bare restatement like "did you mean X."\n\n'
+        f"to exactly ONE of the branch ids above and must be phrased as "
+        f"{d.options_style_phrase} -- a genuine continuation of the "
+        f"conversation, not a survey question about the {d.actor_noun} and "
+        'not a bare restatement like "did you mean X."\n\n'
         "Hard rules:\n"
         "- Exactly one branch per option, exactly one claim per "
         "option -- no bundling two readings into one button.\n"
-        "- Write it as a real question or statement about the subject, "
-        "not a menu item or a label.\n"
+        "- Write it as a real question or statement, not a menu item "
+        "or a label.\n"
         f"{correction}"
         'Respond with JSON: [{"branch_id": "<id>", "text": "..."}, ...]'
     )
@@ -401,8 +410,9 @@ class DisambiguationOptions:
     name.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, domain_config: DomainConfig | None = None) -> None:
         self._llm = llm
+        self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
     async def run(self, branches: list[DisambiguationBranch]) -> list[OptionProposal]:
@@ -412,7 +422,9 @@ class DisambiguationOptions:
         valid_ids = {b.id for b in branches}
         rejected_reason = ""
         for _ in range(_MAX_OPTIONS_ATTEMPTS):
-            raw = await self._llm.complete(_options_prompt(branches, rejected_reason))
+            raw = await self._llm.complete(
+                _options_prompt(branches, rejected_reason, self._domain)
+            )
             self.last_call_count += 1
             proposals = _parse_options_response(raw, valid_ids)
             if proposals is not None:
@@ -505,10 +517,19 @@ class FinalAnswer:
 
     Best tier: this is what the student actually sees, same tier as
     Teach/BaselineTeach.
+
+    `domain_config` (domain_config.py) switches the register between
+    tutor/student (education, the default) and assistant/person
+    (general) -- the opening role line and the closing "never end by
+    asking..." line, plus every "student"/"person" noun in the blocks
+    below. Nothing else about this method's structure changes: the
+    same five kinds of context, in the same order, regardless of
+    domain.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, domain_config: DomainConfig | None = None) -> None:
         self._llm = llm
+        self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
     async def run(
@@ -543,17 +564,18 @@ class FinalAnswer:
         constraint this feature's own spec makes ("above the history
         block")."""
         self.last_call_count = 0
+        d = self._domain
         context_block = ""
         if branch_context:
             context_block = (
-                "\nThe student's earlier message was ambiguous; they "
+                f"\nThe {d.actor_noun}'s earlier message was ambiguous; they "
                 f"confirmed they meant this specific reading: {branch_context!r}. "
                 "Answer accordingly -- do not re-ask which they meant.\n"
             )
         memory_block = ""
         if memory_context:
             memory_block = (
-                "\nThis student previously established the following, "
+                f"\nThis {d.actor_noun} previously established the following, "
                 "and it directly applies to their current message -- "
                 f"use it, do not ask them to re-establish it: {memory_context}\n"
             )
@@ -562,28 +584,26 @@ class FinalAnswer:
             recent_history_block = (
                 "\nRecent conversation, for continuity only (do not "
                 "repeat this back or restate it — use it to correctly "
-                "resolve any reference in the student's message below, "
+                f"resolve any reference in the {d.actor_noun}'s message below, "
                 "e.g. \"that\", \"it\", or \"the one you mentioned\"):\n"
                 f"{recent_history}\n"
             )
         prompt = (
             "FINAL:ANSWER\n"
-            "You are a tutor having a conversation with a student. "
-            "Respond directly and helpfully to their latest message.\n"
+            f"{d.final_answer_role_line}"
             f"{structural_requirement}"
             f"{context_block}"
             f"{memory_block}"
             f"{reference_bindings_block}"
             f"{learner_history_block}"
             f"{recent_history_block}"
-            f"\nStudent's message: {student_message}\n\n"
+            f"\n{d.actor_noun.capitalize()}'s message: {student_message}\n\n"
             "Lead with the direct answer or key idea -- do not open "
             "with setup or a restatement of the question. Do not "
             "partition the response into steps or add headers/numbered "
             "lists unless the content genuinely requires that "
             "structure.\n"
-            "Never end by asking how the student feels, what they "
-            "prefer, or what kind of learner they are.\n"
+            f"{d.final_answer_closing_line}"
             "Respond with plain prose only -- never wrap your answer in "
             "JSON or any other structured/markup format."
         )

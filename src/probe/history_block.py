@@ -57,7 +57,8 @@ from uuid import UUID
 import asyncpg
 from pydantic import BaseModel
 
-from probe.retrieval import retrieve
+from probe.domain_config import Domain
+from probe.retrieval import RetrievalContext, retrieve
 from probe.retrieval_config import RetrievalConfig
 
 TEMPLATE_VERSION = "history-block-v1"
@@ -238,6 +239,7 @@ async def assemble_history_block(
     query_vec: list[float],
     retrieval_config: RetrievalConfig | None = None,
     history_config: HistoryBlockConfig | None = None,
+    domain: Domain | None = None,
 ) -> tuple[str, list[UUID]]:
     """The I/O half: one `retrieve()` call (unchanged retrieval ranking
     -- see this module's own docstring) plus one batch query for
@@ -245,6 +247,12 @@ async def assemble_history_block(
     `RetrievalCandidate` itself carries. Returns the rendered block
     (possibly "") and the source ids it was built from, for the caller
     to log (see loop.py's `_finish_turn_with_fact`).
+
+    `domain`, when given, is the domain switch's one retrieval touch
+    (domain_config.py): restricts personal-scope recall to this
+    learner's SAME-domain interactions only, so an education run and a
+    general run for the same learner_id never blend into one history
+    block. None preserves the old, unfiltered behavior.
     """
     cfg = history_config or HistoryBlockConfig()
     if not cfg.enabled:
@@ -266,7 +274,10 @@ async def assemble_history_block(
         }
     )
 
-    result = await retrieve(pool, learner_id, query_vec, config=overfetch_config)
+    result = await retrieve(
+        pool, learner_id, query_vec,
+        ctx=RetrievalContext(domain=domain), config=overfetch_config,
+    )
     personal = [c for c in result.candidates if c.scope == "personal"]
     population = [c for c in result.candidates if c.scope == "population"][
         : base_retrieval_config.quotas.population

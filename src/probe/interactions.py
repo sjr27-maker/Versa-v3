@@ -48,6 +48,7 @@ from uuid import UUID, uuid4
 import asyncpg
 from pydantic import BaseModel
 
+from probe.domain_config import Domain
 from probe.embeddings import TASK_QUERY, EmbeddingClient
 from probe.models import (
     EntryState,
@@ -127,10 +128,10 @@ class InteractionStore:
                     prev_question_sim, last_similar_turn_gap,
                     prior_turn_outcome, help_level, elapsed_ms,
                     question_embedding, abstract_form, abstract_embedding,
-                    created_at
+                    domain, created_at
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17, $18, $19, $20
+                    $14, $15, $16, $17, $18, $19, $20, $21
                 )
                 """,
                 interaction.id,
@@ -152,6 +153,7 @@ class InteractionStore:
                 interaction.question_embedding,
                 interaction.abstract_form,
                 interaction.abstract_embedding,
+                interaction.domain.value,
                 interaction.created_at,
             )
         return interaction
@@ -202,7 +204,7 @@ class InteractionStore:
         return bool(exists)
 
     async def get_recent_for_learner(
-        self, learner_id: UUID, limit: int
+        self, learner_id: UUID, limit: int, domain: Domain | None = None
     ) -> list[Interaction]:
         """This learner's last `limit` interactions, most-recent-first,
         ANY session -- the single window recent_similar_count/
@@ -211,18 +213,38 @@ class InteractionStore:
         docstring). `created_at DESC, id DESC` rather than `created_at`
         alone: a tiebreak for interactions written in the same instant,
         same reasoning as node_calls.seq elsewhere in this codebase,
-        without needing a dedicated seq column on a table this hot."""
+        without needing a dedicated seq column on a table this hot.
+
+        `domain`, when given, restricts the window to that domain only
+        -- the domain switch's storage/retrieval exception
+        (domain_config.py): entry_state/recent_similar_count/
+        prev_question_sim/last_similar_turn_gap must never be computed
+        against a different domain's history for the same learner_id.
+        """
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT * FROM interactions
-                WHERE learner_id = $1
-                ORDER BY created_at DESC, id DESC
-                LIMIT $2
-                """,
-                learner_id,
-                limit,
-            )
+            if domain is None:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM interactions
+                    WHERE learner_id = $1
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $2
+                    """,
+                    learner_id,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM interactions
+                    WHERE learner_id = $1 AND domain = $2
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT $3
+                    """,
+                    learner_id,
+                    domain.value,
+                    limit,
+                )
         return [self._row_to_interaction(r) for r in rows]
 
     async def get_last_in_session(self, session_id: UUID) -> Interaction | None:
@@ -733,6 +755,7 @@ class InteractionRecorder:
         response_text: str | None,
         help_level: HelpLevel = HelpLevel.NONE,
         elapsed_ms: int | None = None,
+        domain: Domain = Domain.EDUCATION,
     ) -> Interaction:
         self.last_classification_target = None
         embed_text = (
@@ -751,8 +774,12 @@ class InteractionRecorder:
         previous_in_session = await self._interactions.get_previous_in_session(
             session_id, turn_number
         )
+        # Domain-filtered: the domain switch's storage/retrieval
+        # exception (see get_recent_for_learner's own docstring) --
+        # entry_state must never be computed against a different
+        # domain's history for the same learner_id.
         recent = await self._interactions.get_recent_for_learner(
-            learner_id, self._config.similarity_window
+            learner_id, self._config.similarity_window, domain=domain
         )
         recent_similar_count, prev_question_sim, last_similar_turn_gap = _similarity_stats(
             embedding, recent, self._same_subject_threshold
@@ -783,6 +810,7 @@ class InteractionRecorder:
             help_level=help_level,
             elapsed_ms=elapsed_ms,
             question_embedding=embedding,
+            domain=domain,
         )
         created = await self._interactions.create(interaction)
 

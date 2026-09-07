@@ -30,6 +30,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from probe.domain_config import DomainConfig
 from probe.llm import LLMClient
 from probe.models import (
     AbstractionResult,
@@ -67,27 +68,29 @@ def _classify_prompt(
     prior_selected_option: str | None,
     prior_response: str,
     next_question: str,
+    domain: DomainConfig | None = None,
 ) -> str:
+    d = domain or DomainConfig.education()
     option_block = (
-        f'\nThe student resolved that question by selecting this option: '
+        f"\nThe {d.actor_noun} resolved that by selecting this option: "
         f'"{prior_selected_option}"\n'
         if prior_selected_option
         else ""
     )
     return (
         "CLASSIFY:TURN_OUTCOME\n"
-        f'A student previously asked: "{prior_question}"\n'
+        f'A {d.actor_noun} previously sent: "{prior_question}"\n'
         f"{option_block}"
-        f'A tutor responded: "{prior_response}"\n'
-        f'The student\'s VERY NEXT question was: "{next_question}"\n\n'
-        "Judge what that next question reveals about whether the "
-        "tutor's response actually landed:\n"
-        "- matched: the next question builds naturally on the response, "
-        "confirming it was understood and accepted as relevant\n"
-        "- contradicted_intent: the next question reveals the response "
-        "answered the wrong thing, or the student's actual need was "
-        "different from what the tutor assumed\n"
-        "- moved_on: the student has moved to a genuinely different "
+        f'A {d.assistant_noun} responded: "{prior_response}"\n'
+        f"The {d.actor_noun}'s VERY NEXT {d.next_item_noun} was: "
+        f'"{next_question}"\n\n'
+        f"Judge {d.outcome_judgment_phrase}:\n"
+        f"- matched: the next {d.next_item_noun} builds naturally on the "
+        "response, confirming it was understood and accepted as relevant\n"
+        f"- contradicted_intent: the next {d.next_item_noun} reveals the "
+        f"response answered the wrong thing, or the {d.actor_noun}'s actual "
+        f"need was different from what the {d.assistant_noun} assumed\n"
+        f"- moved_on: the {d.actor_noun} has moved to a genuinely different "
         "topic, whether satisfied or not -- do not try to guess which; "
         "that distinction is not answerable from this window alone\n\n"
         "If the evidence is genuinely ambiguous, set abstains=true rather "
@@ -108,9 +111,15 @@ class ClassifyTurnOutcome:
     `InteractionRecorder.record`).
     """
 
-    def __init__(self, llm: LLMClient, config: ClassifierConfig | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        config: ClassifierConfig | None = None,
+        domain_config: DomainConfig | None = None,
+    ) -> None:
         self._llm = llm
         self._config = config or ClassifierConfig()
+        self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
     async def run(
@@ -123,7 +132,8 @@ class ClassifyTurnOutcome:
         self.last_call_count = 0
         raw = await self._llm.complete(
             _classify_prompt(
-                prior_question, prior_selected_option, prior_response, next_question
+                prior_question, prior_selected_option, prior_response, next_question,
+                self._domain,
             )
         )
         self.last_call_count = 1
@@ -222,16 +232,18 @@ _LABEL_DESCRIPTIONS = (
 )
 
 
-def _stated_preference_prompt(question_text: str) -> str:
+def _stated_preference_prompt(question_text: str, domain: DomainConfig | None = None) -> str:
+    d = domain or DomainConfig.education()
     return (
         "CLASSIFY:STATED_PREFERENCE\n"
-        f'A student sent this message to a tutor: "{question_text}"\n\n'
-        "Did the student EXPLICITLY state a standing preference about "
-        "HOW they want to be taught in general -- not what they want "
-        "explained this turn, but an instruction about teaching style, "
-        "format, or ordering that should carry forward to future turns "
-        'too (e.g. "always show me a number example before the formal '
-        'rule", "keep your answers short", "use real-world examples")?\n\n'
+        f'A {d.actor_noun} sent this message to a {d.assistant_noun}: '
+        f'"{question_text}"\n\n'
+        f"Did the {d.actor_noun} EXPLICITLY state a standing preference "
+        f"about HOW they want to be {d.stated_preference_scope_phrase} -- "
+        "not what they want explained this turn, but an instruction "
+        f"about {d.stated_preference_style_phrase}, format, or ordering "
+        f"that should carry forward to future turns too "
+        f"({d.stated_preference_examples})?\n\n"
         "Only count an EXPLICIT statement. Do NOT count: a one-off "
         "request specific to this question alone, a click on an "
         "option, or a pattern you might infer from repeated behavior -- "
@@ -240,9 +252,9 @@ def _stated_preference_prompt(question_text: str) -> str:
         "If a preference was stated, classify it into EXACTLY ONE of "
         f"these labels:\n{_LABEL_DESCRIPTIONS}\n\n"
         'Respond with JSON: {"has_preference": true/false, '
-        '"stated_preference": "<the preference in the student\'s own '
-        'terms, or null>", "label": "<one of the labels above, or null '
-        'if has_preference is false>"}'
+        f'"stated_preference": "<the preference in the {d.actor_noun}\'s '
+        'own terms, or null>", "label": "<one of the labels above, or '
+        'null if has_preference is false>"}'
     )
 
 
@@ -264,13 +276,16 @@ class ClassifyStatedPreference:
     text is still real signal even when the model's own categorization
     attempt failed."""
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, domain_config: DomainConfig | None = None) -> None:
         self._llm = llm
+        self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
     async def run(self, question_text: str) -> StatedPreferenceClassification:
         self.last_call_count = 0
-        raw = await self._llm.complete(_stated_preference_prompt(question_text))
+        raw = await self._llm.complete(
+            _stated_preference_prompt(question_text, self._domain)
+        )
         self.last_call_count = 1
         try:
             data = json.loads(raw)
@@ -399,11 +414,13 @@ def _reference_resolution_prompt(
     turn_question: str,
     turn_response: str | None,
     originating_question: str | None = None,
+    domain: DomainConfig | None = None,
 ) -> str:
+    d = domain or DomainConfig.education()
     history_block = f"\nRecent conversation:\n{recent_history}\n" if recent_history else ""
     # A click-resolution turn carries the strongest possible signal:
     # `originating_question` is the earlier ambiguous message verbatim,
-    # `turn_question` is the specific reading the student confirmed --
+    # `turn_question` is the specific reading the actor confirmed --
     # framed as a resolution event, not just another message, whenever
     # it's available.
     if originating_question:
@@ -412,9 +429,11 @@ def _reference_resolution_prompt(
             f'("{originating_question}") by confirming: "{turn_question}"\n'
         )
     else:
-        resolution_block = f'\nThe student\'s message this turn: "{turn_question}"\n'
+        resolution_block = f"\nThe {d.actor_noun}'s message this turn: \"{turn_question}\"\n"
     response_block = (
-        f'\nThe tutor then responded: "{turn_response}"\n' if turn_response else ""
+        f'\nThe {d.assistant_noun} then responded: "{turn_response}"\n'
+        if turn_response
+        else ""
     )
     return (
         "CLASSIFY:REFERENCE_RESOLUTION\n"
@@ -422,17 +441,17 @@ def _reference_resolution_prompt(
         f"{resolution_block}"
         f"{response_block}"
         "\nDid this exchange settle the meaning of a genuinely AMBIGUOUS, "
-        'RECURRING reference the student uses -- a short standing '
+        f'RECURRING reference the {d.actor_noun} uses -- a short standing '
         'phrase like "the usual", "my project", "that thing we did" -- '
         "whose meaning needed the broader conversation, a clarification, "
-        "or a chosen option to pin down, and which the student is "
+        f"or a chosen option to pin down, and which the {d.actor_noun} is "
         "likely to reuse VERBATIM in a later, otherwise unrelated turn "
         "or session?\n\n"
         "Do NOT count an ordinary pronoun or reference resolvable from "
         'just the immediately preceding turn ("it", "that", "she" '
         "referring to the last sentence) -- only a phrase that is its "
         "own standing shorthand for something specific to this "
-        "student, worth remembering across turns, counts.\n\n"
+        f"{d.actor_noun}, worth remembering across turns, counts.\n\n"
         "If you are not confident this happened, or the reference is "
         "ordinary and immediately resolvable, set resolved=false -- a "
         "missed one is fine, a wrong one is not.\n\n"
@@ -501,9 +520,15 @@ class ClassifyReferenceResolution:
     here writes a row every time) for a sparse, high-precision table.
     """
 
-    def __init__(self, llm: LLMClient, config: ReferenceResolutionClassifierConfig | None = None) -> None:
+    def __init__(
+        self,
+        llm: LLMClient,
+        config: ReferenceResolutionClassifierConfig | None = None,
+        domain_config: DomainConfig | None = None,
+    ) -> None:
         self._llm = llm
         self._config = config or ReferenceResolutionClassifierConfig()
+        self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
     async def run(
@@ -516,7 +541,8 @@ class ClassifyReferenceResolution:
         self.last_call_count = 0
         raw = await self._llm.complete(
             _reference_resolution_prompt(
-                recent_history, turn_question, turn_response, originating_question
+                recent_history, turn_question, turn_response, originating_question,
+                self._domain,
             )
         )
         self.last_call_count = 1

@@ -12,6 +12,7 @@ from probe.audit import NodeCallStore, TranscriptStore
 from probe.db import create_pool
 from probe.diagnostics import TurnDiagnosticsStore
 from probe.disambiguate import DisambiguationStore
+from probe.domain_config import load_domain_config
 from probe.embeddings import (
     EmbeddingClient,
     StubEmbeddingClient,
@@ -150,7 +151,9 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
     }
 
 
-def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient) -> SessionLoop:
+def _build_loop(
+    pool, tiers: ModelTierClients, embedding_client: EmbeddingClient, domain_config
+) -> SessionLoop:
     return SessionLoop(
         transcript=TranscriptStore(pool),
         node_calls=NodeCallStore(pool),
@@ -161,6 +164,7 @@ def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient
         learner_fact_store=LearnerFactStore(pool),
         thinking_style_store=ThinkingStyleStore(pool),
         embedding_client=embedding_client,
+        domain_config=domain_config,
         **_build_interaction_pipeline(pool, embedding_client),
     )
 
@@ -168,18 +172,24 @@ def _build_loop(pool, tiers: ModelTierClients, embedding_client: EmbeddingClient
 async def _chat(learner_spec: str, use_stub: bool) -> None:
     tiers = _build_tier_clients(use_stub)
     embedding_client = _build_embedding_client(use_stub)
+    # The ONE place PROBE_DOMAIN is read for the CLI path (see
+    # domain_config.load_domain_config's own docstring) -- resolved
+    # once here, passed down as a plain DomainConfig object; nothing
+    # past this point reads the environment variable again.
+    domain_config = load_domain_config()
     pool = await create_pool(_database_url(), min_size=1, max_size=4)
     try:
         learner = await _resolve_learner(LearnerStore(pool), learner_spec)
         label_suffix = f" (label={learner.label!r})" if learner.label else ""
         print(f"probe: learner {learner.id}{label_suffix}")
         print("probe: minimal_branch mode — no concept graph")
+        print(f"probe: domain = {domain_config.domain.value}")
         print(
             "probe: interaction/retrieval pipeline ON (dry run -- writes "
             "interactions/topics/outcomes/abstracts/predictions; nothing "
             "it produces reaches this session's own responses yet)"
         )
-        loop = _build_loop(pool, tiers, embedding_client)
+        loop = _build_loop(pool, tiers, embedding_client, domain_config)
         await loop.run_interactive(learner.id)
     finally:
         await pool.close()
@@ -194,9 +204,10 @@ async def _consolidate_session(session_id_str: str, use_stub: bool) -> None:
 
     tiers = _build_tier_clients(use_stub)
     embedding_client = _build_embedding_client(use_stub)
+    domain_config = load_domain_config()
     pool = await create_pool(_database_url(), min_size=1, max_size=4)
     try:
-        loop = _build_loop(pool, tiers, embedding_client)
+        loop = _build_loop(pool, tiers, embedding_client, domain_config)
         # Deliberate, unambiguous trigger — no turn-count gate (unlike
         # run_interactive's own auto-consolidate on exit): this command
         # exists specifically to consolidate a session on demand,

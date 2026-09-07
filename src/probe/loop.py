@@ -39,6 +39,7 @@ from probe.ablation import AblationConfig
 from probe.audit import NodeCallStore, TranscriptStore
 from probe.baseline import MAX_CALLS_PER_TURN, BaselineTeach
 from probe.diagnostics import TurnDiagnosticsStore
+from probe.domain_config import DomainConfig
 from probe.disambiguate import (
     AssessAndBranch,
     DisambiguationOptions,
@@ -53,6 +54,7 @@ from probe import retrieval as _retrieval
 from probe.embeddings import EmbeddingClient
 from probe.history_block import HistoryBlockConfig
 from probe.reference_bindings import ReferenceBindingConfig
+from probe.retrieval import RetrievalContext
 from probe.interaction_nodes import (
     ABSTRACTOR_VERSION,
     CLASSIFIER_VERSION,
@@ -165,6 +167,7 @@ class SessionLoop:
         stated_preference_store: StatedPreferenceStore | None = None,
         reference_binding_store: ReferenceBindingStore | None = None,
         reference_binding_config: ReferenceBindingConfig | None = None,
+        domain_config: DomainConfig | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -177,6 +180,12 @@ class SessionLoop:
         self._diagnostics = diagnostics_store
         self._on_node_start = on_node_start
         self._ablation = ablation_config or AblationConfig()
+        # The domain switch (domain_config.py) -- fixed for this loop's
+        # lifetime, same as ablation_config above: every node it
+        # constructs below gets the identical DomainConfig, and every
+        # interaction this loop records carries the same domain (see
+        # `_record_interaction`).
+        self._domain_config = domain_config or DomainConfig.education()
 
         # The plain-LLM BASELINE — same tier as FinalAnswer, since
         # that's what it's compared against. Cheap to construct
@@ -188,9 +197,11 @@ class SessionLoop:
         # final response); best tier for FinalAnswer, since it is the
         # response the student actually sees.
         self._disambiguation = disambiguation_store
-        self.assess_and_branch = AssessAndBranch(tiers.fast)
-        self.disambiguation_options = DisambiguationOptions(tiers.fast)
-        self.final_answer = FinalAnswer(tiers.best)
+        self.assess_and_branch = AssessAndBranch(tiers.fast, domain_config=self._domain_config)
+        self.disambiguation_options = DisambiguationOptions(
+            tiers.fast, domain_config=self._domain_config
+        )
+        self.final_answer = FinalAnswer(tiers.best, domain_config=self._domain_config)
         # The most recent AssessAndBranch-generating turn's id, if its
         # branches are still unresolved. None whenever the last turn was
         # a click resolution, a direct answer, or has already been
@@ -271,10 +282,20 @@ class SessionLoop:
         # no-op.
         self._reference_bindings = reference_binding_store
         self._reference_binding_config = reference_binding_config or ReferenceBindingConfig()
-        self.classify_turn_outcome = ClassifyTurnOutcome(tiers.fast, ClassifierConfig())
+        self.classify_turn_outcome = ClassifyTurnOutcome(
+            tiers.fast, ClassifierConfig(), domain_config=self._domain_config
+        )
+        # GenerateAbstractForm deliberately does NOT take a domain_config
+        # -- its whole purpose is staying domain-agnostic (see
+        # domain_config.py's own module docstring); it is the target of
+        # this feature's own audit, not a fourth prompt variant.
         self.generate_abstract_form = GenerateAbstractForm(tiers.fast)
-        self.classify_stated_preference = ClassifyStatedPreference(tiers.fast)
-        self.classify_reference_resolution = ClassifyReferenceResolution(tiers.fast)
+        self.classify_stated_preference = ClassifyStatedPreference(
+            tiers.fast, domain_config=self._domain_config
+        )
+        self.classify_reference_resolution = ClassifyReferenceResolution(
+            tiers.fast, domain_config=self._domain_config
+        )
         self.selection_predictor = selection_predictor or LLMSelectionPredictor(tiers.fast)
         # Strong references to fire-and-forget background tasks
         # (classification, abstraction, prediction) so they cannot be
@@ -467,6 +488,7 @@ class SessionLoop:
             originating_question=originating_question,
             did_branch=did_branch,
             response_text=response_text,
+            domain=self._domain_config.domain,
         )
         if response_text is not None:
             self._fire_background(
@@ -708,7 +730,8 @@ class SessionLoop:
             return
         try:
             result = await _retrieval.retrieve(
-                self._retrieval_pool, interaction.learner_id, interaction.question_embedding
+                self._retrieval_pool, interaction.learner_id, interaction.question_embedding,
+                ctx=RetrievalContext(domain=self._domain_config.domain),
             )
             scores = await self.selection_predictor.predict(options, result.candidates)
             await self._predictions.append(
@@ -1251,6 +1274,7 @@ class SessionLoop:
                     await _history_block.assemble_history_block(
                         self._retrieval_pool, learner_id, session_id, query_vec,
                         history_config=self._history_block_config,
+                        domain=self._domain_config.domain,
                     )
                 )
             except Exception as exc:
