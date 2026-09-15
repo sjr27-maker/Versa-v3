@@ -51,6 +51,11 @@ async def pool():
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
         await conn.execute("DROP TABLE IF EXISTS predictions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS instrument_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS instruments CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS interaction_contracts CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS capability_evidence CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS capability_claims CASCADE")
         await conn.execute("DROP TABLE IF EXISTS claim_statements CASCADE")
         await conn.execute("DROP TABLE IF EXISTS claim_evidence CASCADE")
         await conn.execute("DROP TABLE IF EXISTS claims CASCADE")
@@ -126,7 +131,9 @@ async def clean_pool(pool):
             "TRUNCATE evidence_records, node_calls, turn_diagnostics, turns, "
             "sessions, learners, disambiguation_options, disambiguation_branches, "
             "disambiguation_turns, learner_facts, thinking_style_candidates, "
-            "predictions, claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
+            "predictions, instrument_events, instruments, interaction_contracts, "
+            "capability_evidence, capability_claims, "
+            "claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
             "turn_outcomes, "
             "interaction_abstracts, "
             "interaction_options, interactions, population_patterns "

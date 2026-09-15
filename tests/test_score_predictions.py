@@ -122,6 +122,27 @@ def test_ineligible_rows_are_excluded_from_trials_and_from_priors():
     assert with_noise[0].evidence_id == row3.id
 
 
+def test_topic_prefix_isolates_one_instrument_method_from_another():
+    """write_instrument_evidence tags topic=f"instrument:{primitive}" --
+    topic_prefix is how score-predictions --split-by-source tells
+    locate's own curve apart from predict's, both source=instrument."""
+    claim = _claim()
+    locate_row1 = _evidence(claim.id, age_days=20.0, topic="instrument:locate")
+    locate_row2 = _evidence(claim.id, age_days=10.0, topic="instrument:locate")
+    predict_row = _evidence(claim.id, age_days=5.0, topic="instrument:predict")
+
+    locate_only = compute_prediction_trials(
+        claim, [locate_row1, locate_row2, predict_row], topic_prefix="instrument:locate"
+    )
+    assert len(locate_only) == 1
+    assert locate_only[0].evidence_id == locate_row2.id
+
+    predict_only = compute_prediction_trials(
+        claim, [locate_row1, locate_row2, predict_row], topic_prefix="instrument:predict"
+    )
+    assert predict_only == []  # only 1 eligible row once locate's are filtered out -- no trial
+
+
 def test_same_session_axis_cell_collapsing_carries_through_to_trials():
     """Two rows in the SAME (session, topic-as-axis-fallback) cell
     collapse to one cell for the purposes of the NEXT trial's predicted

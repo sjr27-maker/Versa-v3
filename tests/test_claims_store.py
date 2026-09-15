@@ -56,6 +56,25 @@ async def test_create_and_get_roundtrip(claim_store, learner_id, clean_pool):
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_context_scope_with_real_data_roundtrips_as_a_dict_not_a_string(
+    claim_store, learner_id, clean_pool
+):
+    """The double-encoding fix: context_scope was unread in production,
+    which is exactly why passing json.dumps(...) into a jsonb column
+    that already has its own codec-level encoder went unnoticed --
+    every existing row happened to be the empty-dict default, so the
+    bug never surfaced as a wrong VALUE, only as a wrong TYPE nothing
+    was checking. A non-empty dict makes the type distinction
+    observable: a double-encoded value round-trips as a JSON string
+    containing the original text, not as a dict."""
+    claim = _claim(learner_id, context_scope={"topic": "quicksort", "difficulty": 3})
+    await claim_store.create(claim)
+    fetched = await claim_store.get(claim.id)
+    assert fetched.context_scope == {"topic": "quicksort", "difficulty": 3}
+    assert isinstance(fetched.context_scope, dict)
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_list_all_spans_every_learner(claim_store, learner_store, clean_pool):
     """score_predictions.py's cross-learner calibration check needs
     every claim regardless of learner -- unlike list_for_learner."""

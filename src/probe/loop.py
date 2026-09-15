@@ -75,6 +75,7 @@ from probe.interactions import (
     InteractionAbstractStore,
     InteractionOptionStore,
     InteractionRecorder,
+    InteractionStore,
     PredictionStore,
     ReferenceBindingStore,
     StatedPreferenceStore,
@@ -1614,6 +1615,93 @@ class SessionLoop:
         return await self._thinking_styles.create_candidate(
             learner_id, session_id, path_summary.summary, embedding,
         )
+
+    # ─────────────────────────── instrument turns (manual trigger) ─────
+    #
+    # An instrument presented mid-session, at the point where the
+    # system is uncertain, tells you about a learner learning; the
+    # same instrument on its own standalone page (webserver.py's
+    # /instrument route) only tells you about someone doing an
+    # exercise. These three methods are the whole of that wiring: no
+    # router exists yet, nothing here decides WHEN to present one --
+    # `handle_turn` never calls any of them. A caller (the CLI, the
+    # web UI, or eventually a router) picks the primitive and calls
+    # `present_instrument_turn` directly.
+
+    async def present_instrument_turn(
+        self, session_id: UUID, primitive: "_instruments.InstrumentPrimitive"
+    ) -> "_instruments.Instrument":
+        """Presents a hand-authored instrument (instruments.py) as the
+        NEXT turn in this session -- same session_id, next turn_number,
+        so it shows up in this learner's real history rather than a
+        side channel. Requires the claim layer to be configured
+        (`claim_store`/`retrieval_pool` -- the same dependency
+        `extract_claims_for_session` already has): an instrument's
+        evidence has nowhere to go without it."""
+        from probe import instruments as _instruments
+
+        if self._claim_store is None or self._retrieval_pool is None:
+            raise RuntimeError(
+                "present_instrument_turn requires claim_store and retrieval_pool "
+                "to be configured on this SessionLoop"
+            )
+        learner_id = await self._transcript.get_learner_id(session_id)
+        turns = await self._transcript.list_turns(session_id)
+        turn_number = max((t.turn_index for t in turns), default=-1) + 1
+
+        from probe.capability import CapabilityClaimStore
+
+        interaction_store = InteractionStore(self._retrieval_pool)
+        instrument_store = _instruments.InstrumentStore(self._retrieval_pool)
+        contract_store = _instruments.InteractionContractStore(self._retrieval_pool)
+        capability_store = CapabilityClaimStore(self._retrieval_pool)
+        return await _instruments.present_demo_instrument_in_session(
+            interaction_store, instrument_store, contract_store, self._claim_store,
+            capability_store, primitive, learner_id, session_id, turn_number,
+        )
+
+    async def record_instrument_event(self, event: "_instruments.InstrumentEvent") -> None:
+        """Appends one raw event through the normal path -- no
+        interpretation happens here (instrument_events' own "nothing
+        writes an interpretation back onto a row here")."""
+        from probe import instruments as _instruments
+
+        await _instruments.InstrumentEventStore(self._retrieval_pool).append(event)
+
+    async def finalize_instrument_turn(
+        self, instrument_id: UUID
+    ) -> "_instruments.InstrumentOutcome":
+        """Reads the full event stream, interprets it deterministically
+        (no LLM), writes evidence through the existing claim-evidence
+        path if the outcome is informative, and resolves the
+        instrument's `completed_at`/`abandoned` -- the same three steps
+        webserver.py's standalone `/finalize` route performs, now
+        available on a session that's actually being tutored rather
+        than only on the isolated demo page."""
+        from probe import instruments as _instruments
+        from probe.capability import CapabilityClaimStore
+
+        instrument_store = _instruments.InstrumentStore(self._retrieval_pool)
+        contract_store = _instruments.InteractionContractStore(self._retrieval_pool)
+        event_store = _instruments.InstrumentEventStore(self._retrieval_pool)
+        capability_store = CapabilityClaimStore(self._retrieval_pool)
+
+        instrument = await instrument_store.get(instrument_id)
+        if instrument is None:
+            raise KeyError(f"instrument {instrument_id} not found")
+        contract = await contract_store.get(instrument.contract_id)
+        events = await event_store.list_for_instrument(instrument_id)
+
+        outcome = _instruments.interpret_instrument(contract, events)
+        await _instruments.write_instrument_evidence(
+            self._claim_store, capability_store, contract, instrument, outcome,
+            self._claim_confidence_config,
+        )
+        if any(e.event_type is _instruments.InstrumentEventType.ABANDON for e in events):
+            await instrument_store.mark_abandoned(instrument_id)
+        else:
+            await instrument_store.mark_completed(instrument_id)
+        return outcome
 
     async def _build_disambiguation_history(
         self, session_id: UUID, turn_index: int

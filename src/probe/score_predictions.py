@@ -64,6 +64,31 @@ makes no LLM call, so none of CLAUDE.md's append-only invariants apply
 to it. If calibration tracking over time becomes worth persisting,
 that is a deliberate follow-up, not something to add speculatively
 here.
+
+A SECOND READER, NOT NEW MACHINERY: `compute_capability_prediction_trials`/
+`score_capability_predictions_for_all_learners` below apply the
+identical idea to `capability_claims`/`capability_evidence`
+(capability.py) — a capability evidence row's `direction` is already a
+scored prediction the same way a preference one is, so the only new
+code is reading a second table and calling
+`capability.compute_capability_confidence` instead of
+`claims.compute_confidence`. `PredictionTrial`/`CalibrationBin`/
+`bucket_trials`/`brier_score`/`format_reliability_diagram` are reused
+completely unchanged — none of them know or care which claim
+vocabulary produced a trial. This exists because locate/predict
+evidence used to accumulate silently with no way to check whether
+their confidence meant anything, the same position the preference side
+was in before this module existed (see the module-opening paragraph
+above) — except capability claims have no promotion/clamp gate at all
+yet (deliberately, see capability.py's own docstring), so uncalibrated
+capability confidence is currently worse-covered than the preference
+side ever was, not better. Checked directly before building this: as
+of this module's own writing nothing outside `instruments.py`/`loop.py`
+/`webserver.py`'s WRITE paths reads a `CapabilityClaim` at all — no
+retrieval, no prompt-building, no rendering — so today a wrong number
+here is inert, not yet acted on. That is exactly why now is the right
+time to add this reader, before a router or a rendering path gives
+that number a job to do.
 """
 
 from __future__ import annotations
@@ -72,8 +97,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
+from probe.capability import CapabilityClaimStore, CapabilityConfidenceConfig, compute_capability_confidence
 from probe.claims import ClaimConfidenceConfig, ClaimStore, compute_confidence
-from probe.models import Claim, ClaimEvidence, EvidenceDirection
+from probe.models import (
+    CapabilityClaim,
+    CapabilityEvidence,
+    CapabilityLabel,
+    Claim,
+    ClaimEvidence,
+    EvidenceDirection,
+    EvidenceSource,
+)
 
 DEFAULT_BIN_EDGES = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 
@@ -105,6 +139,8 @@ def compute_prediction_trials(
     evidence_rows: list[ClaimEvidence],
     config: ClaimConfidenceConfig | None = None,
     exclude_contaminated: bool = False,
+    source_filter: EvidenceSource | None = None,
+    topic_prefix: str | None = None,
 ) -> list[PredictionTrial]:
     """`evidence_rows` must already be in the order they were recorded
     (`ClaimStore.list_evidence` guarantees this via `ORDER BY seq`).
@@ -125,10 +161,29 @@ def compute_prediction_trials(
     actually called by `ClaimStore.refresh`) never does this -- a
     contaminated row is honest about what happened in that session and
     still counts there. This flag exists only so the two pictures
-    (with and without flagged rows) can be compared side by side."""
+    (with and without flagged rows) can be compared side by side.
+
+    `source_filter`, when given, restricts to rows from that
+    `EvidenceSource` alone (as if the claim's whole evidence history
+    were only ever that source) -- the gate a new evidence-producing
+    path (instruments.py) has to clear before it's trusted alongside
+    the existing one: does THIS source's own calibration curve look
+    like the established one, checked in isolation rather than
+    diluted together.
+
+    `topic_prefix`, when given, restricts further by `topic.startswith(...)`
+    -- `write_instrument_evidence` writes `topic=f"instrument:{primitive}"`,
+    so this is how "--split-by-source" tells locate's own curve apart
+    from predict's, both of which share `source=instrument`. Different
+    axis than `source_filter` (mechanism vs. specific method), so both
+    can be combined."""
     cfg = config or ClaimConfidenceConfig()
     if exclude_contaminated:
         evidence_rows = [r for r in evidence_rows if r.provenance_note is None]
+    if source_filter is not None:
+        evidence_rows = [r for r in evidence_rows if r.source == source_filter]
+    if topic_prefix is not None:
+        evidence_rows = [r for r in evidence_rows if r.topic.startswith(topic_prefix)]
     eligible = [r for r in evidence_rows if r.test_fired and r.contradiction_was_possible]
     trials: list[PredictionTrial] = []
     for i in range(1, len(eligible)):
@@ -229,6 +284,8 @@ async def score_predictions_for_all_learners(
     config: ClaimConfidenceConfig | None = None,
     bin_edges: list[float] | None = None,
     exclude_contaminated: bool = False,
+    source_filter: EvidenceSource | None = None,
+    topic_prefix: str | None = None,
 ) -> tuple[list[CalibrationBin], float | None, int]:
     """The I/O boundary: pulls every claim across every learner (this
     is a calibration question about the confidence FORMULA, not about
@@ -236,8 +293,9 @@ async def score_predictions_for_all_learners(
     them — same "batch job, cross-learner" precedent as
     population_patterns.aggregate_population_patterns), scores every
     claim's evidence history, and buckets the result. `exclude_
-    contaminated` passes straight through to `compute_prediction_
-    trials` — see its own docstring.
+    contaminated`/`source_filter`/`topic_prefix` pass straight through
+    to `compute_prediction_trials` — see its own docstring for all
+    three.
 
     Returns `(bins, overall_brier, total_trials_computed)` -- the third
     value is `len(all_trials)` BEFORE bucketing, for
@@ -247,6 +305,78 @@ async def score_predictions_for_all_learners(
     all_trials: list[PredictionTrial] = []
     for claim in claims:
         evidence = await store.list_evidence(claim.id)
-        all_trials.extend(compute_prediction_trials(claim, evidence, config, exclude_contaminated))
+        all_trials.extend(
+            compute_prediction_trials(
+                claim, evidence, config, exclude_contaminated, source_filter, topic_prefix
+            )
+        )
+    bins = bucket_trials(all_trials, bin_edges)
+    return bins, brier_score(all_trials), len(all_trials)
+
+
+# ─────────────────────────── capability-side reader ─────────────────────
+
+
+def compute_capability_prediction_trials(
+    claim: CapabilityClaim,
+    evidence_rows: list[CapabilityEvidence],
+    config: CapabilityConfidenceConfig | None = None,
+    exclude_contaminated: bool = False,
+    skill_filter: CapabilityLabel | None = None,
+) -> list[PredictionTrial]:
+    """The capability-side counterpart to `compute_prediction_trials` —
+    identical trial-extraction logic (score every eligible row after
+    the first against `compute_capability_confidence` from the
+    eligible rows strictly before it), reusing `PredictionTrial`
+    unchanged: it doesn't know or care which claim vocabulary produced
+    a trial. `skill_filter`, when given, restricts to one
+    `CapabilityLabel` alone — the capability-side equivalent of
+    `compute_prediction_trials`'s `topic_prefix` (locate's own curve
+    told apart from predict's), but exact-match on `skill` rather than
+    a topic-string prefix, since `CapabilityEvidence` carries `skill`
+    directly rather than deriving it from a formatted topic string."""
+    cfg = config or CapabilityConfidenceConfig()
+    if exclude_contaminated:
+        evidence_rows = [r for r in evidence_rows if r.provenance_note is None]
+    if skill_filter is not None:
+        evidence_rows = [r for r in evidence_rows if r.skill == skill_filter]
+    eligible = [r for r in evidence_rows if r.test_fired and r.contradiction_was_possible]
+    trials: list[PredictionTrial] = []
+    for i in range(1, len(eligible)):
+        prior_rows = eligible[:i]
+        row = eligible[i]
+        predicted_confidence = compute_capability_confidence(
+            prior_rows, claim.write_policy, cfg, now=row.created_at
+        )
+        trials.append(
+            PredictionTrial(
+                claim_id=claim.id,
+                evidence_id=row.id,
+                occurred_at=row.created_at,
+                predicted_confidence=predicted_confidence,
+                hit=row.direction is EvidenceDirection.SUPPORTS,
+            )
+        )
+    return trials
+
+
+async def score_capability_predictions_for_all_learners(
+    store: CapabilityClaimStore,
+    config: CapabilityConfidenceConfig | None = None,
+    bin_edges: list[float] | None = None,
+    exclude_contaminated: bool = False,
+    skill_filter: CapabilityLabel | None = None,
+) -> tuple[list[CalibrationBin], float | None, int]:
+    """The capability-side counterpart to
+    `score_predictions_for_all_learners` — same cross-learner batch
+    read, same bucketing, over `capability_claims`/`capability_evidence`
+    instead. Returns the identical 3-tuple shape."""
+    claims = await store.list_all()
+    all_trials: list[PredictionTrial] = []
+    for claim in claims:
+        evidence = await store.list_evidence(claim.id)
+        all_trials.extend(
+            compute_capability_prediction_trials(claim, evidence, config, exclude_contaminated, skill_filter)
+        )
     bins = bucket_trials(all_trials, bin_edges)
     return bins, brier_score(all_trials), len(all_trials)

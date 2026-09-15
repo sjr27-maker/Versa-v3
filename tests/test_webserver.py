@@ -218,3 +218,54 @@ def test_create_app_serves_the_spa_and_404s_unknown_session(monkeypatch):
         assert cmp.status_code == 200
         assert cmp.json()["mode_differs"] is False
         assert client.get("/api/compare?a=nope&b=nope").status_code == 400
+
+
+def test_instrument_end_to_end_via_the_real_routes(monkeypatch):
+    """The instrument demo page + its three API routes -- no LLM, no
+    embedding client involved (present_instrument/ensure_demo_target_claim
+    use a placeholder embedding), so this exercises the full present ->
+    event -> finalize path against the real DB with no external calls."""
+    from starlette.testclient import TestClient
+
+    from tests.conftest import DATABASE_URL
+
+    monkeypatch.setenv("DATABASE_URL", DATABASE_URL)
+    with TestClient(webserver.create_app()) as client:
+        page = client.get("/instrument")
+        assert page.status_code == 200
+        assert '<script src="/static/instrument.js">' in page.text
+        assert client.get("/static/instrument.js").status_code == 200
+
+        presented = client.post(
+            "/api/instrument/present", json={"learner": "instrument-webserver-test"}
+        )
+        assert presented.status_code == 200
+        body = presented.json()
+        instrument_id = body["instrument_id"]
+        assert body["spec"]["steps"][2]["id"] == "step_3"
+
+        for seq, (event_type, payload) in enumerate([
+            ("start", {}),
+            ("click", {"clicked_element": "step_3"}),
+            ("submit", {"clicked_element": "step_3"}),
+        ]):
+            resp = client.post(
+                f"/api/instrument/{instrument_id}/event",
+                json={"seq": seq, "event_type": event_type, "payload": payload, "elapsed_ms": seq * 500},
+            )
+            assert resp.status_code == 200
+
+        final = client.post(f"/api/instrument/{instrument_id}/finalize")
+        assert final.status_code == 200
+        assert final.json() == {"outcome": "supports", "evidence_written": True}
+
+        inspected = client.get(f"/api/instrument/{instrument_id}/inspect")
+        assert inspected.status_code == 200
+        insp = inspected.json()
+        assert insp["instrument"]["abandoned"] is False
+        assert insp["instrument"]["completed_at"] is not None
+        assert len(insp["events"]) == 3
+        assert insp["target_claim"]["kind"] == "capability"
+        assert insp["target_claim"]["skill"] == "traces_worked_steps"
+        assert insp["target_claim"]["evidence_count"] == 1
+        assert insp["target_claim"]["confidence"] > 0.5

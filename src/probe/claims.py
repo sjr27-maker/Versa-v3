@@ -794,7 +794,7 @@ class ClaimStore:
                 """,
                 claim.id, claim.learner_id, claim.statement, claim.test,
                 claim.value.value, claim.confidence, claim.source.value,
-                claim.write_policy.value, json.dumps(claim.context_scope),
+                claim.write_policy.value, claim.context_scope,
                 claim.status.value, claim.statement_embedding,
                 claim.created_at, claim.updated_at,
             )
@@ -894,14 +894,14 @@ class ClaimStore:
                 INSERT INTO claim_evidence (
                     id, claim_id, learner_id, interaction_id, direction, topic, axis,
                     session_id, test_fired, contradiction_was_possible, created_at,
-                    provenance_note
-                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    provenance_note, source
+                ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
                 """,
                 evidence.id, evidence.claim_id, evidence.learner_id, evidence.interaction_id,
                 evidence.direction.value, evidence.topic,
                 evidence.axis.value if evidence.axis else None, evidence.session_id,
                 evidence.test_fired, evidence.contradiction_was_possible, evidence.created_at,
-                evidence.provenance_note,
+                evidence.provenance_note, evidence.source.value,
             )
         return evidence
 
@@ -1188,7 +1188,7 @@ async def _merge_claims_group(
                     claim_id=survivor.id, learner_id=learner_id, interaction_id=ev.interaction_id,
                     direction=direction, topic=ev.topic, axis=ev.axis, session_id=ev.session_id,
                     test_fired=ev.test_fired, contradiction_was_possible=ev.contradiction_was_possible,
-                    created_at=ev.created_at, provenance_note=ev.provenance_note,
+                    created_at=ev.created_at, provenance_note=ev.provenance_note, source=ev.source,
                 )
             )
         await store.supersede(loser.id, survivor.id)

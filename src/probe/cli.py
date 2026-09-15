@@ -8,10 +8,7 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 
-from probe.audit import NodeCallStore, TranscriptStore
 from probe.db import create_pool
-from probe.diagnostics import TurnDiagnosticsStore
-from probe.disambiguate import DisambiguationStore
 from probe.domain_config import load_domain_config
 from probe.embeddings import (
     EmbeddingClient,
@@ -22,8 +19,8 @@ from probe.learner import LearnerStore
 from probe.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from probe.loop import SessionLoop
 from probe.interactions import InteractionAbstractStore
-from probe.memory import LearnerFactStore, ThinkingStyleStore
 from probe.models import Learner
+from probe.session_builder import build_session_loop
 from probe.population_patterns import (
     PopulationAggregationConfig,
     PopulationPatternStore,
@@ -92,83 +89,16 @@ async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
     return await store.create(label=spec)
 
 
-def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict:
-    """The interaction/retrieval pipeline (interactions.py, retrieval.py,
-    history_block.py) -- wired into `probe chat` (and, since _build_loop
-    is shared, `probe consolidate-session`'s session-end deferred-marking
-    hook) but deliberately NOT into `probe serve` (webserver.py has its
-    own separate _build_loop, untouched) until the hand-read described in
-    this feature's own review has actually happened there too.
-
-    No longer a dry run as of history_block.py: FinalAnswer's own prompt
-    now reads retrieval's output directly (learner_history_block) and,
-    when this learner has explicitly stated one, a structural requirement
-    built from `stated_preferences` -- see history_block.py's and
-    disambiguate.FinalAnswer's own docstrings for the read side, and
-    StatedPreference's docstring for the write side. `reference_bindings`
-    (reference_bindings.py) adds a third, independently-gated read: an
-    exact-match lookup of this learner's known recurring-phrase meanings,
-    fed into both AssessAndBranch (to suppress branching on something
-    already known) and FinalAnswer (as a short background section, above
-    learner_history_block). Predictions (interaction_nodes.
-    LLMSelectionPredictor) still feed nothing back into what the learner
-    sees. The critical-path additions are: the entry_state similarity
-    comparison, the history-block assembly's own embedding call, the
-    stated-preference lookup, the reference-binding lookup, and the
-    option shuffle; classification/abstraction/stated-preference/
-    reference-resolution classification itself all still run off the
-    critical path.
-    """
-    from probe.claims import ClaimStore
-    from probe.interactions import (
-        InteractionAbstractStore,
-        InteractionOptionStore,
-        InteractionRecorder,
-        InteractionStore,
-        PredictionStore,
-        ReferenceBindingStore,
-        StatedPreferenceStore,
-        TurnOutcomeStore,
-    )
-    from probe.retrieval_config import RetrievalConfig
-
-    interaction_store = InteractionStore(pool)
-    turn_outcome_store = TurnOutcomeStore(pool)
-    recorder = InteractionRecorder(
-        interaction_store,
-        turn_outcome_store,
-        embedding_client,
-        same_subject_threshold=RetrievalConfig().same_subject_threshold,
-    )
-    return {
-        "interaction_recorder": recorder,
-        "interaction_option_store": InteractionOptionStore(pool),
-        "interaction_abstract_store": InteractionAbstractStore(pool),
-        "turn_outcome_store": turn_outcome_store,
-        "prediction_store": PredictionStore(pool),
-        "retrieval_pool": pool,
-        "stated_preference_store": StatedPreferenceStore(pool),
-        "reference_binding_store": ReferenceBindingStore(pool),
-        "claim_store": ClaimStore(pool),
-    }
-
-
 def _build_loop(
     pool, tiers: ModelTierClients, embedding_client: EmbeddingClient, domain_config
 ) -> SessionLoop:
-    return SessionLoop(
-        transcript=TranscriptStore(pool),
-        node_calls=NodeCallStore(pool),
-        llm=tiers.fast,
-        model_tier_clients=tiers,
-        diagnostics_store=TurnDiagnosticsStore(pool),
-        disambiguation_store=DisambiguationStore(pool),
-        learner_fact_store=LearnerFactStore(pool),
-        thinking_style_store=ThinkingStyleStore(pool),
-        embedding_client=embedding_client,
-        domain_config=domain_config,
-        **_build_interaction_pipeline(pool, embedding_client),
-    )
+    """Thin wrapper over `session_builder.build_session_loop` -- the one
+    shared assembly point `probe chat`/`probe consolidate-session` and
+    `probe serve` (webserver.py) both call, so the two entry points
+    cannot silently diverge in which optional stores they wire in the
+    way they did before 2026-09-15 (see session_builder.py's own
+    docstring for that incident)."""
+    return build_session_loop(pool, tiers, embedding_client, domain_config=domain_config)
 
 
 async def _chat(learner_spec: str, use_stub: bool) -> None:
@@ -353,7 +283,7 @@ async def _review_claims(learner_spec: str) -> None:
         await pool.close()
 
 
-async def _score_predictions(exclude_contaminated: bool) -> None:
+async def _score_predictions(exclude_contaminated: bool, split_by_source: bool) -> None:
     """`probe score-predictions` -- the reliability-diagram check
     score_predictions.py exists for: scores every claim's evidence
     history against itself (see that module's own docstring for why
@@ -367,9 +297,27 @@ async def _score_predictions(exclude_contaminated: bool) -> None:
     and one with every human-flagged (`provenance_note`) row dropped
     entirely -- so a real miscalibration can be told apart from a known
     harness bug's effect on the curve, without ever hiding the
-    contaminated rows from production itself."""
+    contaminated rows from production itself.
+
+    `--split-by-source` prints three curves separately: click (from the
+    preference side, `ClaimStore`), then locate and predict individually
+    from the CAPABILITY side (`CapabilityClaimStore`, filtered by
+    `skill` — both are PERFORMANCE-measuring, so neither one's evidence
+    lands in `ClaimStore` at all; see capability.py's own module
+    docstring for the incident that made this the correct split). The
+    check instruments.py's own module docstring names as the gate a
+    new evidence-producing METHOD has to clear before another one gets
+    built: if a method's evidence is systematically overconfident
+    relative to click evidence, its contract is being written or
+    interpreted loosely."""
+    from probe.capability import CapabilityClaimStore
     from probe.claims import ClaimStore
-    from probe.score_predictions import format_reliability_diagram, score_predictions_for_all_learners
+    from probe.models import CapabilityLabel, EvidenceSource
+    from probe.score_predictions import (
+        format_reliability_diagram,
+        score_capability_predictions_for_all_learners,
+        score_predictions_for_all_learners,
+    )
 
     pool = await create_pool(_database_url(), min_size=1, max_size=2)
     try:
@@ -383,6 +331,66 @@ async def _score_predictions(exclude_contaminated: bool) -> None:
             )
             print("\nEXCLUDING FLAGGED (provenance_note) ROWS:")
             print(format_reliability_diagram(clean_bins, clean_brier, clean_total))
+        if split_by_source:
+            capability_store = CapabilityClaimStore(pool)
+            click_bins, click_brier, click_total = await score_predictions_for_all_learners(
+                store, source_filter=EvidenceSource.CLICK
+            )
+            print("\nCLICK EVIDENCE ONLY:")
+            print(format_reliability_diagram(click_bins, click_brier, click_total))
+            for label, skill in (
+                ("LOCATE", CapabilityLabel.TRACES_WORKED_STEPS),
+                ("PREDICT", CapabilityLabel.DERIVES_FORWARD),
+            ):
+                s_bins, s_brier, s_total = await score_capability_predictions_for_all_learners(
+                    capability_store, skill_filter=skill
+                )
+                print(f"\n{label} EVIDENCE ONLY (capability):")
+                print(format_reliability_diagram(s_bins, s_brier, s_total))
+    finally:
+        await pool.close()
+
+
+async def _seed_demo_fixture() -> None:
+    """`probe seed-demo-fixture` -- (re)applies demo_fixture.py's two
+    hand-authored, opposite-portrait learners. Idempotent; no LLM call,
+    no embedding call. See that module's own docstring for what it
+    does and does not build."""
+    from probe.demo_fixture import DEMO_QUESTION_SET, seed_demo_fixture
+
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        learners = await seed_demo_fixture(pool)
+        print("probe: demo fixture seeded (idempotent -- safe to re-run):")
+        for role, learner in learners.items():
+            print(f"  {role}: {learner.label} ({learner.id})")
+        print(f"\nfixed question set ({len(DEMO_QUESTION_SET)} questions):")
+        for q in DEMO_QUESTION_SET:
+            print(f"  - {q}")
+    finally:
+        await pool.close()
+
+
+async def _compare_portraits(question: str | None, use_stub: bool) -> None:
+    """`probe compare-portraits` -- comparison.py's three-column wrong-
+    portrait control: same question, the two fixture portraits plus a
+    zero-claims control, side by side. Seeds/reuses the fixture and the
+    control learner (idempotent). Without --stub this makes a real
+    Gemini call per column (3 calls per question) -- the only way to
+    see whether the answers actually differ, not just whether the
+    claim-derived prompt does (see comparison.py's own docstring on
+    what a stub run can and cannot prove)."""
+    from probe.comparison import format_comparison, run_comparison
+    from probe.demo_fixture import DEMO_QUESTION_SET
+
+    tiers = _build_tier_clients(use_stub)
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        questions = [question] if question else DEMO_QUESTION_SET
+        for q in questions:
+            columns = await run_comparison(pool, q, llm=tiers.best)
+            print(format_comparison(q, columns))
+            print()
     finally:
         await pool.close()
 
@@ -435,6 +443,34 @@ def main() -> None:
         "learner share) clusters to population_patterns -- the "
         "on-demand aggregation step retrieval reads from",
     )
+    subparsers.add_parser(
+        "seed-demo-fixture",
+        help="(re)apply demo_fixture.py's two hand-authored, opposite-"
+        "portrait learners plus a fixed question set -- idempotent, "
+        "no LLM/embedding call, for a reproducible comparison demo",
+    )
+    compare_parser = subparsers.add_parser(
+        "compare-portraits",
+        help="three-column wrong-portrait comparison (comparison.py): "
+        "same question run for the concrete portrait, the abstract "
+        "portrait, and a zero-claims control, showing which claims "
+        "fired, the frozen claim_constraints_block each one produced, "
+        "and the resulting answer -- seeds the demo fixture if needed",
+    )
+    compare_parser.add_argument(
+        "--question", default=None,
+        help="one question to run (default: every question in "
+        "demo_fixture.DEMO_QUESTION_SET)",
+    )
+    compare_parser.add_argument(
+        "--stub",
+        action="store_true",
+        help="use StubLLMClient instead of the real Gemini API -- proves "
+        "the claims/prediction wiring is correct, but under a stub all "
+        "three answers are identical by construction (a stub cannot "
+        "read the prompt), so this cannot show whether the answers "
+        "actually differ",
+    )
     migrate_parser = subparsers.add_parser(
         "migrate",
         help="apply pending SQL migrations to DATABASE_URL, in order, "
@@ -476,6 +512,12 @@ def main() -> None:
         "(provenance_note) evidence row excluded, alongside the normal "
         "(production) picture",
     )
+    score_predictions_parser.add_argument(
+        "--split-by-source", action="store_true",
+        help="also print the click-derived and instrument-derived reliability "
+        "diagrams separately (instruments.py) -- the gate a new instrument "
+        "has to clear before another one gets built",
+    )
     serve_parser = subparsers.add_parser(
         "serve",
         help="launch the calm single-page web UI (Starlette API + probe/static/)",
@@ -496,10 +538,14 @@ def main() -> None:
         asyncio.run(_consolidate_session(args.session_id, args.stub))
     elif args.command == "aggregate-patterns":
         asyncio.run(_aggregate_patterns())
+    elif args.command == "seed-demo-fixture":
+        asyncio.run(_seed_demo_fixture())
+    elif args.command == "compare-portraits":
+        asyncio.run(_compare_portraits(args.question, args.stub))
     elif args.command == "review-claims":
         asyncio.run(_review_claims(args.learner))
     elif args.command == "score-predictions":
-        asyncio.run(_score_predictions(args.exclude_contaminated))
+        asyncio.run(_score_predictions(args.exclude_contaminated, args.split_by_source))
     elif args.command == "migrate":
         asyncio.run(_run_migrations(args.status, args.baseline))
     elif args.command == "serve":

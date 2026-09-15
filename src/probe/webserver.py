@@ -47,6 +47,7 @@ from probe.db import create_pool
 from probe.diagnostics import TurnDiagnosticsStore
 from probe.disambiguate import DisambiguationStore
 from probe.evidence import EvidenceStore
+from probe.interactions import InteractionStore
 from probe.embeddings import (
     EmbeddingClient,
     StubEmbeddingClient,
@@ -57,6 +58,7 @@ from probe.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from probe.loop import SessionLoop
 from probe.memory import LearnerFactStore, ThinkingStyleStore
 from probe.models import Learner, OptionStatus
+from probe.session_builder import build_session_loop
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -145,20 +147,19 @@ def _stores() -> dict:
 
 
 def _build_loop(use_stub: bool, on_node) -> SessionLoop:
+    """Calls the SAME shared builder `cli.py` calls
+    (session_builder.build_session_loop) -- see that module's own
+    docstring for the incident this fixes: before 2026-09-15 this
+    function built a `SessionLoop` by hand here, with none of the
+    interaction pipeline (claims, stated_preferences, reference_bindings,
+    history_block, retrieval) wired in, while `cli.py` had all of it.
+    Every session run through `probe serve` ran fully un-personalized as
+    a result. There is deliberately no local store-building left in this
+    function for that to drift out of sync again."""
     pool = _state.pool
     tiers = _tier_clients(use_stub)
-    return SessionLoop(
-        transcript=TranscriptStore(pool),
-        node_calls=NodeCallStore(pool),
-        llm=tiers.fast,
-        model_tier_clients=tiers,
-        diagnostics_store=TurnDiagnosticsStore(pool),
-        on_node_start=on_node,
-        disambiguation_store=DisambiguationStore(pool),
-        learner_fact_store=LearnerFactStore(pool),
-        thinking_style_store=ThinkingStyleStore(pool),
-        embedding_client=_embedding_client(use_stub),
-    )
+    embedding_client = _embedding_client(use_stub)
+    return build_session_loop(pool, tiers, embedding_client, on_node_start=on_node)
 
 
 async def _resolve_learner(store: LearnerStore, spec: str) -> Learner:
@@ -698,6 +699,195 @@ async def _evidence(request: Request) -> Response:
     )
 
 
+async def _instrument_page(_request: Request) -> Response:
+    return FileResponse(_STATIC_DIR / "instrument.html")
+
+
+async def _instrument_present(request: Request) -> Response:
+    """Standalone instrument-presentation flow (instruments.py) --
+    deliberately NOT SessionLoop-driven (no mode selector): resolves/
+    creates the learner and presents whichever `DEMO_CONTRACTS` entry
+    `primitive` names (default "locate", for the existing page/JS)."""
+    from probe.capability import CapabilityClaimStore
+    from probe.claims import ClaimStore
+    from probe.instruments import (
+        InstrumentPrimitive,
+        InstrumentStore,
+        InteractionContractStore,
+        present_demo_instrument,
+    )
+
+    body = await request.json()
+    learner_spec = (body.get("learner") or "").strip()
+    if not learner_spec:
+        return JSONResponse({"error": "learner is required"}, status_code=400)
+    try:
+        primitive = InstrumentPrimitive(body.get("primitive", "locate"))
+    except ValueError as exc:
+        return JSONResponse({"error": f"bad primitive: {exc}"}, status_code=400)
+
+    pool = _state.pool
+    try:
+        learner = await _resolve_learner(LearnerStore(pool), learner_spec)
+    except LookupError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=404)
+
+    try:
+        instrument = await present_demo_instrument(
+            TranscriptStore(pool), InteractionStore(pool), InstrumentStore(pool),
+            InteractionContractStore(pool), ClaimStore(pool), CapabilityClaimStore(pool),
+            primitive, learner.id,
+        )
+    except KeyError:
+        return JSONResponse({"error": f"{primitive.value} has no demo contract yet"}, status_code=400)
+
+    return JSONResponse(
+        {
+            "instrument_id": str(instrument.id),
+            "learner": {"id": str(learner.id), "label": learner.label},
+            "primitive": primitive.value,
+            "spec": instrument.spec,
+            "presented_at": instrument.presented_at.isoformat(),
+        }
+    )
+
+
+async def _instrument_event(request: Request) -> Response:
+    """Appends one raw `instrument_events` row. No interpretation
+    happens here -- that's `_instrument_finalize`'s job, once, at the
+    end (instrument_events.py's own "nothing writes an interpretation
+    back onto a row here")."""
+    from probe.instruments import InstrumentEventStore
+    from probe.models import InstrumentEvent, InstrumentEventType
+
+    instrument_id = request.path_params["instrument_id"]
+    body = await request.json()
+    try:
+        event = InstrumentEvent(
+            instrument_id=UUID(instrument_id),
+            seq=int(body["seq"]),
+            event_type=InstrumentEventType(body["event_type"]),
+            payload=body.get("payload") or {},
+            elapsed_ms=int(body["elapsed_ms"]),
+        )
+    except (KeyError, ValueError) as exc:
+        return JSONResponse({"error": f"bad event: {exc}"}, status_code=400)
+
+    await InstrumentEventStore(_state.pool).append(event)
+    return JSONResponse({"ok": True})
+
+
+async def _instrument_finalize(request: Request) -> Response:
+    """Reads the full event stream, interprets it deterministically
+    (`interpret_instrument` -- no LLM), writes evidence through the
+    existing claim-evidence path if the outcome is informative, and
+    resolves the instrument's `completed_at`/`abandoned`."""
+    from probe.capability import CapabilityClaimStore
+    from probe.claims import ClaimStore
+    from probe.instruments import (
+        InstrumentEventStore,
+        InstrumentStore,
+        InteractionContractStore,
+        interpret_instrument,
+        write_instrument_evidence,
+    )
+    from probe.models import InstrumentEventType
+
+    instrument_id = UUID(request.path_params["instrument_id"])
+    pool = _state.pool
+    instrument_store = InstrumentStore(pool)
+    contract_store = InteractionContractStore(pool)
+    event_store = InstrumentEventStore(pool)
+    claim_store = ClaimStore(pool)
+    capability_store = CapabilityClaimStore(pool)
+
+    instrument = await instrument_store.get(instrument_id)
+    if instrument is None:
+        return JSONResponse({"error": "no such instrument"}, status_code=404)
+    contract = await contract_store.get(instrument.contract_id)
+    events = await event_store.list_for_instrument(instrument_id)
+
+    outcome = interpret_instrument(contract, events)
+    evidence = await write_instrument_evidence(
+        claim_store, capability_store, contract, instrument, outcome
+    )
+
+    if any(e.event_type is InstrumentEventType.ABANDON for e in events):
+        await instrument_store.mark_abandoned(instrument_id)
+    else:
+        await instrument_store.mark_completed(instrument_id)
+
+    return JSONResponse({"outcome": outcome.value, "evidence_written": evidence is not None})
+
+
+async def _instrument_inspect(request: Request) -> Response:
+    """Read-only: the raw event log, the contract's own predicates, and
+    the current target claim's confidence/evidence-count -- for reading
+    what actually happened live, without a hand-run DB query each time
+    (see this module's own docstring: "no business logic here", this
+    computes nothing a store doesn't already return). Works whether the
+    instrument has been finalized yet or not, and whether it's a
+    PREFERENCE or PERFORMANCE contract."""
+    from probe.capability import CapabilityClaimStore
+    from probe.claims import ClaimStore
+    from probe.instruments import InstrumentEventStore, InstrumentStore, InteractionContractStore
+    from probe.models import MeasurementKind
+
+    instrument_id = UUID(request.path_params["instrument_id"])
+    pool = _state.pool
+    instrument = await InstrumentStore(pool).get(instrument_id)
+    if instrument is None:
+        return JSONResponse({"error": "no such instrument"}, status_code=404)
+    contract = await InteractionContractStore(pool).get(instrument.contract_id)
+    events = await InstrumentEventStore(pool).list_for_instrument(instrument_id)
+
+    claim_view = None
+    if contract.target_claim_id is not None:
+        if contract.measures is MeasurementKind.PERFORMANCE:
+            claim = await CapabilityClaimStore(pool).get(contract.target_claim_id)
+            evidence = await CapabilityClaimStore(pool).list_evidence(contract.target_claim_id)
+            if claim is not None:
+                claim_view = {
+                    "kind": "capability", "skill": claim.skill.value,
+                    "confidence": claim.confidence, "status": claim.status.value,
+                    "evidence_count": len(evidence),
+                }
+        else:
+            claim = await ClaimStore(pool).get(contract.target_claim_id)
+            evidence = await ClaimStore(pool).list_evidence(contract.target_claim_id)
+            if claim is not None:
+                claim_view = {
+                    "kind": "preference", "value": claim.value.value,
+                    "confidence": claim.confidence, "status": claim.status.value,
+                    "evidence_count": len(evidence),
+                }
+
+    return JSONResponse(
+        {
+            "instrument": {
+                "id": str(instrument.id), "primitive": instrument.primitive.value,
+                "presented_at": instrument.presented_at.isoformat(),
+                "completed_at": instrument.completed_at.isoformat() if instrument.completed_at else None,
+                "abandoned": instrument.abandoned,
+            },
+            "contract": {
+                "measures": contract.measures.value,
+                "supports_when": contract.supports_when,
+                "contradicts_when": contract.contradicts_when,
+                "uninformative_when": contract.uninformative_when,
+            },
+            "events": [
+                {
+                    "seq": e.seq, "event_type": e.event_type.value, "payload": e.payload,
+                    "elapsed_ms": e.elapsed_ms,
+                }
+                for e in events
+            ],
+            "target_claim": claim_view,
+        }
+    )
+
+
 async def _consolidate(request: Request) -> Response:
     session_id = request.path_params["session_id"]
     session = await _get_or_rebuild(session_id)
@@ -756,6 +946,11 @@ def create_app() -> Starlette:
         ),
         Route("/api/compare", _compare, methods=["GET"]),
         Route("/api/evidence", _evidence, methods=["GET"]),
+        Route("/instrument", _instrument_page),
+        Route("/api/instrument/present", _instrument_present, methods=["POST"]),
+        Route("/api/instrument/{instrument_id}/event", _instrument_event, methods=["POST"]),
+        Route("/api/instrument/{instrument_id}/finalize", _instrument_finalize, methods=["POST"]),
+        Route("/api/instrument/{instrument_id}/inspect", _instrument_inspect, methods=["GET"]),
         Mount(
             "/static",
             app=StaticFiles(directory=str(_STATIC_DIR)),
