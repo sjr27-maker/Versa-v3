@@ -89,10 +89,85 @@ class Option(BaseModel):
 class OptionProposal(BaseModel):
     """DisambiguationOptions' raw per-item output before persistence —
     not itself DB-backed (`Option` is, once IDs/session/turn context
-    are attached in loop.py)."""
+    are attached in loop.py).
+
+    `side` ("first" or "second") is which pole of the chosen `axis`
+    (`OptionSet.axis`) this option represents, matching the axis
+    enum's own name order verbatim (e.g. for `concrete_general`,
+    "first" is the concrete pole, "second" is the general one) — a
+    live diagnostic found downstream consumers inferring this from
+    option TEXT via keyword lists, which drifted silently every time
+    an axis showed up in unanticipated phrasing (three separate
+    documented incidents). `side` is decided by the same call that
+    already decides `axis`, at generation time, and persisted
+    (`InteractionOption.side`, migration 045) exactly like `kind`/
+    `axis` already are — a downstream consumer reads which side an
+    option was, it never re-derives it. Always `None` for a
+    SUBJECT-kind option (there is no axis, hence no side)."""
 
     branch_id: UUID
     text: str
+    side: str | None = None
+
+
+class AmbiguityKind(str, Enum):
+    """DisambiguationOptions' own first decision, made before it writes
+    a single option — see that class's docstring for the audit finding
+    (pairs mixing a subject option into an otherwise-settled approach
+    set) that made this decision explicit instead of implicit in the
+    option text.
+
+    SUBJECT: the candidate readings genuinely disagree about WHAT TOPIC
+    the message concerns, and that is not already settled by context.
+    APPROACH: the topic is already established (by session history, a
+    reference binding, or the readings themselves not naming different
+    topics) and the real choice is about HOW to address it, not what
+    it's about.
+    """
+
+    SUBJECT = "subject"
+    APPROACH = "approach"
+
+
+class ApproachAxis(str, Enum):
+    """The closed vocabulary an APPROACH-kind option set must pick
+    exactly one member of — see disambiguate.py's `_AXIS_DESCRIPTIONS`
+    for what each one means. A single axis admits exactly two sides by
+    construction, which is also what rules out a confounded three-way
+    approach set: there is no third side to a single dimension.
+    """
+
+    CONCRETE_GENERAL = "concrete_general"
+    SCOPE_NARROW_BROAD = "scope_narrow_broad"
+    RIGOR_INTUITION = "rigor_intuition"
+    MECHANISM_PROCEDURE = "mechanism_procedure"
+    WORKED_STEPS_RESULT = "worked_steps_result"
+    ANALOGY_FORMAL = "analogy_formal"
+    SINGLE_EXAMPLE_PATTERN = "single_example_pattern"
+    FORWARD_DERIVATION_BACKWARD_VERIFICATION = "forward_derivation_backward_verification"
+    BREVITY_DEPTH = "brevity_depth"
+    STRUCTURED_NARRATIVE = "structured_narrative"
+
+
+class OptionSet(BaseModel):
+    """DisambiguationOptions' full output — not itself DB-backed.
+    `kind`/`axis` are the audit trail this feature's own review asked
+    for ("log the chosen axis on the option set"): captured verbatim in
+    `node_calls.output_json` (CLAUDE.md invariant 2) the moment this
+    node runs, so a later analysis of what axis a set actually varied
+    on reads a recorded decision, never a guess reverse-engineered from
+    option text. Both `None` only on the exhausted-retries fallback
+    (see DisambiguationOptions.run), where `proposals` is also empty —
+    the same "nothing usable, degrade to a direct answer" shape as
+    before this feature existed.
+
+    `axis` is always `None` when `kind` is SUBJECT (there is no axis to
+    report — the choice was about topic, not method) and always set
+    when `kind` is APPROACH."""
+
+    kind: AmbiguityKind | None = None
+    axis: ApproachAxis | None = None
+    proposals: list[OptionProposal] = Field(default_factory=list)
 
 
 class DisambiguationTurn(BaseModel):
@@ -555,7 +630,26 @@ class InteractionOption(BaseModel):
     learner. `was_selected`/`selection_timestamp` are populated on a
     LATER turn than creation (the click, a separate `handle_turn`
     call) — a decision record, not an interaction record, so this
-    table is deliberately excluded from the immutability trigger."""
+    table is deliberately excluded from the immutability trigger.
+
+    `kind`/`axis` (migration 041) are DisambiguationOptions' own
+    kind/axis decision (see that class's docstring), denormalized onto
+    every option in the set it produced — the same value repeats
+    across every row from one option set, the way `shown_position`'s
+    sibling fields already do per-row. Persisted here, not just in
+    `node_calls.output_json`, specifically so claim extraction can read
+    "what axis was this option evidence for" as a normal query against
+    this learner-scoped table, never by reverse-engineering it from
+    option text or cross-referencing node_calls by session/turn.
+    `axis` is always `None` when `kind` is SUBJECT or `None`.
+
+    `side` (migration 045) is which pole of `axis` THIS option (not
+    the whole set) represents — "first" or "second", matching the
+    axis name's own word order (see `OptionProposal`'s own docstring
+    for the incident this closes: text-based side inference drifting
+    silently). Per-option, unlike `kind`/`axis` which repeat across
+    the whole set — the two options in one approach-kind set always
+    carry opposite sides. `None` for a SUBJECT-kind option."""
 
     id: UUID = Field(default_factory=uuid4)
     interaction_id: UUID
@@ -566,6 +660,9 @@ class InteractionOption(BaseModel):
     shown_position: int
     was_selected: bool = False
     selection_timestamp: datetime | None = None
+    kind: AmbiguityKind | None = None
+    axis: ApproachAxis | None = None
+    side: str | None = None
     created_at: datetime = Field(default_factory=_utcnow)
 
 
@@ -749,6 +846,211 @@ class ReferenceResolutionClassification(BaseModel):
     reference_text: str | None = None
     resolved_to: str | None = None
     confidence: float = 0.0
+
+
+class ClaimSource(str, Enum):
+    STATED = "stated"
+    INFERRED = "inferred"
+    CORRECTED = "corrected"
+
+
+class ClaimWritePolicy(str, Enum):
+    """How fast this claim's confidence should decay with the age of
+    its supporting evidence (claims.compute_confidence) — see that
+    module's own docstring for the actual decay rates. LOCKED never
+    decays (an explicitly `stated` preference, promoted to a claim
+    verbatim, has no reason to fade just because time passed);
+    SLOW_DRIFT is the default for an inferred standing trait;
+    FAST_DECAY is for a claim whose own `test` is about something
+    plausibly short-lived rather than a stable trait."""
+
+    LOCKED = "locked"
+    SLOW_DRIFT = "slow_drift"
+    FAST_DECAY = "fast_decay"
+
+
+class ClaimStatus(str, Enum):
+    CANDIDATE = "candidate"
+    PROMOTED = "promoted"
+    CONTRADICTED = "contradicted"
+    # Terminal, like CONTRADICTED, but for a different reason: this
+    # claim's FOUNDING evidence row was itself ineligible (a subject-
+    # kind pick with no genuine two-sided contest) -- the claim was
+    # never legitimately established in the first place, as opposed to
+    # having been established and later disproven. A live run found
+    # such a claim (sitting honestly at the 0.5 prior) absorb a real
+    # eligible contradicting row and close terminally -- evidence that
+    # belonged to a real claim instead killed a premise that should
+    # never have existed. RETRACTED claims are excluded from matching
+    # (search_similar/find_by_axis) exactly like CONTRADICTED ones, so
+    # they stop competing for evidence that belongs elsewhere.
+    RETRACTED = "retracted"
+    # Terminal, like the other two, but for a third reason: this claim
+    # turned out to be a duplicate of another LIVE claim -- same
+    # learner, same axis, same value -- not disproven, not illegitimate,
+    # just redundant. `claims.merge_duplicate_claims` sets this on every
+    # loser after copying its evidence onto the survivor (see that
+    # function's own docstring for why the evidence is COPIED, not
+    # repointed: `ClaimEvidence` has "no mutable field at all, not even
+    # a status" -- mutating an existing row's `claim_id` would break
+    # that). `superseded_by` names the survivor. Excluded from matching
+    # (search_similar/find_by_axis) exactly like CONTRADICTED/RETRACTED,
+    # so the loser stops competing for evidence that now belongs, in
+    # full duplicate, to the survivor too.
+    SUPERSEDED = "superseded"
+
+
+class Claim(BaseModel):
+    """The claim layer's write side (migration 042) — see claims.py's
+    own module docstring for the full design record (extraction
+    anchored on prediction error, the promotion gate, the confidence
+    clamp). One row per distinct inferred-or-stated standing trait
+    about a learner, created once by `claims.reconcile_candidate` and
+    never edited after that except for `confidence`/`status`/
+    `updated_at` (see this table's own migration comment for why that
+    is still "append-only" in this codebase's established sense —
+    the same status-transition-via-UPDATE convention
+    ThinkingStyleStore/DisambiguationStore already use).
+
+    `value` is one of `StatedPreferenceLabel`'s closed vocabulary —
+    deliberately the SAME one `stated_preferences` uses, not a new one,
+    specifically so `claims.render_claim_constraint` can reuse
+    `interaction_nodes.render_structural_requirement` verbatim: "the
+    same form that worked 5/5 for stated preferences," per this
+    feature's own spec, rather than a second hand-written imperative
+    set to keep in sync with the first.
+
+    `test` is the falsifiable prediction this claim licenses, phrased
+    as a situation plus a predicted choice over a FUTURE option set —
+    extraction rejects any candidate without one (see
+    `claims.ClaimExtractor`).
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    learner_id: UUID
+    statement: str
+    test: str
+    value: StatedPreferenceLabel
+    confidence: float
+    source: ClaimSource
+    write_policy: ClaimWritePolicy
+    context_scope: dict = Field(default_factory=dict)
+    status: ClaimStatus = ClaimStatus.CANDIDATE
+    statement_embedding: list[float]
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    # Set only when status is SUPERSEDED -- the survivor claim this one
+    # was merged into. None otherwise.
+    superseded_by: UUID | None = None
+
+
+class EvidenceDirection(str, Enum):
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+
+
+class ClaimEvidence(BaseModel):
+    """One episode's bearing on one claim — points at `interactions` by
+    reference only, never copies question/response content (migration
+    042's own header). Fully append-only with no mutable field at all,
+    not even a status: a claim's own status can change; the evidence
+    that justified the change never does.
+
+    `test_fired`/`contradiction_was_possible` are both set explicitly
+    at write time, never inferred later — see `claims.py`'s own
+    docstring for why a turn where the claim's test couldn't have
+    failed must never count the same as one where it genuinely could
+    have and didn't. `compute_confidence` only counts a row toward s/f
+    when BOTH are true; a row failing that is still stored (kept as
+    provenance — the review surface shows everything that was
+    considered) but contributes nothing to the number.
+
+    `axis` (the `ApproachAxis`, if any, that was live when this episode
+    happened) is set alongside `topic` specifically so
+    `compute_confidence`'s own cell-collapsing can group by (session,
+    axis) rather than (session, topic) — two confirmations of the same
+    axis in the same session are one observation regardless of what
+    topic label each carried. `None` for evidence with no live axis
+    (a stated-preference or contradicted_intent trigger with no option
+    set behind it), in which case cell-collapsing falls back to topic.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    claim_id: UUID
+    learner_id: UUID
+    interaction_id: UUID
+    direction: EvidenceDirection
+    topic: str
+    axis: ApproachAxis | None = None
+    session_id: UUID
+    test_fired: bool
+    contradiction_was_possible: bool
+    created_at: datetime = Field(default_factory=_utcnow)
+    # Nullable, free-text, set by human diagnosis after the fact (never
+    # automatically -- "if you could detect contamination automatically
+    # you'd have prevented it") when this row is known to have come
+    # from a broken test harness rather than genuine learner behavior.
+    # Does NOT exclude the row from production confidence/status -- it
+    # still counts, because it records what actually happened. Lets
+    # `score_predictions.py`'s --exclude-contaminated flag and the
+    # review surface separate the two pictures. Free text, not an enum,
+    # since future harness bugs can't be enumerated in advance.
+    provenance_note: str | None = None
+
+
+class ClaimStatementRecord(BaseModel):
+    """One rendering of a claim's (axis, value) against its evidence at
+    some point in time — append-only (migration 048), same pattern as
+    `turn_outcomes`. `Claim.statement` is set once at creation and
+    never edited (see that model's own docstring); THIS table is what
+    accumulates as evidence grows and generalizes past the founding
+    episode's domain (see `claims.maybe_restate_claims`) — axis and
+    value are the claim's immutable identity, evidence attaches by
+    them, but the prose describing them is derivable from accumulated
+    evidence and can be regenerated without touching what the claim IS.
+
+    The first row for any claim is written at claim-creation time with
+    the same text as `Claim.statement` — readers resolve to the LATEST
+    row per `claim_id`, never to `Claim.statement` directly, so a claim
+    with no restatement yet and one with several both resolve
+    correctly. Keeping every prior row (rather than overwriting) means
+    the wording's drift as evidence accumulated stays visible on
+    request, the same audit-trail principle as every other append-only
+    store in this codebase."""
+
+    id: UUID = Field(default_factory=uuid4)
+    claim_id: UUID
+    statement: str
+    derived_from_evidence_count: int
+    generator_version: str
+    created_at: datetime = Field(default_factory=_utcnow)
+
+
+class ClaimCandidate(BaseModel):
+    """One `ClaimExtractor`-proposed candidate for a single episode —
+    not itself DB-backed; `claims.reconcile_candidate` turns it into
+    either a fresh `Claim` row or a new `ClaimEvidence` row against an
+    existing one. Multiple candidates from the SAME episode are kept
+    side by side, deliberately, when the extractor judges the episode
+    underdetermined — see `ClaimExtractor`'s own docstring for why that
+    is a finding about the evidence, not something to resolve by
+    picking the most plausible one."""
+
+    statement: str
+    test: str
+    value: StatedPreferenceLabel
+    topic: str
+
+
+class ClaimExtractionResult(BaseModel):
+    """`ClaimExtractor`'s raw output for one episode — zero, one, or
+    several competing `ClaimCandidate`s. Empty is the expected, normal
+    result for most extraction-eligible turns: being ranked into the
+    extraction set (by prediction error, `contradicted_intent`, or a
+    stated preference) does not by itself guarantee the episode
+    actually licenses a testable claim."""
+
+    candidates: list[ClaimCandidate] = Field(default_factory=list)
 
 
 class Prediction(BaseModel):

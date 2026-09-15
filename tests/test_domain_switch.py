@@ -87,7 +87,9 @@ async def test_assess_and_branch_education_mode_is_the_default():
 
 @pytest.mark.asyncio
 async def test_disambiguation_options_general_mode_phrases_as_interpretations():
-    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": "[]"})
+    llm = StubLLMClient(
+        canned={"DISAMBIGUATE:OPTIONS": json.dumps({"kind": "subject", "axis": None, "options": []})}
+    )
     node = DisambiguationOptions(llm, domain_config=DomainConfig.general())
     branches = [
         DisambiguationBranch(disambiguation_turn_id=__import__("uuid").uuid4(),

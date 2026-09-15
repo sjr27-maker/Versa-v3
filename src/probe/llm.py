@@ -460,16 +460,52 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         },
         "required": ["needs_branches"],
     },
+    # Updated for the kind/axis decision disambiguate.DisambiguationOptions
+    # now makes (see that class's own docstring for the audit that
+    # required it) -- previously a bare ARRAY of {branch_id, text}. A
+    # live check confirmed the schema is what actually governs the
+    # shape: with the OLD array schema still in force, the model kept
+    # returning a bare array regardless of what the prompt text asked
+    # for, exactly the same failure mode BASELINE:TEACH/FINAL:ANSWER's
+    # own comments already document for response_mime_type -- the
+    # schema constrains structured output at the API level and
+    # overrides prompt instructions, not the other way around.
     "DISAMBIGUATE:OPTIONS": {
-        "type": "ARRAY",
-        "items": {
-            "type": "OBJECT",
-            "properties": {
-                "branch_id": {"type": "STRING"},
-                "text": {"type": "STRING"},
+        "type": "OBJECT",
+        "properties": {
+            "kind": {"type": "STRING", "enum": ["subject", "approach"]},
+            "axis": {
+                "type": "STRING",
+                "nullable": True,
+                "enum": [
+                    "concrete_general", "scope_narrow_broad", "rigor_intuition",
+                    "mechanism_procedure", "worked_steps_result", "analogy_formal",
+                    "single_example_pattern", "forward_derivation_backward_verification",
+                    "brevity_depth", "structured_narrative",
+                ],
             },
-            "required": ["branch_id", "text"],
+            "options": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "branch_id": {"type": "STRING"},
+                        "text": {"type": "STRING"},
+                        # nullable, not required: a subject-kind option
+                        # carries no side (there's no axis to be a pole
+                        # of) -- see OptionProposal's own docstring for
+                        # why this is decided and persisted here rather
+                        # than inferred downstream from option text.
+                        "side": {
+                            "type": "STRING", "nullable": True,
+                            "enum": ["first", "second"],
+                        },
+                    },
+                    "required": ["branch_id", "text"],
+                },
+            },
         },
+        "required": ["kind", "options"],
     },
     # FinalAnswer's output is shown straight to the student, same
     # reasoning as TEACH:/BASELINE:TEACH — no JSON mode, or Gemini
@@ -520,6 +556,44 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
     # Keys are option ids decided per-call -- same reasoning as
     # SCORE:INFO_UPDATE, no fixed schema possible.
     "PREDICT:SELECTION": _JSON_ONLY,
+    # claims.ClaimExtractor -- a JSON ARRAY (zero, one, or several
+    # competing candidates from one episode), each carrying the SAME
+    # closed-vocabulary "value" stated_preferences already uses (see
+    # claims.py's own module docstring for why). Explicitly registered
+    # rather than left to fall through to _JSON_ONLY's schema-less
+    # default: a live check during DisambiguationOptions' own redesign
+    # confirmed the response schema, not the prompt text, is what
+    # actually governs shape -- worth pinning here from the start
+    # rather than discovering the same failure mode again.
+    "EXTRACT:CLAIM": {
+        "type": "ARRAY",
+        "items": {
+            "type": "OBJECT",
+            "properties": {
+                "statement": {"type": "STRING"},
+                "test": {"type": "STRING"},
+                "value": {
+                    "type": "STRING",
+                    "enum": [
+                        "concrete_before_abstract", "rule_before_example",
+                        "wants_steps_shown", "prefers_brevity", "wants_analogies",
+                        "no_analogies", "other",
+                    ],
+                },
+                "topic": {"type": "STRING"},
+            },
+            "required": ["statement", "test", "value", "topic"],
+        },
+    },
+    # Explicitly registered for the same reason EXTRACT:CLAIM is --
+    # pinning a schema for a single-field object is cheap insurance
+    # against the same "schema silently overrides prompt text" failure
+    # mode, not left to fall through to _JSON_ONLY's schema-less default.
+    "RESTATE:CLAIM": {
+        "type": "OBJECT",
+        "properties": {"statement": {"type": "STRING"}},
+        "required": ["statement"],
+    },
 }
 
 

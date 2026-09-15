@@ -119,6 +119,7 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
     reference-resolution classification itself all still run off the
     critical path.
     """
+    from probe.claims import ClaimStore
     from probe.interactions import (
         InteractionAbstractStore,
         InteractionOptionStore,
@@ -148,6 +149,7 @@ def _build_interaction_pipeline(pool, embedding_client: EmbeddingClient) -> dict
         "retrieval_pool": pool,
         "stated_preference_store": StatedPreferenceStore(pool),
         "reference_binding_store": ReferenceBindingStore(pool),
+        "claim_store": ClaimStore(pool),
     }
 
 
@@ -300,6 +302,91 @@ async def _run_migrations(status_only: bool, do_baseline: bool) -> None:
         await pool.close()
 
 
+async def _review_claims(learner_spec: str) -> None:
+    """`probe review-claims` -- the claim layer's review surface (per
+    its own spec: "list every claim with its statement, test, status,
+    confidence, evidence count, topic spread, and links to the
+    interactions behind it"). Read-only; makes no LLM call and writes
+    nothing.
+
+    Shows the CURRENT (latest `claim_statements` row) statement, not
+    `Claim.statement` directly -- see `claims.maybe_restate_claims`'s
+    own docstring for why those can differ. When they differ, both are
+    printed (current, then the original founding wording) so the
+    drift is visible without a separate query. Any evidence row
+    carrying a `provenance_note` (a human-diagnosed harness bug) shows
+    it inline, so a reader doesn't have to remember which row was
+    flagged."""
+    from probe.claims import ClaimStore
+
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        learner = await _resolve_learner(LearnerStore(pool), learner_spec)
+        store = ClaimStore(pool)
+        claims = await store.list_for_learner(learner.id)
+        if not claims:
+            print(f"probe: no claims for learner {learner.id}")
+            return
+        for claim in claims:
+            evidence = await store.list_evidence(claim.id)
+            topics = sorted({e.topic for e in evidence})
+            current_statement = await store.get_current_statement(claim.id)
+            print(f"\n[{claim.status.value}] {claim.id}")
+            if current_statement is not None and current_statement.statement != claim.statement:
+                print(f"  statement (current): {current_statement.statement}")
+                print(f"  statement (founding): {claim.statement}")
+            else:
+                print(f"  statement: {claim.statement}")
+            print(f"  test: {claim.test}")
+            print(f"  value: {claim.value.value}   confidence: {claim.confidence:.3f}")
+            print(f"  source: {claim.source.value}   write_policy: {claim.write_policy.value}")
+            print(f"  evidence: {len(evidence)} row(s) across {len(topics)} topic(s): {topics}")
+            for e in evidence:
+                note = f"  [FLAGGED: {e.provenance_note}]" if e.provenance_note else ""
+                print(
+                    f"    - {e.direction.value} | topic={e.topic!r} | "
+                    f"interaction={e.interaction_id} | session={e.session_id} | "
+                    f"test_fired={e.test_fired} contradiction_possible="
+                    f"{e.contradiction_was_possible}{note}"
+                )
+    finally:
+        await pool.close()
+
+
+async def _score_predictions(exclude_contaminated: bool) -> None:
+    """`probe score-predictions` -- the reliability-diagram check
+    score_predictions.py exists for: scores every claim's evidence
+    history against itself (see that module's own docstring for why
+    that's not circular) and prints observed-vs-predicted hit rate per
+    confidence bucket, plus an overall Brier score. Read-only, no LLM
+    call, pools across every learner (a calibration question about the
+    confidence formula, not about any one learner).
+
+    `--exclude-contaminated` prints BOTH pictures -- the full one
+    (identical to production confidence, contaminated rows included)
+    and one with every human-flagged (`provenance_note`) row dropped
+    entirely -- so a real miscalibration can be told apart from a known
+    harness bug's effect on the curve, without ever hiding the
+    contaminated rows from production itself."""
+    from probe.claims import ClaimStore
+    from probe.score_predictions import format_reliability_diagram, score_predictions_for_all_learners
+
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        store = ClaimStore(pool)
+        bins, overall_brier, total_trials = await score_predictions_for_all_learners(store)
+        print("ALL EVIDENCE (production picture):")
+        print(format_reliability_diagram(bins, overall_brier, total_trials))
+        if exclude_contaminated:
+            clean_bins, clean_brier, clean_total = await score_predictions_for_all_learners(
+                store, exclude_contaminated=True
+            )
+            print("\nEXCLUDING FLAGGED (provenance_note) ROWS:")
+            print(format_reliability_diagram(clean_bins, clean_brier, clean_total))
+    finally:
+        await pool.close()
+
+
 def _serve(host: str, port: int) -> None:
     """`probe serve` — the calm single-page UI (probe/static/) backed by
     the Starlette API in webserver.py, over the same SessionLoop the CLI
@@ -365,6 +452,30 @@ def main() -> None:
         "it - for a database that already has the full schema but no "
         "schema_migrations ledger (e.g. a hand-migrated dev DB)",
     )
+    review_claims_parser = subparsers.add_parser(
+        "review-claims",
+        help="read-only listing of one learner's claims (claims.py): "
+        "statement, test, status, confidence, evidence count, topic "
+        "spread, and the interactions each evidence row points at",
+    )
+    review_claims_parser.add_argument(
+        "--learner", required=True,
+        help="learner label or an existing learner's UUID",
+    )
+    score_predictions_parser = subparsers.add_parser(
+        "score-predictions",
+        help="read-only reliability-diagram check (score_predictions.py): "
+        "scores every claim's evidence history against itself and "
+        "prints observed-vs-predicted hit rate per confidence bucket "
+        "plus an overall Brier score -- the check clamp_confidence_for_"
+        "decisions' [0.3, 0.7] clamp is waiting on before it can move",
+    )
+    score_predictions_parser.add_argument(
+        "--exclude-contaminated", action="store_true",
+        help="also print the reliability diagram with every human-flagged "
+        "(provenance_note) evidence row excluded, alongside the normal "
+        "(production) picture",
+    )
     serve_parser = subparsers.add_parser(
         "serve",
         help="launch the calm single-page web UI (Starlette API + probe/static/)",
@@ -385,6 +496,10 @@ def main() -> None:
         asyncio.run(_consolidate_session(args.session_id, args.stub))
     elif args.command == "aggregate-patterns":
         asyncio.run(_aggregate_patterns())
+    elif args.command == "review-claims":
+        asyncio.run(_review_claims(args.learner))
+    elif args.command == "score-predictions":
+        asyncio.run(_score_predictions(args.exclude_contaminated))
     elif args.command == "migrate":
         asyncio.run(_run_migrations(args.status, args.baseline))
     elif args.command == "serve":

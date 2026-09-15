@@ -115,11 +115,14 @@ import asyncpg
 from probe.domain_config import DomainConfig
 from probe.llm import LLMClient
 from probe.models import (
+    AmbiguityKind,
+    ApproachAxis,
     DisambiguationAssessment,
     DisambiguationBranch,
     DisambiguationTurn,
     Option,
     OptionProposal,
+    OptionSet,
     OptionStatus,
 )
 from probe.row_mapping import assert_row_consumed
@@ -319,58 +322,163 @@ class AssessAndBranch:
         return DisambiguationAssessment(needs_branches=False, branch_statements=[])
 
 
+# The closed vocabulary an APPROACH-kind option set must pick exactly
+# one member of, in the prompt's own words. Kept in sync with
+# ApproachAxis (models.py) by hand -- one name per enum value, in the
+# same order -- since the enum is the machine-checked contract and this
+# string is what actually teaches the model what each name means.
+# Three of these (concrete_general, scope_narrow_broad, rigor_intuition)
+# are the axes a real audit found this generator already reaching for
+# on its own; the rest were added specifically because three axes cap
+# what any downstream preference-learning step could ever discover,
+# no matter how many sessions run.
+_AXIS_DESCRIPTIONS = (
+    "- concrete_general: a concrete worked example with specific numbers "
+    "or cases first, versus the general rule or definition first\n"
+    "- scope_narrow_broad: a narrow slice of the topic, versus "
+    "comprehensive coverage of it\n"
+    "- rigor_intuition: a formal, rigorous treatment, versus an "
+    "informal, intuitive one\n"
+    "- mechanism_procedure: why it works (the underlying mechanism or "
+    "derivation), versus how to do it (the procedure or steps)\n"
+    "- worked_steps_result: every intermediate step shown explicitly, "
+    "versus jumping straight to the result\n"
+    "- analogy_formal: an everyday analogy or comparison, versus the "
+    "subject's own formal or technical terms\n"
+    "- single_example_pattern: one worked example, versus the general "
+    "pattern illustrated across multiple cases\n"
+    "- forward_derivation_backward_verification: deriving forward from "
+    "first principles, versus starting from a known answer and "
+    "verifying backward\n"
+    "- brevity_depth: a short, minimal answer, versus a thorough, "
+    "detailed one\n"
+    "- structured_narrative: a bulleted or structured breakdown, versus "
+    "a flowing prose explanation\n"
+)
+
+# Approach-kind options must land within this relative character-count
+# difference of each other -- "length-match by construction" per this
+# feature's own review, so a later look at selection data never has to
+# ask whether a click reflects preference or just button length.
+_LENGTH_MATCH_TOLERANCE = 0.25
+
+
 def _options_prompt(
     candidates: list[DisambiguationBranch],
+    message: str,
+    recent_history: str = "",
+    reference_binding_hint: str = "",
     rejected_reason: str = "",
     domain: DomainConfig | None = None,
 ) -> str:
     d = domain or DomainConfig.education()
     listing = "\n".join(f"- id={b.id}: {b.statement}" for b in candidates)
     hi = min(_MAX_BRANCHES, len(candidates))
+    context_block = ""
+    if recent_history:
+        context_block += (
+            "\nRecent conversation, for judging whether the subject is "
+            f"already settled:\n{recent_history}\n"
+        )
+    if reference_binding_hint:
+        context_block += reference_binding_hint
     correction = ""
     if rejected_reason:
-        correction = (
-            f"\nYour previous attempt was rejected: {rejected_reason}. Every "
-            "option must map to a DIFFERENT branch id from the list below, "
-            "and every branch id used must be one of the ids listed.\n"
-        )
+        correction = f"\nYour previous attempt was rejected: {rejected_reason}.\n"
     return (
         "DISAMBIGUATE:OPTIONS\n"
-        f"The {d.actor_noun}'s last message could plausibly mean any of "
-        f"these distinct things:\n{listing}\n\n"
-        f"Propose exactly one clickable option per reading -- between "
-        f"{_MIN_BRANCHES} and {hi} options total. Each option must map "
-        f"to exactly ONE of the branch ids above and must be phrased as "
-        f"{d.options_style_phrase} -- a genuine continuation of the "
-        f"conversation, not a survey question about the {d.actor_noun} and "
-        'not a bare restatement like "did you mean X."\n\n'
+        f"{context_block}"
+        f"\n{d.actor_noun.capitalize()}'s message: {message}\n\n"
+        f"These are the candidate distinct readings of that message:\n{listing}\n\n"
+        "FIRST, decide which kind of ambiguity is actually live here:\n"
+        '- "subject": the readings genuinely disagree about WHAT TOPIC '
+        "or subject the message concerns, and that has not already been "
+        "settled by the context above.\n"
+        '- "approach": the topic is already clear -- from the context '
+        "above, or because the readings don't actually name different "
+        "topics -- and the real choice is about HOW to address it, not "
+        "what it's about.\n\n"
+        'IF "subject": produce one clickable option per reading that is '
+        "genuinely about a different topic -- between "
+        f"{_MIN_BRANCHES} and {hi} options total, each mapped to exactly "
+        f"ONE of the branch ids above, phrased as {d.options_style_phrase}. "
+        "Leave out any reading for a topic the context above has already "
+        "ruled out, even if it's in the candidate list.\n\n"
+        'IF "approach": discard every reading that names a different '
+        "topic than the one already established, even if it's in the "
+        "candidate list above -- do not build an option from it. From "
+        "the topic-consistent reading(s) left, choose EXACTLY ONE axis "
+        "from the list below -- the one that best captures the real "
+        f"difference -- and produce EXACTLY TWO options, mapped to two "
+        "DIFFERENT branch ids from the topic-consistent readings, that "
+        "differ ONLY along that axis and nothing else: same length "
+        "(within about 15%), same level of specificity about the "
+        f"subject, differing only in the dimension named:\n{_AXIS_DESCRIPTIONS}\n"
+        "For each of the two options, also declare which pole of that "
+        "axis it represents: \"first\" for the FIRST-named pole (e.g. "
+        "for concrete_general, the concrete side) or \"second\" for the "
+        "SECOND-named pole (e.g. the general side) -- the two options "
+        "must be on opposite sides.\n\n"
+        "If fewer than two topic-consistent readings remain, return an "
+        "empty options list rather than forcing a choice.\n\n"
         "Hard rules:\n"
         "- Exactly one branch per option, exactly one claim per "
         "option -- no bundling two readings into one button.\n"
         "- Write it as a real question or statement, not a menu item "
-        "or a label.\n"
+        "or a label, not a survey question about the "
+        f"{d.actor_noun}, and not a bare restatement like \"did you mean X.\"\n"
         f"{correction}"
-        'Respond with JSON: [{"branch_id": "<id>", "text": "..."}, ...]'
+        'Respond with JSON: {"kind": "subject" or "approach", "axis": '
+        '"<one of the axis names above, or null if kind is subject>", '
+        '"options": [{"branch_id": "<id>", "text": "...", "side": '
+        '"first" or "second" (omit/null if kind is subject)}, ...]}'
     )
 
 
-def _parse_options_response(
-    raw: str, valid_ids: set[UUID]
-) -> list[OptionProposal] | None:
-    """Same all-or-nothing discipline as
-    hypothesis_generator._parse_options_response: a single duplicate or
-    invalid mapping invalidates the whole batch."""
+def _parse_options_response(raw: str, valid_ids: set[UUID]) -> OptionSet | None:
+    """All-or-nothing per field, same discipline as
+    hypothesis_generator._parse_options_response for the option list
+    itself, extended to the kind/axis decision this feature's own
+    review added: a malformed kind, an axis given for a subject-kind
+    response (or missing for an approach-kind one), an approach-kind
+    response that isn't exactly two options, two options whose lengths
+    diverge by more than `_LENGTH_MATCH_TOLERANCE`, a missing/invalid
+    `side` on an approach-kind option, a `side` present on a subject-
+    kind option, or two approach-kind options both claiming the SAME
+    side all invalidate the whole response and trigger a retry -- see
+    DisambiguationOptions.run.
+    """
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         return None
-    if not isinstance(parsed, list):
+    if not isinstance(parsed, dict):
         return None
-    if not parsed:
-        return []
+
+    try:
+        kind = AmbiguityKind(parsed.get("kind"))
+    except ValueError:
+        return None
+
+    axis_raw = parsed.get("axis")
+    axis: ApproachAxis | None = None
+    if kind is AmbiguityKind.APPROACH:
+        try:
+            axis = ApproachAxis(axis_raw)
+        except ValueError:
+            return None
+    elif axis_raw is not None:
+        return None  # a subject-kind response must not also carry an axis
+
+    raw_options = parsed.get("options")
+    if not isinstance(raw_options, list):
+        return None
+    if not raw_options:
+        return OptionSet(kind=kind, axis=axis, proposals=[])
+
     seen_branch_ids: set[UUID] = set()
     proposals: list[OptionProposal] = []
-    for item in parsed:
+    for item in raw_options:
         if not isinstance(item, dict):
             return None
         text = item.get("text")
@@ -384,21 +492,81 @@ def _parse_options_response(
         if branch_id not in valid_ids or branch_id in seen_branch_ids:
             return None
         seen_branch_ids.add(branch_id)
-        proposals.append(OptionProposal(branch_id=branch_id, text=str(text)))
-    return proposals
+        side_raw = item.get("side")
+        if kind is AmbiguityKind.APPROACH:
+            if side_raw not in ("first", "second"):
+                return None  # every approach-kind option must declare its side
+        elif side_raw is not None:
+            return None  # a subject-kind option must not also carry a side
+        proposals.append(OptionProposal(branch_id=branch_id, text=str(text), side=side_raw))
+
+    if kind is AmbiguityKind.APPROACH:
+        if len(proposals) != 2:
+            return None
+        len_a, len_b = len(proposals[0].text), len(proposals[1].text)
+        if abs(len_a - len_b) / max(len_a, len_b) > _LENGTH_MATCH_TOLERANCE:
+            return None
+        if proposals[0].side == proposals[1].side:
+            return None  # both options claimed the same side -- not a real split
+
+    return OptionSet(kind=kind, axis=axis, proposals=proposals)
 
 
 class DisambiguationOptions:
-    """Step 2: one clickable option per branch. Only ever called when
-    `AssessAndBranch` produced at least one branch this turn.
+    """Step 2: decide what KIND of ambiguity is actually live, then
+    build a clickable option set of that kind only. Only ever called
+    when `AssessAndBranch` produced at least one branch this turn.
 
-    A response with any duplicate or invalid branch mapping is
-    rejected wholesale and regenerated once (_MAX_OPTIONS_ATTEMPTS); if
-    it still fails, this returns an empty list rather than an ambiguous
+    The kind decision exists because a real audit found it missing: 5
+    of 6 "mixed" option sets in a hand-classified sample put a
+    different-TOPIC option (e.g. financial derivatives) into a set
+    where the session's own history, and in one case an active
+    reference binding, had already settled the subject as calculus.
+    Session history and `reference_binding_hint` were both available
+    at generation time and still didn't stop it, because nothing ever
+    asked the model to check. `message`/`recent_history`/
+    `reference_binding_hint` exist on this call specifically to make
+    that check possible — the same recent-history window
+    `AssessAndBranch` already reasoned against, plus the same
+    exact-matched reference-binding text `_build_reference_binding_hint`
+    computes for it (see loop.py), threaded here unchanged.
+
+    A click from a set that mixes topic and style is uninterpretable:
+    there is no way to tell afterward whether the student was choosing
+    a subject or a way of being taught. This class enforces the split
+    at generation time so that never happens:
+
+    - kind=SUBJECT: one option per branch that names a genuinely
+      different, still-open topic (up to `_MAX_BRANCHES` of them, same
+      as before this existed). A branch whose topic the context above
+      already rules out is left out, not rendered.
+    - kind=APPROACH: exactly ONE axis (`ApproachAxis`) is chosen from a
+      closed, ten-member vocabulary, and exactly TWO options are built
+      from it, differing only along that axis and length-matched
+      within `_LENGTH_MATCH_TOLERANCE`. A single axis structurally
+      cannot produce a confounded three-way set — there is no third
+      side to one dimension — which is what actually rules that failure
+      mode out, not a validation check bolted on after the fact.
+
+    Fewer than two topic-consistent branches survive for an
+    APPROACH-kind decision -> empty options, same "nothing to click"
+    degrade as any other rejected response (see below).
+
+    A response with an invalid kind, a mismatched axis, any duplicate
+    or invalid branch mapping, or (for APPROACH) anything other than
+    exactly two length-matched options is rejected wholesale and
+    regenerated once (`_MAX_OPTIONS_ATTEMPTS`); if it still fails, this
+    returns an empty-proposals `OptionSet` rather than an ambiguous
     mapping — `SessionLoop._handle_disambiguation_turn` treats that the
     same as "nothing to click," falling back to answering the original
     message directly rather than showing broken buttons or dropping the
     turn.
+
+    `kind`/`axis` are returned on `OptionSet`, not just the proposals —
+    captured verbatim in `node_calls.output_json` (CLAUDE.md invariant
+    2), so which axis a set actually varied on is a recorded decision,
+    never something a later analysis has to reverse-engineer from
+    option text.
 
     Same role and validation discipline as
     hypothesis_generator.GenerateOptions, deliberately given a
@@ -415,27 +583,40 @@ class DisambiguationOptions:
         self._domain = domain_config or DomainConfig.education()
         self.last_call_count: int = 0
 
-    async def run(self, branches: list[DisambiguationBranch]) -> list[OptionProposal]:
+    async def run(
+        self,
+        branches: list[DisambiguationBranch],
+        message: str = "",
+        recent_history: str = "",
+        reference_binding_hint: str = "",
+    ) -> OptionSet:
         self.last_call_count = 0
         if not branches:
-            return []
+            return OptionSet()
         valid_ids = {b.id for b in branches}
         rejected_reason = ""
         for _ in range(_MAX_OPTIONS_ATTEMPTS):
             raw = await self._llm.complete(
-                _options_prompt(branches, rejected_reason, self._domain)
+                _options_prompt(
+                    branches, message, recent_history, reference_binding_hint,
+                    rejected_reason, self._domain,
+                )
             )
             self.last_call_count += 1
-            proposals = _parse_options_response(raw, valid_ids)
-            if proposals is not None:
-                return proposals
-            rejected_reason = "duplicate branch id, or a branch id not in the live set"
+            result = _parse_options_response(raw, valid_ids)
+            if result is not None:
+                return result
+            rejected_reason = (
+                "malformed kind/axis, a duplicate or invalid branch id, or "
+                "(for an approach-kind response) not exactly two "
+                "length-matched options"
+            )
         logger.warning(
-            "GenerateOptions (disambiguate): exhausted %d attempt(s) with "
-            "only invalid mappings -- showing no options this turn",
+            "DisambiguationOptions: exhausted %d attempt(s) with only "
+            "invalid responses -- showing no options this turn",
             _MAX_OPTIONS_ATTEMPTS,
         )
-        return []
+        return OptionSet()
 
 
 class FinalAnswer:
@@ -515,6 +696,18 @@ class FinalAnswer:
     requirement) actively produces a wrong answer, not just a
     differently-shaped right one.
 
+    `claim_constraints_block` (claims.py) is a SIXTH kind of context,
+    placed directly after `structural_requirement` -- a promoted
+    `Claim` (an inferred, cross-topic-confirmed standing trait, not an
+    explicit statement) rendered the identical way
+    `structural_requirement` is: a deterministic label -> hand-written
+    imperative lookup, no LLM on the read path (see
+    `claims.render_claim_constraint`). A `candidate`-status claim never
+    reaches this block at all. Empty in practice under the claim
+    layer's current confidence clamp (see `claims.
+    clamp_confidence_for_decisions`) -- wired in now so nothing else
+    has to change once calibration lifts it.
+
     Best tier: this is what the student actually sees, same tier as
     Teach/BaselineTeach.
 
@@ -523,7 +716,7 @@ class FinalAnswer:
     (general) -- the opening role line and the closing "never end by
     asking..." line, plus every "student"/"person" noun in the blocks
     below. Nothing else about this method's structure changes: the
-    same five kinds of context, in the same order, regardless of
+    same six kinds of context, in the same order, regardless of
     domain.
     """
 
@@ -541,6 +734,7 @@ class FinalAnswer:
         learner_history_block: str = "",
         structural_requirement: str = "",
         reference_bindings_block: str = "",
+        claim_constraints_block: str = "",
     ) -> str:
         """`learner_history_block` is a fully pre-rendered block from
         history_block.py — this method never builds it, only places it
@@ -592,6 +786,7 @@ class FinalAnswer:
             "FINAL:ANSWER\n"
             f"{d.final_answer_role_line}"
             f"{structural_requirement}"
+            f"{claim_constraints_block}"
             f"{context_block}"
             f"{memory_block}"
             f"{reference_bindings_block}"

@@ -88,10 +88,14 @@ async def test_fact_written_for_a_branch_resolution_turn(
         latest = await disambiguation_store.get_latest_turn(session_id)
         branches = await disambiguation_store.list_branches_for_turn(latest.id)
         return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "the power rule?"},
-                {"branch_id": str(branches[1].id), "text": "a worked example?"},
-            ]
+            {
+                "kind": "subject",
+                "axis": None,
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "the power rule?"},
+                    {"branch_id": str(branches[1].id), "text": "a worked example?"},
+                ],
+            }
         )
 
     class _AsyncCannedLLM(StubLLMClient):
@@ -150,10 +154,14 @@ async def test_options_only_turn_writes_no_fact(
         latest = await disambiguation_store.get_latest_turn(session_id)
         branches = await disambiguation_store.list_branches_for_turn(latest.id)
         return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "the power rule?"},
-                {"branch_id": str(branches[1].id), "text": "a worked example?"},
-            ]
+            {
+                "kind": "subject",
+                "axis": None,
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "the power rule?"},
+                    {"branch_id": str(branches[1].id), "text": "a worked example?"},
+                ],
+            }
         )
 
     class _AsyncCannedLLM(StubLLMClient):

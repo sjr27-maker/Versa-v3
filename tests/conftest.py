@@ -51,6 +51,9 @@ async def pool():
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
         await conn.execute("DROP TABLE IF EXISTS predictions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS claim_statements CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS claim_evidence CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS claims CASCADE")
         await conn.execute("DROP TABLE IF EXISTS reference_bindings CASCADE")
         await conn.execute("DROP TABLE IF EXISTS stated_preferences CASCADE")
         await conn.execute("DROP TABLE IF EXISTS turn_outcomes CASCADE")
@@ -123,7 +126,8 @@ async def clean_pool(pool):
             "TRUNCATE evidence_records, node_calls, turn_diagnostics, turns, "
             "sessions, learners, disambiguation_options, disambiguation_branches, "
             "disambiguation_turns, learner_facts, thinking_style_candidates, "
-            "predictions, stated_preferences, reference_bindings, turn_outcomes, "
+            "predictions, claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
+            "turn_outcomes, "
             "interaction_abstracts, "
             "interaction_options, interactions, population_patterns "
             "RESTART IDENTITY CASCADE"
@@ -215,6 +219,13 @@ async def reference_binding_store(clean_pool):
     from probe.interactions import ReferenceBindingStore
 
     return ReferenceBindingStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def claim_store(clean_pool):
+    from probe.claims import ClaimStore
+
+    return ClaimStore(clean_pool)
 
 
 @pytest_asyncio.fixture

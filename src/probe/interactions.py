@@ -302,8 +302,8 @@ class InteractionOptionStore:
                     INSERT INTO interaction_options (
                         id, interaction_id, learner_id, option_id, branch_id,
                         option_text, shown_position, was_selected,
-                        selection_timestamp, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        selection_timestamp, kind, axis, side, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     """,
                     o.id,
                     o.interaction_id,
@@ -314,6 +314,9 @@ class InteractionOptionStore:
                     o.shown_position,
                     o.was_selected,
                     o.selection_timestamp,
+                    o.kind.value if o.kind else None,
+                    o.axis.value if o.axis else None,
+                    o.side,
                     o.created_at,
                 )
         return options

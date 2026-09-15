@@ -119,10 +119,14 @@ async def test_ambiguous_message_persists_branches_and_options_with_no_answer_ye
         latest = await disambiguation_store.get_latest_turn(session_id)
         branches = await disambiguation_store.list_branches_for_turn(latest.id)
         return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "the power rule?"},
-                {"branch_id": str(branches[1].id), "text": "a worked example?"},
-            ]
+            {
+                "kind": "subject",
+                "axis": None,
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "the power rule?"},
+                    {"branch_id": str(branches[1].id), "text": "a worked example?"},
+                ],
+            }
         )
 
     class _AsyncCannedLLM(StubLLMClient):
@@ -218,10 +222,14 @@ async def test_click_resolves_to_final_answer_using_that_branchs_content(
         turn_id = latest.id
         branches = await disambiguation_store.list_branches_for_turn(latest.id)
         return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "the power rule?"},
-                {"branch_id": str(branches[1].id), "text": "a worked example?"},
-            ]
+            {
+                "kind": "subject",
+                "axis": None,
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "the power rule?"},
+                    {"branch_id": str(branches[1].id), "text": "a worked example?"},
+                ],
+            }
         )
 
     class _AsyncCannedLLM(StubLLMClient):
@@ -288,10 +296,14 @@ async def test_typed_past_options_supersedes_them_and_threads_context_into_next_
         turn_id_holder["id"] = latest.id
         branches = await disambiguation_store.list_branches_for_turn(latest.id)
         return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "the power rule?"},
-                {"branch_id": str(branches[1].id), "text": "a worked example?"},
-            ]
+            {
+                "kind": "subject",
+                "axis": None,
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "the power rule?"},
+                    {"branch_id": str(branches[1].id), "text": "a worked example?"},
+                ],
+            }
         )
 
     class _AsyncCannedLLM(StubLLMClient):

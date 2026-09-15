@@ -22,6 +22,12 @@ from typing import Protocol
 from google import genai
 from google.genai import types
 
+# Default matches llm.build_tier_clients' own default -- a stuck
+# connection (observed live: the embeddings endpoint can hang rather
+# than error, ~10 minutes with near-zero CPU) should fail fast enough
+# to retry within a session, not tie one up indefinitely.
+DEFAULT_TIMEOUT_SECONDS = 30.0
+
 # Baked into migration 030's `vector(768)` columns and HNSW indexes —
 # see module docstring for why 768, not the model's native 3072.
 EMBEDDING_DIM = 768
@@ -111,13 +117,27 @@ class GeminiEmbeddingClient:
         return list(response.embeddings[0].values)
 
 
-def build_embedding_client(api_key: str, model: str | None = None) -> EmbeddingClient:
+def build_embedding_client(
+    api_key: str,
+    model: str | None = None,
+    *,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+) -> EmbeddingClient:
     """Mirrors llm.build_tier_clients' construction pattern, scaled
     down to the one client the memory layer needs -- no pooling, since
     embedding calls aren't expected to fan out concurrently the way
-    Plan's candidate scoring does."""
+    Plan's candidate scoring does.
+
+    `timeout_seconds` sets `http_options.timeout` the same way
+    build_tier_clients does -- without it, a hung connection to the
+    embeddings endpoint blocks for whatever the SDK/transport default
+    is (observed live: ~10 minutes) instead of failing fast enough for
+    a caller's own retry to matter."""
     from probe.model_config import ModelTierConfig
 
     resolved_model = model or ModelTierConfig.from_env().embedding
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=int(timeout_seconds * 1000)),
+    )
     return GeminiEmbeddingClient(client, resolved_model)

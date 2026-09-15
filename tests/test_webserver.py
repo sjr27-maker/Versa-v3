@@ -54,10 +54,14 @@ class _BranchAwareStub:
         if prompt.startswith("DISAMBIGUATE:OPTIONS"):
             rows = re.findall(r"- id=([0-9a-f-]{36}): (.+)", prompt)
             return json.dumps(
-                [
-                    {"branch_id": bid, "text": _OPT_TEXT.get(stmt.strip(), "confirm?")}
-                    for bid, stmt in rows
-                ]
+                {
+                    "kind": "subject",
+                    "axis": None,
+                    "options": [
+                        {"branch_id": bid, "text": _OPT_TEXT.get(stmt.strip(), "confirm?")}
+                        for bid, stmt in rows
+                    ],
+                }
             )
         if prompt.startswith("FINAL:ANSWER"):
             return "here is the power rule"

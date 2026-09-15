@@ -37,7 +37,13 @@ _TWO_BRANCHES = json.dumps(
 
 def _options_for_branches(prompt: str) -> str:
     ids = re.findall(r"id=([0-9a-f-]{36})", prompt)
-    return json.dumps([{"branch_id": bid, "text": f"option {i}"} for i, bid in enumerate(ids)])
+    return json.dumps(
+        {
+            "kind": "subject",
+            "axis": None,
+            "options": [{"branch_id": bid, "text": f"option {i}"} for i, bid in enumerate(ids)],
+        }
+    )
 
 
 def _make_loop(

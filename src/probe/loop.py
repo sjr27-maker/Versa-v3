@@ -38,6 +38,8 @@ import asyncpg
 from probe.ablation import AblationConfig
 from probe.audit import NodeCallStore, TranscriptStore
 from probe.baseline import MAX_CALLS_PER_TURN, BaselineTeach
+from probe import claims as _claims
+from probe.claims import ClaimConfidenceConfig, ClaimExtractor, ClaimStore, ExtractionConfig
 from probe.diagnostics import TurnDiagnosticsStore
 from probe.domain_config import DomainConfig
 from probe.disambiguate import (
@@ -101,6 +103,7 @@ from probe.models import (
     InteractionOption,
     LearnerFactType,
     Option,
+    OptionSet,
     OptionStatus,
     Prediction,
     QuestionAuthor,
@@ -168,6 +171,9 @@ class SessionLoop:
         reference_binding_store: ReferenceBindingStore | None = None,
         reference_binding_config: ReferenceBindingConfig | None = None,
         domain_config: DomainConfig | None = None,
+        claim_store: ClaimStore | None = None,
+        claim_extraction_config: ExtractionConfig | None = None,
+        claim_confidence_config: ClaimConfidenceConfig | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -296,6 +302,20 @@ class SessionLoop:
         self.classify_reference_resolution = ClassifyReferenceResolution(
             tiers.fast, domain_config=self._domain_config
         )
+        # The claim layer (claims.py) -- session-end only, never per
+        # turn (see claims.py's own module docstring for why: extraction
+        # is anchored on prediction error, not "read every session").
+        # Gated on the store the same way the other optional layers
+        # above are; the extractor node is cheap to construct
+        # unconditionally.
+        self._claim_store = claim_store
+        self._claim_extraction_config = claim_extraction_config or ExtractionConfig()
+        self._claim_confidence_config = claim_confidence_config or ClaimConfidenceConfig()
+        self.claim_extractor = ClaimExtractor(tiers.fast)
+        # Held separately (not read off claim_extractor, a private
+        # detail of that class) for maybe_restate_claims's one fast-tier
+        # call per qualifying claim -- see consolidate_session.
+        self._claim_statement_llm = tiers.fast
         self.selection_predictor = selection_predictor or LLMSelectionPredictor(tiers.fast)
         # Strong references to fire-and-forget background tasks
         # (classification, abstraction, prediction) so they cannot be
@@ -1026,18 +1046,34 @@ class SessionLoop:
         ]
         await self._disambiguation.add_branches(branches)
 
-        proposals = await self._call_node_or_warn(
+        option_set = await self._call_node_or_warn(
             self.disambiguation_options,
             session_id,
             turn_index,
             "DisambiguationOptions",
-            [],
+            OptionSet(),
             warnings,
             branches=branches,
+            message=turn_text,
+            recent_history=recent_history,
+            reference_binding_hint=reference_binding_hint,
         )
         node_call_counts["DisambiguationOptions"] = (
             self.disambiguation_options.last_call_count
         )
+        proposals = option_set.proposals
+        if proposals and len(proposals) < len(branches):
+            # DisambiguationOptions dropped a branch (an off-topic
+            # subject reading the session's own context already ruled
+            # out, or -- for an approach-kind decision -- a branch
+            # beyond the two the chosen axis was built from). Explicit,
+            # not left dangling: an un-offered branch would otherwise
+            # sit in 'open' status forever, since only a click can move
+            # it to matched/superseded and it was never shown to click.
+            used_branch_ids = [p.branch_id for p in proposals]
+            await self._disambiguation.supersede_open_branches(
+                disamb_turn.id, exclude_ids=used_branch_ids
+            )
 
         if not proposals:
             # DisambiguationOptions produced nothing usable -- graceful
@@ -1142,6 +1178,18 @@ class SessionLoop:
                     branch_id=new_options[i].branch_id,
                     option_text=new_options[i].text,
                     shown_position=i,
+                    # Persisted here, not just in node_calls -- see
+                    # InteractionOption's own docstring for why claim
+                    # extraction needs this as a normal column, not
+                    # something to reverse-engineer from option text.
+                    kind=option_set.kind,
+                    axis=option_set.axis,
+                    # Per-option (unlike kind/axis, which repeat across
+                    # the set) -- shuffled_proposals[i] is the SAME
+                    # proposal new_options[i] was built from, so the
+                    # side lines up with this exact option, not just
+                    # the set as a whole.
+                    side=shuffled_proposals[i].side,
                 )
                 for i in range(len(new_options))
             ]
@@ -1335,6 +1383,35 @@ class SessionLoop:
                     exc_info=True,
                 )
 
+        # The claim layer's read side (claims.py): promoted claims only
+        # -- a candidate never renders (see render_claim_constraint's
+        # own docstring). Independent of stated_preferences' own
+        # mechanism above, which stays untouched; this is an additive,
+        # separately-gated read, same two-part discipline (a store
+        # to read plus its own failure isolation) as every other
+        # optional layer here. Under the current confidence clamp
+        # (claims.clamp_confidence_for_decisions) no claim can be
+        # promoted yet, so this reads as an empty list in practice --
+        # wired in now so nothing else has to change once calibration
+        # lifts that clamp.
+        claim_constraints_block = ""
+        if self._claim_store is not None:
+            try:
+                promoted = await self._claim_store.list_promoted_for_learner(learner_id)
+                if promoted:
+                    claim_constraints_block = "".join(
+                        _claims.render_claim_constraint(c) for c in promoted
+                    )
+            except Exception as exc:
+                warnings.append(f"claim constraint lookup failed: {exc}")
+                logger.warning(
+                    "Claim constraint lookup failed on turn %d for session %s: %s",
+                    turn_index,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+
         try:
             message = await self._call_node(
                 self.final_answer,
@@ -1347,6 +1424,7 @@ class SessionLoop:
                 learner_history_block=learner_history_block,
                 structural_requirement=structural_requirement,
                 reference_bindings_block=reference_bindings_block,
+                claim_constraints_block=claim_constraints_block,
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
             return message, False, history_source_ids, reference_binding_ids
@@ -1408,6 +1486,82 @@ class SessionLoop:
         if self._interaction_recorder is not None and self._turn_outcomes is not None:
             await self._interaction_recorder.mark_trailing_interaction_deferred(session_id)
 
+        learner_id = await self._transcript.get_learner_id(session_id)
+
+        # The claim layer's session-end hook (claims.py) -- run
+        # unconditionally here too, before the thinking-style-layer
+        # early return below, for the identical reason the trailing-
+        # deferred marking above is: this has nothing to do with
+        # whether that layer is configured. A no-op when the claim
+        # store isn't configured.
+        if (
+            self._claim_store is not None
+            and self._embedding_client is not None
+            and self._retrieval_pool is not None
+        ):
+            turns_for_claims = await self._transcript.list_turns(session_id)
+            claim_turn_index = max((t.turn_index for t in turns_for_claims), default=0)
+
+            async def _record_claim_node_call(node_name, input_json, output_json):
+                await self._node_calls.record(
+                    node_name=node_name, session_id=session_id, turn_index=claim_turn_index,
+                    input_json=input_json, output_json=output_json,
+                )
+
+            try:
+                await _claims.extract_claims_for_session(
+                    self._retrieval_pool, self._claim_store, self.claim_extractor,
+                    self._embedding_client, session_id, learner_id,
+                    extraction_config=self._claim_extraction_config,
+                    confidence_config=self._claim_confidence_config,
+                    on_node_call=_record_claim_node_call,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Claim extraction failed for session %s: %s", session_id, exc, exc_info=True,
+                )
+
+            # The repair half of duplicate-claim merging. reconcile_candidate
+            # already merges same-axis, value-compatible live claims the
+            # moment a NEW episode's candidate would otherwise have to pick
+            # between them -- but that's pull-based: a duplicate created by
+            # any OTHER path (ClaimStore.reopen putting a previously-
+            # terminal claim back among the live set is the one actually
+            # observed; a future admin/repair script is another) sits
+            # unmerged until an episode happens to land on that exact axis
+            # again, which may be never. Running the full learner-scoped
+            # sweep here -- session-end, already the batch checkpoint this
+            # layer uses -- closes that gap without new scheduling
+            # infrastructure (this codebase has no periodic job runner, and
+            # session volume per learner is far too low to justify building
+            # one just for this). Idempotent and cheap when there is
+            # nothing to merge (see merge_duplicate_claims's own docstring).
+            try:
+                await _claims.merge_duplicate_claims(
+                    self._retrieval_pool, self._claim_store, learner_id,
+                    confidence_config=self._claim_confidence_config,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Duplicate-claim merge failed for learner %s: %s", learner_id, exc, exc_info=True,
+                )
+
+            # Restatement check -- deliberately AFTER the merge above, so
+            # a just-consolidated survivor's full evidence history (not
+            # a pre-merge fragment's partial one) is what gets evaluated
+            # for whether its wording has gone stale. See
+            # maybe_restate_claims's own docstring for the threshold
+            # gate; most sessions change nothing here.
+            try:
+                await _claims.maybe_restate_claims(
+                    self._claim_store, self._claim_statement_llm, learner_id,
+                    on_node_call=_record_claim_node_call,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Claim restatement failed for learner %s: %s", learner_id, exc, exc_info=True,
+                )
+
         if (
             self.summarize_session_path is None
             or self.confirm_thinking_style_match is None
@@ -1421,7 +1575,6 @@ class SessionLoop:
         if not facts:
             return None
 
-        learner_id = await self._transcript.get_learner_id(session_id)
         turns = await self._transcript.list_turns(session_id)
         last_turn_index = max((t.turn_index for t in turns), default=0)
 

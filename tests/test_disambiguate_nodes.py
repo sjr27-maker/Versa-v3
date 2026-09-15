@@ -10,7 +10,7 @@ import pytest
 
 from probe.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
 from probe.llm import StubLLMClient
-from probe.models import DisambiguationBranch
+from probe.models import AmbiguityKind, ApproachAxis, DisambiguationBranch
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -123,23 +123,48 @@ def _branch(statement: str) -> DisambiguationBranch:
     )
 
 
+def _subject_response(pairs: list[tuple], axis: str | None = None) -> str:
+    """pairs: list of (branch, text). Builds the new
+    {"kind": "subject", "axis": null, "options": [...]}" wire shape."""
+    return json.dumps(
+        {
+            "kind": "subject",
+            "axis": None,
+            "options": [{"branch_id": str(b.id), "text": t} for b, t in pairs],
+        }
+    )
+
+
+def _approach_response(pairs: list[tuple], axis: str) -> str:
+    sides = ["first", "second"]
+    return json.dumps(
+        {
+            "kind": "approach",
+            "axis": axis,
+            "options": [
+                {"branch_id": str(b.id), "text": t, "side": sides[i % 2]}
+                for i, (b, t) in enumerate(pairs)
+            ],
+        }
+    )
+
+
 @pytest.mark.asyncio(loop_scope="session")
 async def test_one_option_per_branch():
     branches = [_branch("reading a"), _branch("reading b")]
 
     def _respond(_prompt: str) -> str:
-        return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "Is it about reading a?"},
-                {"branch_id": str(branches[1].id), "text": "Is it about reading b?"},
-            ]
+        return _subject_response(
+            [(branches[0], "Is it about reading a?"), (branches[1], "Is it about reading b?")]
         )
 
     llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
     node = DisambiguationOptions(llm)
-    proposals = await node.run(branches)
-    assert len(proposals) == 2
-    assert {p.branch_id for p in proposals} == {branches[0].id, branches[1].id}
+    result = await node.run(branches)
+    assert result.kind is AmbiguityKind.SUBJECT
+    assert result.axis is None
+    assert len(result.proposals) == 2
+    assert {p.branch_id for p in result.proposals} == {branches[0].id, branches[1].id}
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -151,23 +176,13 @@ async def test_duplicate_branch_mapping_is_rejected_and_retried():
         attempts["n"] += 1
         if attempts["n"] == 1:
             # Both options map to the same branch -- invalid.
-            return json.dumps(
-                [
-                    {"branch_id": str(branches[0].id), "text": "one"},
-                    {"branch_id": str(branches[0].id), "text": "two"},
-                ]
-            )
-        return json.dumps(
-            [
-                {"branch_id": str(branches[0].id), "text": "one"},
-                {"branch_id": str(branches[1].id), "text": "two"},
-            ]
-        )
+            return _subject_response([(branches[0], "one"), (branches[0], "two")])
+        return _subject_response([(branches[0], "one"), (branches[1], "two")])
 
     llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
     node = DisambiguationOptions(llm)
-    proposals = await node.run(branches)
-    assert len(proposals) == 2
+    result = await node.run(branches)
+    assert len(result.proposals) == 2
     assert node.last_call_count == 2
 
 
@@ -176,8 +191,9 @@ async def test_exhausted_option_retries_return_empty_not_a_crash():
     branches = [_branch("reading a"), _branch("reading b")]
     llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": "garbage"})
     node = DisambiguationOptions(llm)
-    proposals = await node.run(branches)
-    assert proposals == []
+    result = await node.run(branches)
+    assert result.proposals == []
+    assert result.kind is None
     assert node.last_call_count == 2
 
 
@@ -185,10 +201,188 @@ async def test_exhausted_option_retries_return_empty_not_a_crash():
 async def test_no_branches_means_no_call_at_all():
     llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": "should never be called"})
     node = DisambiguationOptions(llm)
-    proposals = await node.run([])
-    assert proposals == []
-    assert node.last_call_count == 0
-    assert llm.prompts == []
+    result = await node.run([])
+    assert result.proposals == []
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_approach_kind_produces_exactly_two_options_with_axis():
+    branches = [_branch("formal treatment"), _branch("intuitive treatment")]
+
+    def _respond(_prompt: str) -> str:
+        return _approach_response(
+            [
+                (branches[0], "Would you like the formal limit definition?"),
+                (branches[1], "Would you like the intuitive slope picture?"),
+            ],
+            axis="rigor_intuition",
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches, message="explain derivatives", recent_history="")
+    assert result.kind is AmbiguityKind.APPROACH
+    assert result.axis is ApproachAxis.RIGOR_INTUITION
+    assert len(result.proposals) == 2
+    # side is decided and persisted at generation time -- a downstream
+    # reader never re-derives which option is which pole from text.
+    sides = {p.side for p in result.proposals}
+    assert sides == {"first", "second"}
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_approach_kind_missing_side_is_rejected_and_retried():
+    """Every approach-kind option must declare its side -- a response
+    missing it is as invalid as a missing axis, not silently accepted
+    with side=None (which would just reintroduce the text-inference
+    problem this field exists to close)."""
+    branches = [_branch("a"), _branch("b")]
+    attempts = {"n": 0}
+
+    def _respond(_prompt: str) -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return json.dumps({
+                "kind": "approach", "axis": "concrete_general",
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "concrete one"},
+                    {"branch_id": str(branches[1].id), "text": "general one"},
+                ],
+            })
+        return _approach_response(
+            [(branches[0], "concrete one"), (branches[1], "general one")],
+            axis="concrete_general",
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    assert len(result.proposals) == 2
+    assert node.last_call_count == 2
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_approach_kind_both_options_same_side_is_rejected_and_retried():
+    """Two options both claiming "first" (or both "second") isn't a
+    real split along the axis -- reject and retry rather than accept a
+    set with no genuine opposite pole."""
+    branches = [_branch("a"), _branch("b")]
+    attempts = {"n": 0}
+
+    def _respond(_prompt: str) -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return json.dumps({
+                "kind": "approach", "axis": "analogy_formal",
+                "options": [
+                    {"branch_id": str(branches[0].id), "text": "analogy one", "side": "first"},
+                    {"branch_id": str(branches[1].id), "text": "analogy two", "side": "first"},
+                ],
+            })
+        return _approach_response(
+            [(branches[0], "analogy version"), (branches[1], "formal version")],
+            axis="analogy_formal",
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    assert len(result.proposals) == 2
+    assert node.last_call_count == 2
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_subject_kind_option_with_a_side_is_rejected():
+    """A subject-kind option has no axis, hence no side -- one showing
+    up anyway is as invalid as a subject-kind response also carrying
+    an axis."""
+    branches = [_branch("topic a"), _branch("topic b")]
+
+    def _respond(_prompt: str) -> str:
+        return json.dumps({
+            "kind": "subject", "axis": None,
+            "options": [
+                {"branch_id": str(branches[0].id), "text": "topic a?", "side": "first"},
+                {"branch_id": str(branches[1].id), "text": "topic b?"},
+            ],
+        })
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    assert result.proposals == []  # exhausted retries -- degrades to no options
+    assert result.kind is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_approach_kind_with_three_options_is_rejected_and_retried():
+    """A single axis admits exactly two sides -- a confounded three-way
+    approach response must be rejected, not silently truncated."""
+    branches = [_branch("a"), _branch("b"), _branch("c")]
+    attempts = {"n": 0}
+
+    def _respond(_prompt: str) -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return _approach_response(
+                [(branches[0], "one"), (branches[1], "two"), (branches[2], "three")],
+                axis="scope_narrow_broad",
+            )
+        return _approach_response(
+            [(branches[0], "narrow version of this"), (branches[1], "broad version of this")],
+            axis="scope_narrow_broad",
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    assert len(result.proposals) == 2
+    assert node.last_call_count == 2
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_approach_kind_with_mismatched_lengths_is_rejected_and_retried():
+    branches = [_branch("a"), _branch("b")]
+    attempts = {"n": 0}
+    short = "Short one?"
+    long = "A " + "much " * 20 + "longer one that blows the length-match tolerance?"
+
+    def _respond(_prompt: str) -> str:
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return _approach_response([(branches[0], short), (branches[1], long)], axis="brevity_depth")
+        return _approach_response(
+            [(branches[0], "Short version A?"), (branches[1], "Short version B?")],
+            axis="brevity_depth",
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    assert len(result.proposals) == 2
+    assert node.last_call_count == 2
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_subject_kind_rejects_a_response_that_also_carries_an_axis():
+    branches = [_branch("a"), _branch("b")]
+
+    def _respond(_prompt: str) -> str:
+        return json.dumps(
+            {
+                "kind": "subject",
+                "axis": "concrete_general",  # invalid: subject-kind must not carry an axis
+                "options": [{"branch_id": str(branches[0].id), "text": "one"},
+                            {"branch_id": str(branches[1].id), "text": "two"}],
+            }
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    result = await node.run(branches)
+    # Exhausts retries against the same invalid (memoryless stub) response.
+    assert result.proposals == []
+    assert node.last_call_count == 2
 
 
 @pytest.mark.asyncio(loop_scope="session")
