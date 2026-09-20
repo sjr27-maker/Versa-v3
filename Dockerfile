@@ -3,7 +3,5 @@ RUN pip install uv
 WORKDIR /app
 COPY . .
 RUN uv sync --frozen
-ENV PORT=8080
-EXPOSE 8080
-# `probe serve` binds 0.0.0.0 and reads $PORT by default (see cli.py).
-CMD ["uv", "run", "probe", "serve"]
+# No entrypoint on purpose: the web UI/server was removed ahead of a
+# redesign. Set CMD (and EXPOSE/PORT) once the new server exists.

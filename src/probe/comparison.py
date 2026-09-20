@@ -28,17 +28,13 @@ fixture's own claims are frozen (LOCKED, PROMOTED, not decaying), and
 "with its scores" is each contributing claim's own confidence, read
 straight off `ClaimStore.list_promoted_for_learner`, no recomputation.
 
-A CONCRETE FINDING FROM BUILDING THIS: neither `cli.py` nor
-`webserver.py` construct a `SessionLoop` with `claim_store` set for
-the chat path — only the instrument routes (present/finalize) build a
-`ClaimStore` at all, for a different purpose (writing capability
-evidence). That means today, in the actual running system, a promoted
-claim NEVER reaches a real chat turn's prompt — the mechanism loop.py
-already has for it is wired to nothing. This module is the first
-caller that wires `claim_store` into a `SessionLoop` for the chat path
-at all; without that wiring, both fixture portraits would produce
+WHY THE LOOP IS BUILT WITH `claim_store` WIRED IN: `SessionLoop` only
+renders promoted claims into `claim_constraints_block` when it is handed
+a `claim_store`; without one, both fixture portraits would produce
 identically un-personalized prompts and this comparison would test
-nothing.
+nothing. (`session_builder.build_session_loop` wires it for every real
+entry point; this module builds its own minimal loop because it needs
+only the stores its four fields read.)
 
 RETRIEVED HISTORY IS EXPECTED TO BE EMPTY: fixture learners have
 claims but no `learner_facts` (demo_fixture.py never writes any, and

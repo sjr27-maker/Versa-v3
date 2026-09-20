@@ -24,14 +24,12 @@ optional overrides for the tier→model mapping in `model_config.py` —
 only needed if the defaults there go stale (Gemini preview model ids
 shift over time).
 
-Run `probe serve` for the web UI — a single-page app
-(`src/probe/static/`) over a small Starlette API (`src/probe/webserver.py`),
-same `SessionLoop` the CLI drives, no auth, local only. Binds `0.0.0.0`
-and reads `$PORT` by default (so the container needs no flags); pass
-`--host 127.0.0.1` / `--port` to override. The old Streamlit UI
-(`probe web`, `src/probe/webui/`) has been removed. Every `probe` CLI
-command (`chat`, `consolidate-session`, `migrate`) still works
-independently of the web UI.
+There is currently no web UI or server — `probe chat` and the other `probe`
+CLI commands (`consolidate-session`, `migrate`, `review-claims`,
+`score-predictions`, `compare-portraits`, ...) are the only entry points.
+The previous single-page UI and its Starlette API were removed ahead of a
+redesign; a future server should build its `SessionLoop` through
+`session_builder.build_session_loop`, the one shared assembly point.
 
 ## Invariants
 

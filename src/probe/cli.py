@@ -93,11 +93,10 @@ def _build_loop(
     pool, tiers: ModelTierClients, embedding_client: EmbeddingClient, domain_config
 ) -> SessionLoop:
     """Thin wrapper over `session_builder.build_session_loop` -- the one
-    shared assembly point `probe chat`/`probe consolidate-session` and
-    `probe serve` (webserver.py) both call, so the two entry points
-    cannot silently diverge in which optional stores they wire in the
-    way they did before 2026-09-15 (see session_builder.py's own
-    docstring for that incident)."""
+    shared assembly point every entry point calls, so no two of them can
+    silently diverge in which optional stores they wire in (see
+    session_builder.py's own docstring for the incident that made this
+    a single function)."""
     return build_session_loop(pool, tiers, embedding_client, domain_config=domain_config)
 
 
@@ -283,7 +282,7 @@ async def _review_claims(learner_spec: str) -> None:
         await pool.close()
 
 
-async def _score_predictions(exclude_contaminated: bool, split_by_source: bool) -> None:
+async def _score_predictions(exclude_contaminated: bool) -> None:
     """`probe score-predictions` -- the reliability-diagram check
     score_predictions.py exists for: scores every claim's evidence
     history against itself (see that module's own docstring for why
@@ -297,25 +296,10 @@ async def _score_predictions(exclude_contaminated: bool, split_by_source: bool) 
     and one with every human-flagged (`provenance_note`) row dropped
     entirely -- so a real miscalibration can be told apart from a known
     harness bug's effect on the curve, without ever hiding the
-    contaminated rows from production itself.
-
-    `--split-by-source` prints three curves separately: click (from the
-    preference side, `ClaimStore`), then locate and predict individually
-    from the CAPABILITY side (`CapabilityClaimStore`, filtered by
-    `skill` — both are PERFORMANCE-measuring, so neither one's evidence
-    lands in `ClaimStore` at all; see capability.py's own module
-    docstring for the incident that made this the correct split). The
-    check instruments.py's own module docstring names as the gate a
-    new evidence-producing METHOD has to clear before another one gets
-    built: if a method's evidence is systematically overconfident
-    relative to click evidence, its contract is being written or
-    interpreted loosely."""
-    from probe.capability import CapabilityClaimStore
+    contaminated rows from production itself."""
     from probe.claims import ClaimStore
-    from probe.models import CapabilityLabel, EvidenceSource
     from probe.score_predictions import (
         format_reliability_diagram,
-        score_capability_predictions_for_all_learners,
         score_predictions_for_all_learners,
     )
 
@@ -331,22 +315,6 @@ async def _score_predictions(exclude_contaminated: bool, split_by_source: bool) 
             )
             print("\nEXCLUDING FLAGGED (provenance_note) ROWS:")
             print(format_reliability_diagram(clean_bins, clean_brier, clean_total))
-        if split_by_source:
-            capability_store = CapabilityClaimStore(pool)
-            click_bins, click_brier, click_total = await score_predictions_for_all_learners(
-                store, source_filter=EvidenceSource.CLICK
-            )
-            print("\nCLICK EVIDENCE ONLY:")
-            print(format_reliability_diagram(click_bins, click_brier, click_total))
-            for label, skill in (
-                ("LOCATE", CapabilityLabel.TRACES_WORKED_STEPS),
-                ("PREDICT", CapabilityLabel.DERIVES_FORWARD),
-            ):
-                s_bins, s_brier, s_total = await score_capability_predictions_for_all_learners(
-                    capability_store, skill_filter=skill
-                )
-                print(f"\n{label} EVIDENCE ONLY (capability):")
-                print(format_reliability_diagram(s_bins, s_brier, s_total))
     finally:
         await pool.close()
 
@@ -393,16 +361,6 @@ async def _compare_portraits(question: str | None, use_stub: bool) -> None:
             print()
     finally:
         await pool.close()
-
-
-def _serve(host: str, port: int) -> None:
-    """`probe serve` — the calm single-page UI (probe/static/) backed by
-    the Starlette API in webserver.py, over the same SessionLoop the CLI
-    drives. Imported lazily so `probe chat` never pulls in Starlette.
-    This is the only web UI; the old Streamlit `probe web` was removed."""
-    from probe.webserver import serve
-
-    serve(host=host, port=port)
 
 
 def main() -> None:
@@ -512,24 +470,6 @@ def main() -> None:
         "(provenance_note) evidence row excluded, alongside the normal "
         "(production) picture",
     )
-    score_predictions_parser.add_argument(
-        "--split-by-source", action="store_true",
-        help="also print the click-derived and instrument-derived reliability "
-        "diagrams separately (instruments.py) -- the gate a new instrument "
-        "has to clear before another one gets built",
-    )
-    serve_parser = subparsers.add_parser(
-        "serve",
-        help="launch the calm single-page web UI (Starlette API + probe/static/)",
-    )
-    # Defaults are deployment-first: bind 0.0.0.0 and take the port from
-    # $PORT (Cloud Run / any PaaS injects it) so the container works with
-    # no extra flags. Locally it's still reachable at localhost:8000;
-    # pass --host 127.0.0.1 to restrict it.
-    serve_parser.add_argument("--host", default="0.0.0.0")
-    serve_parser.add_argument(
-        "--port", type=int, default=int(os.environ.get("PORT", "8000"))
-    )
     args = parser.parse_args()
 
     if args.command == "chat":
@@ -545,11 +485,9 @@ def main() -> None:
     elif args.command == "review-claims":
         asyncio.run(_review_claims(args.learner))
     elif args.command == "score-predictions":
-        asyncio.run(_score_predictions(args.exclude_contaminated, args.split_by_source))
+        asyncio.run(_score_predictions(args.exclude_contaminated))
     elif args.command == "migrate":
         asyncio.run(_run_migrations(args.status, args.baseline))
-    elif args.command == "serve":
-        _serve(args.host, args.port)
     else:
         parser.print_help()
         sys.exit(2)

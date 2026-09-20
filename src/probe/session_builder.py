@@ -1,35 +1,27 @@
-"""The single place a fully-wired `SessionLoop` is assembled — called by
-BOTH `cli.py` (`probe chat` / `probe consolidate-session`) and
-`webserver.py` (`probe serve`).
+"""The single place a fully-wired `SessionLoop` is assembled — every
+entry point (today `cli.py`'s `probe chat` / `probe consolidate-session`)
+builds its loop through `build_session_loop` below and nowhere else.
 
-WHY THIS MODULE EXISTS: it didn't, until 2026-09-15. Before this,
-`cli.py` and `webserver.py` each built their own `SessionLoop`
-independently. `cli.py`'s `_build_interaction_pipeline` wired
-`claim_store`, `stated_preference_store`, `reference_binding_store`,
-and the whole interaction/retrieval pipeline (`interaction_recorder`,
-`retrieval_pool`, `history_block`'s dependencies) into the CLI path —
-and its own docstring said, in writing, that this was "deliberately
-NOT into `probe serve` ... until the hand-read described in this
-feature's own review has actually happened there too." That hand-read
-never happened. Every session run through `probe serve` — the actual
-web UI, the one a browser hits — ran with NONE of it: no claims, no
-stated preferences, no reference bindings, no history block, no
-interaction pipeline at all. Confirmed by running a real session
-through the real HTTP routes and reading `node_calls`/`turn_diagnostics`
-back (see `tests/test_webserver_interaction_pipeline_wiring.py`): every
-one of those blocks reached `FinalAnswer`'s prompt once wired in.
+WHY THIS MODULE EXISTS: it didn't, until 2026-09-15. Two entry points
+(the CLI and a since-removed web server) each built their own
+`SessionLoop`, and drifted: the CLI wired `claim_store`,
+`stated_preference_store`, `reference_binding_store`, and the whole
+interaction/retrieval pipeline (`interaction_recorder`, `retrieval_pool`,
+`history_block`'s dependencies); the web server wired none of it. Every
+web session ran un-personalized, silently, with no error and no test
+catching it — confirmed by running a real session through the real HTTP
+routes and reading `node_calls`/`turn_diagnostics` back: every one of
+those blocks reached `FinalAnswer`'s prompt once wired in.
 
-This is the fifth instance of the same failure class in this
-codebase's history (see git log / CLAUDE.md's own incident-driven
-invariants for the others — the hypothesis store running empty,
-`load_dotenv` never being called, the Gemini schema silently
-overriding the prompt): something built, verified in isolation, and
-never wired into the path that actually runs. The fix here is
-structural, not a one-time sync: `cli.py` and `webserver.py` both call
-`build_session_loop` below. Neither constructs a `SessionLoop` any
-other way. A future optional layer added to this function reaches both
-entry points by construction — there is no second place to remember to
-update, because there is no second place at all.
+That was the fifth instance of one failure class in this codebase's
+history (see git log / CLAUDE.md's incident-driven invariants for the
+others — the hypothesis store running empty, `load_dotenv` never being
+called, the Gemini schema silently overriding the prompt): something
+built, verified in isolation, and never wired into the path that
+actually runs. The fix is structural, not a one-time sync: nothing
+constructs a `SessionLoop` any other way, so a future optional layer
+added here reaches every entry point by construction. Any future server
+must build its loop through this function too.
 """
 
 from __future__ import annotations
@@ -102,12 +94,11 @@ def build_session_loop(
     domain_config: DomainConfig | None = None,
     on_node_start: Callable[[str], None] | None = None,
 ) -> SessionLoop:
-    """The one and only place a `SessionLoop` gets constructed in this
-    codebase's two entry points (`cli.py`, `webserver.py`) — every
+    """The one and only place a `SessionLoop` gets constructed — every
     optional store wired in, unconditionally. `on_node_start` is the
-    one param that genuinely differs by caller (webserver.py forwards
-    node-progress to an SSE queue; the CLI has nothing to forward to),
-    so it stays a parameter rather than being hidden away too."""
+    one param that may genuinely differ by caller (a server can forward
+    node-progress to a client; the CLI has nothing to forward to), so it
+    stays a parameter rather than being hidden away too."""
     return SessionLoop(
         transcript=TranscriptStore(pool),
         node_calls=NodeCallStore(pool),

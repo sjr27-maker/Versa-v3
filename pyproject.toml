@@ -14,8 +14,6 @@ dependencies = [
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.3",
     "scipy>=1.18.1",
-    "starlette>=1.6.0",
-    "uvicorn>=0.52.4",
 ]
 
 [project.scripts]
@@ -31,3 +29,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.4",
 ]
+
+[tool.pytest.ini_options]
+# archive/ holds parked code (see archive/*/README.md), never collected.
+testpaths = ["tests"]
