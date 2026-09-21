@@ -5,8 +5,8 @@ value here is a plain fraction, not a beta.cdf closed form."""
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from probe.capability import CapabilityConfidenceConfig, compute_capability_confidence
-from probe.models import CapabilityEvidence, CapabilityLabel, ClaimWritePolicy, EvidenceDirection
+from versa.capability import CapabilityConfidenceConfig, compute_capability_confidence
+from versa.models import CapabilityEvidence, CapabilityLabel, ClaimWritePolicy, EvidenceDirection
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

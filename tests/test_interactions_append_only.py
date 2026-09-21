@@ -13,7 +13,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-import probe.interactions as interactions_module
+import versa.interactions as interactions_module
 
 
 def _assert_module_has_no_delete(module) -> None:
@@ -82,7 +82,7 @@ async def test_interactions_update_is_blocked_at_the_database(
     """Not just an AST scan -- migration 034's trigger must actually
     reject an UPDATE against a real row, at the database level,
     regardless of what application code attempts."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -102,7 +102,7 @@ async def test_interactions_update_is_blocked_at_the_database(
 async def test_interactions_delete_is_blocked_at_the_database(
     interaction_recorder, transcript, learner_id, clean_pool
 ):
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -123,8 +123,8 @@ async def test_interaction_options_is_deliberately_not_under_the_trigger(
     are populated on a LATER turn than creation (a decision record, not
     an interaction record) -- this must keep working, not regress into
     accidentally being covered by a future, broader trigger."""
-    from probe.disambiguate import DisambiguationStore
-    from probe.models import DisambiguationBranch, Option, QuestionAuthor
+    from versa.disambiguate import DisambiguationStore
+    from versa.models import DisambiguationBranch, Option, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -140,7 +140,7 @@ async def test_interaction_options_is_deliberately_not_under_the_trigger(
     options = [Option(branch_id=branches[0].id, generation_id=d_turn.id, session_id=session_id, turn_index=0, text="t")]
     await disamb.create_options(options)
 
-    from probe.models import InteractionOption
+    from versa.models import InteractionOption
 
     io = InteractionOption(
         interaction_id=interaction.id, learner_id=learner_id, option_id=options[0].id,

@@ -10,9 +10,9 @@ from uuid import uuid4
 
 import pytest
 
-from probe.claims import ExtractionConfig, select_extraction_candidates
-from probe.disambiguate import DisambiguationStore
-from probe.models import (
+from versa.claims import ExtractionConfig, select_extraction_candidates
+from versa.disambiguate import DisambiguationStore
+from versa.models import (
     AmbiguityKind,
     ApproachAxis,
     ClaimEvidence,
@@ -193,8 +193,8 @@ async def test_approach_kind_covered_axis_loses_to_uncovered_axis_despite_higher
     exempts it from competing -- an uncovered axis with LOWER
     prediction error still wins the single available slot over a
     covered axis with HIGHER prediction error."""
-    from probe.claims import ExtractionConfig as _Cfg  # local import avoids shadowing above
-    from probe.models import Claim, ClaimSource, ClaimWritePolicy, StatedPreferenceLabel
+    from versa.claims import ExtractionConfig as _Cfg  # local import avoids shadowing above
+    from versa.models import Claim, ClaimSource, ClaimWritePolicy, StatedPreferenceLabel
 
     session_id = await transcript.create_session(learner_id)
 

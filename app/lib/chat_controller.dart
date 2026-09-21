@@ -1,0 +1,236 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
+import 'api.dart';
+import 'chat_transport.dart';
+import 'models.dart';
+
+enum ChatStatus {
+  /// Creating the chat / opening the socket.
+  connecting,
+
+  /// Idle: the person can type or click.
+  ready,
+
+  /// Sent; waiting for the first word (or the options).
+  thinking,
+
+  /// Words are arriving.
+  streaming,
+
+  /// The connection is gone; [ChatController.reconnect] tries again.
+  disconnected,
+}
+
+/// One Sandbox chat: its messages and the live turn in progress.
+///
+/// What it guarantees (each is covered by test/chat_controller_test.dart):
+///  * words appear as they arrive; the server's `done.text` then replaces them
+///    (authoritative, e.g. when an answer failed part-way);
+///  * an ambiguous message shows the question with clickable readings; a click
+///    is a normal turn, and each set of readings can only be used once;
+///  * timings are measured HERE, so they include the network (what the person
+///    actually waited), next to the server's own numbers;
+///  * a dropped connection never leaves a spinner behind, and the same chat
+///    (same session, same memory) can be resumed.
+class ChatController extends ChangeNotifier {
+  ChatController({
+    required this.api,
+    required this.learner,
+    TransportFactory? transportFactory,
+  }) : _transportFactory = transportFactory ??
+            ((sessionId) => WebSocketChatTransport.connect(api.chatUri(sessionId)));
+
+  final VersaApi api;
+  final Learner learner;
+  final TransportFactory _transportFactory;
+
+  final List<ChatMessage> messages = [];
+  ChatStatus status = ChatStatus.connecting;
+  String? sessionId;
+
+  /// Human-readable reason when [status] is `disconnected`.
+  String? problem;
+
+  ChatTransport? _transport;
+  StreamSubscription<ServerEvent>? _subscription;
+  int _nextId = 0;
+  ChatMessage? _current;
+  Stopwatch? _turnClock;
+  int? _firstOutputMs;
+  bool _disposed = false;
+
+  bool get canSend => status == ChatStatus.ready;
+  bool get busy => status == ChatStatus.thinking || status == ChatStatus.streaming;
+
+  Future<void> start() async {
+    status = ChatStatus.connecting;
+    problem = null;
+    _notify();
+    try {
+      sessionId ??= await api.createSession(learner.id);
+      await _connect();
+    } catch (e) {
+      status = ChatStatus.disconnected;
+      problem = 'Could not reach the server ($e)';
+      _notify();
+    }
+  }
+
+  /// Reopen the socket for the SAME chat. The old, dead connection is torn down
+  /// in the background: closing a half-dead socket can take a long time, and
+  /// coming back must never wait on it.
+  Future<void> reconnect() async {
+    final oldSubscription = _subscription;
+    final oldTransport = _transport;
+    _subscription = null;
+    _transport = null;
+    unawaited(_discard(oldSubscription, oldTransport));
+    await start();
+  }
+
+  Future<void> _discard(StreamSubscription<ServerEvent>? sub, ChatTransport? transport) async {
+    try {
+      await sub?.cancel();
+      await transport?.close();
+    } catch (_) {
+      // it was already dead; nothing to clean up
+    }
+  }
+
+  Future<void> _connect() async {
+    final transport = await _transportFactory(sessionId!);
+    if (_disposed) {
+      await transport.close();
+      return;
+    }
+    _transport = transport;
+    _subscription = transport.events.listen(
+      _onEvent,
+      onError: (Object e) => _onDropped('$e'),
+      onDone: () => _onDropped(null),
+    );
+    status = ChatStatus.ready;
+    problem = null;
+    _notify();
+  }
+
+  // ---------------------------------------------------------------- actions
+
+  void send(String text) {
+    final trimmed = text.trim();
+    if (!canSend || trimmed.isEmpty) return;
+    messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed));
+    _beginTurn();
+    _transport!.sendMessage(trimmed);
+    _notify();
+  }
+
+  void pickOption(ChatMessage message, ChatOption option) {
+    if (!canSend || message.optionsResolved) return;
+    message.chosenOptionId = option.id;
+    messages.add(ChatMessage(id: _nextId++, role: Role.user, text: option.text));
+    _beginTurn();
+    _transport!.selectOption(option.id);
+    _notify();
+  }
+
+  void _beginTurn() {
+    _current = ChatMessage(id: _nextId++, role: Role.tutor, pending: true);
+    messages.add(_current!);
+    status = ChatStatus.thinking;
+    _turnClock = Stopwatch()..start();
+    _firstOutputMs = null;
+  }
+
+  // ----------------------------------------------------------------- events
+
+  void _onEvent(ServerEvent event) {
+    switch (event) {
+      case TurnStart():
+        break;
+      case Delta(:final text):
+        final m = _current;
+        if (m == null) return;
+        _markFirstOutput();
+        m.pending = false;
+        m.streaming = true;
+        m.text += text;
+        status = ChatStatus.streaming;
+      case OptionsEvent(:final message, :final options):
+        final m = _current;
+        if (m == null) return;
+        _markFirstOutput();
+        m.pending = false;
+        m.streaming = false;
+        m.text = message;
+        m.options = options;
+      case Done():
+        final m = _current;
+        if (m == null) return;
+        final total = _turnClock?.elapsedMilliseconds ?? event.totalMs;
+        m.pending = false;
+        m.streaming = false;
+        m.text = event.text;
+        m.timing = Timing(
+          firstOutputMs: _firstOutputMs ?? total,
+          totalMs: total,
+          serverFirstOutputMs: event.firstOutputMs,
+          serverTotalMs: event.totalMs,
+        );
+        _finishTurn();
+      case ErrorEvent(:final message):
+        final m = _current;
+        if (m != null) {
+          m.pending = false;
+          m.streaming = false;
+          m.isError = true;
+          m.text = m.text.isEmpty ? message : '${m.text}\n\n$message';
+        } else {
+          messages.add(ChatMessage(id: _nextId++, role: Role.tutor, text: message, isError: true));
+        }
+        _finishTurn();
+    }
+    _notify();
+  }
+
+  void _markFirstOutput() {
+    _firstOutputMs ??= _turnClock?.elapsedMilliseconds;
+  }
+
+  void _finishTurn() {
+    _current = null;
+    _turnClock?.stop();
+    status = ChatStatus.ready;
+  }
+
+  void _onDropped(String? reason) {
+    if (_disposed) return;
+    final m = _current;
+    if (m != null) {
+      m.pending = false;
+      m.streaming = false;
+      m.isError = true;
+      m.text = m.text.isEmpty
+          ? 'The connection was lost before I could answer.'
+          : '${m.text}\n\n(connection lost)';
+      _current = null;
+    }
+    status = ChatStatus.disconnected;
+    problem = reason == null ? 'The connection to the server was lost.' : 'Connection error ($reason)';
+    _notify();
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _subscription?.cancel();
+    _transport?.close();
+    super.dispose();
+  }
+}

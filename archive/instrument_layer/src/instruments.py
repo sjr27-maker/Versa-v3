@@ -70,12 +70,12 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
-from probe.audit import TranscriptStore
-from probe.capability import CapabilityClaimStore, CapabilityConfidenceConfig
-from probe.claims import ClaimConfidenceConfig, ClaimStore
-from probe.embeddings import EMBEDDING_DIM
-from probe.interactions import InteractionStore
-from probe.models import (
+from versa.audit import TranscriptStore
+from versa.capability import CapabilityClaimStore, CapabilityConfidenceConfig
+from versa.claims import ClaimConfidenceConfig, ClaimStore
+from versa.embeddings import EMBEDDING_DIM
+from versa.interactions import InteractionStore
+from versa.models import (
     ApproachAxis,
     CapabilityClaim,
     CapabilityEvidence,
@@ -282,7 +282,7 @@ class InstrumentEventStore:
 
 
 def _row_to_contract(row) -> InteractionContract:
-    # JSONB columns decode straight to dict/list -- probe.db registers
+    # JSONB columns decode straight to dict/list -- versa.db registers
     # a jsonb codec on every connection, so no manual json.loads here.
     mapped = dict(row)
     return InteractionContract(

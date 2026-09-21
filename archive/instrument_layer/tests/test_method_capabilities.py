@@ -4,8 +4,8 @@ primitive present exactly once, every declared claim_type/axis/skill
 is a real enum member, every row states what it cannot answer, and
 PREFERENCE/PERFORMANCE rows never populate the other kind's fields),
 not any router logic -- no router exists yet."""
-from probe.method_capabilities import METHOD_CAPABILITIES, MeasurementKind
-from probe.models import ApproachAxis, CapabilityLabel, InstrumentPrimitive, StatedPreferenceLabel
+from versa.method_capabilities import METHOD_CAPABILITIES, MeasurementKind
+from versa.models import ApproachAxis, CapabilityLabel, InstrumentPrimitive, StatedPreferenceLabel
 
 
 def test_every_primitive_appears_exactly_once_plus_option_pair():

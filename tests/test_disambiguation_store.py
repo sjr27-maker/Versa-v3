@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from probe.models import BranchStatus, DisambiguationBranch, Option, OptionStatus
+from versa.models import BranchStatus, DisambiguationBranch, Option, OptionStatus
 
 
 @pytest.mark.asyncio(loop_scope="session")

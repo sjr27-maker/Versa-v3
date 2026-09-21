@@ -8,13 +8,13 @@ portraits and is empty for the control, and retrieved history reads
 real (if empty) machinery rather than a hardcoded placeholder."""
 import pytest
 
-from probe.comparison import NO_PORTRAIT_LABEL, ensure_no_portrait_learner, run_comparison
-from probe.learner import LearnerStore
+from versa.comparison import NO_PORTRAIT_LABEL, ensure_no_portrait_learner, run_comparison
+from versa.learner import LearnerStore
 
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_ensure_no_portrait_learner_has_zero_claims(clean_pool):
-    from probe.claims import ClaimStore
+    from versa.claims import ClaimStore
 
     learner = await ensure_no_portrait_learner(clean_pool)
     assert learner.label == NO_PORTRAIT_LABEL
@@ -66,8 +66,8 @@ async def test_run_comparison_is_idempotent_on_the_fixture_and_control(clean_poo
     await run_comparison(clean_pool, "How do I calculate a percentage of a number?", stub=True)
 
     learners = LearnerStore(clean_pool)
-    from probe.demo_fixture import CONCRETE_PORTRAIT_LABEL
-    from probe.claims import ClaimStore
+    from versa.demo_fixture import CONCRETE_PORTRAIT_LABEL
+    from versa.claims import ClaimStore
 
     concrete = await learners.get_by_label(CONCRETE_PORTRAIT_LABEL)
     claims = await ClaimStore(clean_pool).list_for_learner(concrete.id)

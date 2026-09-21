@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import pytest
 
-from probe.models import InteractionAbstract
-from probe.population_patterns import (
+from versa.models import InteractionAbstract
+from versa.population_patterns import (
     PopulationAggregationConfig,
     PopulationPatternStore,
     _cluster_abstracts,
@@ -90,7 +90,7 @@ def test_clustering_is_pure_and_deterministic():
 async def test_end_to_end_aggregation_writes_only_readable_clusters(
     interaction_recorder, interaction_abstract_store, transcript, learner_store, clean_pool
 ):
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     pattern_store = PopulationPatternStore(clean_pool)
     config = PopulationAggregationConfig(min_distinct_learners=5, max_per_learner_share=0.5)
@@ -151,7 +151,7 @@ async def test_aggregation_with_no_abstracts_writes_nothing(
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_population_pattern_store_append_and_count_readable(clean_pool):
-    from probe.models import PopulationPattern
+    from versa.models import PopulationPattern
 
     store = PopulationPatternStore(clean_pool)
     assert await store.count_readable() == 0

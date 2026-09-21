@@ -12,14 +12,14 @@ asserting the function equals itself.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from probe.claims import (
+from versa.claims import (
     ClaimConfidenceConfig,
     clamp_confidence_for_decisions,
     compute_confidence,
     evaluate_contradiction,
     evaluate_promotion,
 )
-from probe.models import ApproachAxis, ClaimEvidence, ClaimWritePolicy, EvidenceDirection
+from versa.models import ApproachAxis, ClaimEvidence, ClaimWritePolicy, EvidenceDirection
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

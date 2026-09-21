@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from probe.ablation import AblationConfig, SessionMode
+from versa.ablation import AblationConfig, SessionMode
 
 
 @pytest.mark.asyncio(loop_scope="session")

@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from probe.claims import ClaimExtractor
-from probe.llm import StubLLMClient
-from probe.models import StatedPreferenceLabel
+from versa.claims import ClaimExtractor
+from versa.llm import StubLLMClient
+from versa.models import StatedPreferenceLabel
 
 
 @pytest.mark.asyncio

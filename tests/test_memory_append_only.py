@@ -2,7 +2,7 @@ import ast
 import re
 from pathlib import Path
 
-import probe.memory as memory_module
+import versa.memory as memory_module
 
 
 def test_memory_module_has_no_delete():

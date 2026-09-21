@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from probe.interaction_nodes import (
+from versa.interaction_nodes import (
     ClassifierConfig,
     ClassifyStatedPreference,
     ClassifyTurnOutcome,
@@ -17,8 +17,8 @@ from probe.interaction_nodes import (
     LLMSelectionPredictor,
     render_structural_requirement,
 )
-from probe.llm import StubLLMClient
-from probe.models import (
+from versa.llm import StubLLMClient
+from versa.models import (
     InteractionOption,
     RetrievalCandidate,
     StatedPreferenceLabel,

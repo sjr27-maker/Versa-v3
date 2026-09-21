@@ -2,7 +2,7 @@ import ast
 import re
 from pathlib import Path
 
-import probe.disambiguate as disambiguate_module
+import versa.disambiguate as disambiguate_module
 
 
 def test_disambiguate_module_has_no_delete():

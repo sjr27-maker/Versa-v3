@@ -5,8 +5,8 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from probe.capability import CapabilityClaimStore
-from probe.models import (
+from versa.capability import CapabilityClaimStore
+from versa.models import (
     CapabilityClaim,
     CapabilityEvidence,
     CapabilityLabel,

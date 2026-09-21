@@ -1,4 +1,4 @@
-"""NodeCallStore's read methods the web UI needs: get_call_for_turn
+"""NodeCallStore's read methods read-side clients need: get_call_for_turn
 and get_latest_call (the read side of invariant 2's audit trail)."""
 
 import pytest

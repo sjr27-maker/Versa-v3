@@ -16,12 +16,12 @@ import re
 
 import pytest
 
-from probe.interactions import (
+from versa.interactions import (
     InteractionRecorder,
 )
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.models import TurnOutcomeLabel
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.models import TurnOutcomeLabel
 
 _NOT_AMBIGUOUS = json.dumps({"needs_branches": False, "branches": []})
 _TWO_BRANCHES = json.dumps(
@@ -51,7 +51,7 @@ def _make_loop(
     turn_outcome_store, interaction_option_store, interaction_abstract_store,
     prediction_store, embedding_client, pool, llm=None, diagnostics_store=None,
 ):
-    from probe.retrieval_config import RetrievalConfig
+    from versa.retrieval_config import RetrievalConfig
 
     recorder = InteractionRecorder(
         interaction_store,
@@ -119,7 +119,7 @@ async def test_no_interaction_pipeline_configured_writes_nothing(
     message = await loop.handle_turn(session_id, 0, "what is a derivative?")
     assert message == "an answer"
 
-    from probe.interactions import InteractionStore
+    from versa.interactions import InteractionStore
 
     interaction_store = InteractionStore(clean_pool)
     assert await interaction_store.get_at_turn(session_id, 0) is None

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai import errors
 
-from probe.llm import GeminiLLMClient, LLMTransportError
+from versa.llm import GeminiLLMClient, LLMTransportError
 
 
 class _FakeModels:

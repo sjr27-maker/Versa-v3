@@ -5,9 +5,9 @@ same path production uses) wires correctly into
 compute_capability_prediction_trials and bucket_trials."""
 import pytest
 
-from probe.capability import CapabilityClaimStore
-from probe.claims import ClaimStore
-from probe.instruments import (
+from versa.capability import CapabilityClaimStore
+from versa.claims import ClaimStore
+from versa.instruments import (
     LOCATE_SEEDED_ERROR_ELEMENT,
     InstrumentEventType,
     InstrumentPrimitive,
@@ -17,8 +17,8 @@ from probe.instruments import (
     present_demo_instrument,
     write_instrument_evidence,
 )
-from probe.models import InstrumentEvent
-from probe.score_predictions import score_capability_predictions_for_all_learners
+from versa.models import InstrumentEvent
+from versa.score_predictions import score_capability_predictions_for_all_learners
 
 
 @pytest.mark.asyncio(loop_scope="session")

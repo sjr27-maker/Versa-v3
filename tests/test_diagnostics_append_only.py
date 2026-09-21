@@ -2,7 +2,7 @@ import ast
 import re
 from pathlib import Path
 
-import probe.diagnostics as diagnostics_module
+import versa.diagnostics as diagnostics_module
 
 
 def test_diagnostics_module_has_no_delete():

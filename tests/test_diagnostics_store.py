@@ -1,7 +1,7 @@
 import pytest
 
-from probe.diagnostics import TurnDiagnosticsStore
-from probe.models import TurnDiagnostics
+from versa.diagnostics import TurnDiagnosticsStore
+from versa.models import TurnDiagnostics
 
 
 @pytest.mark.asyncio(loop_scope="session")

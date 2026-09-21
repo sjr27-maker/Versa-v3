@@ -1,4 +1,4 @@
-"""The standalone `probe migrate` runner (probe/migrate.py).
+"""The standalone `versa migrate` runner (versa/migrate.py).
 
 Runs against a throwaway database created for this module only — the
 shared test schema (conftest's session `pool`) is built by
@@ -11,11 +11,11 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 
-from probe import migrate
-from probe.db import create_pool
 from tests.conftest import DATABASE_URL
+from versa import migrate
+from versa.db import create_pool
 
-_TEST_DB = "probe_migrate_pytest"
+_TEST_DB = "versa_migrate_pytest"
 
 
 @pytest_asyncio.fixture(loop_scope="session")

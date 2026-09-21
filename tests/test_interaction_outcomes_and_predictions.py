@@ -13,7 +13,7 @@ same way (a BIGSERIAL seq column).
 
 import pytest
 
-from probe.models import (
+from versa.models import (
     InteractionAbstract,
     Prediction,
     QuestionAuthor,

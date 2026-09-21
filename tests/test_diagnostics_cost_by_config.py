@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from probe.ablation import AblationConfig, SessionMode
-from probe.models import TurnDiagnostics
+from versa.ablation import AblationConfig, SessionMode
+from versa.models import TurnDiagnostics
 
 
 async def _record(diagnostics_store, session_id, turn_index, duration_ms, calls, retries=0):

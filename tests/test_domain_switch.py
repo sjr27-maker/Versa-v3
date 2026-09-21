@@ -1,4 +1,4 @@
-"""The domain switch (domain_config.py): PROBE_DOMAIN resolution, the
+"""The domain switch (domain_config.py): VERSA_DOMAIN resolution, the
 per-node prompt substitutions for the six domain-aware nodes, and the
 one storage/retrieval touch this feature explicitly carves out --
 `interactions.domain` plus the retrieval/get_recent_for_learner filter.
@@ -14,16 +14,16 @@ import json
 
 import pytest
 
-from probe.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
-from probe.domain_config import Domain, DomainConfig, load_domain_config
-from probe.interaction_nodes import (
+from versa.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
+from versa.domain_config import Domain, DomainConfig, load_domain_config
+from versa.interaction_nodes import (
     ClassifyReferenceResolution,
     ClassifyStatedPreference,
     ClassifyTurnOutcome,
 )
-from probe.llm import StubLLMClient
-from probe.models import DisambiguationBranch, QuestionAuthor
-from probe.retrieval import RetrievalContext, stage1_filter
+from versa.llm import StubLLMClient
+from versa.models import DisambiguationBranch, QuestionAuthor
+from versa.retrieval import RetrievalContext, stage1_filter
 
 
 # ─────────────────────────── load_domain_config ──────────────────────
@@ -34,16 +34,16 @@ def test_defaults_to_education_when_unset():
 
 
 def test_reads_general_from_env_dict():
-    assert load_domain_config({"PROBE_DOMAIN": "general"}).domain is Domain.GENERAL
+    assert load_domain_config({"VERSA_DOMAIN": "general"}).domain is Domain.GENERAL
 
 
 def test_explicit_education_from_env_dict():
-    assert load_domain_config({"PROBE_DOMAIN": "education"}).domain is Domain.EDUCATION
+    assert load_domain_config({"VERSA_DOMAIN": "education"}).domain is Domain.EDUCATION
 
 
 def test_unrecognized_value_raises_rather_than_silently_falling_back():
-    with pytest.raises(ValueError, match="PROBE_DOMAIN"):
-        load_domain_config({"PROBE_DOMAIN": "medical"})
+    with pytest.raises(ValueError, match="VERSA_DOMAIN"):
+        load_domain_config({"VERSA_DOMAIN": "medical"})
 
 
 def test_education_and_general_differ_on_every_actor_facing_field():
@@ -216,7 +216,7 @@ async def test_reference_resolution_general_mode_uses_person_and_assistant():
 
 
 def test_stage1_filter_adds_no_domain_clause_by_default():
-    from probe.retrieval import RetrievalContext
+    from versa.retrieval import RetrievalContext
     from uuid import uuid4
 
     where = stage1_filter(uuid4(), RetrievalContext())
@@ -269,7 +269,7 @@ async def test_get_recent_for_learner_domain_filter_excludes_other_domain(
         originating_question=None, did_branch=False, response_text="a",
         domain=Domain.GENERAL,
     )
-    from probe.interactions import InteractionStore
+    from versa.interactions import InteractionStore
 
     store = InteractionStore(clean_pool)
     education_only = await store.get_recent_for_learner(learner_id, 10, domain=Domain.EDUCATION)

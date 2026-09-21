@@ -6,14 +6,14 @@ over field names. If this file needed interpret_instrument to change,
 that would mean the predicates were too primitive-specific."""
 from uuid import uuid4
 
-from probe.instruments import (
+from versa.instruments import (
     PREDICT_CORRECT_OPTION,
     PREDICT_DIAGNOSTIC_WRONG_OPTION,
     InstrumentOutcome,
     build_predict_demo_contract,
     interpret_instrument,
 )
-from probe.models import InstrumentEvent, InstrumentEventType
+from versa.models import InstrumentEvent, InstrumentEventType
 
 CONTRACT = build_predict_demo_contract(target_claim_id=uuid4())
 

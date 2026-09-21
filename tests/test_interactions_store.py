@@ -6,7 +6,7 @@ and the deferred/cross-session-catch-up rules.
 
 import pytest
 
-from probe.models import QuestionAuthor, TurnOutcome, TurnOutcomeLabel
+from versa.models import QuestionAuthor, TurnOutcome, TurnOutcomeLabel
 
 
 @pytest.mark.asyncio(loop_scope="session")

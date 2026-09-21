@@ -6,9 +6,9 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 
-from probe.capability import CapabilityClaimStore
-from probe.claims import ClaimStore
-from probe.instruments import (
+from versa.capability import CapabilityClaimStore
+from versa.claims import ClaimStore
+from versa.instruments import (
     InstrumentEventStore,
     InstrumentOutcome,
     InstrumentStore,
@@ -18,7 +18,7 @@ from probe.instruments import (
     present_instrument,
     write_instrument_evidence,
 )
-from probe.models import (
+from versa.models import (
     CapabilityClaim,
     CapabilityLabel,
     Claim,
@@ -94,7 +94,7 @@ async def test_contract_create_and_get_roundtrip(contract_store, clean_pool):
 async def test_present_instrument_creates_a_real_session_and_interaction(
     capability_store, contract_store, instrument_store, transcript, interaction_store, learner_id, clean_pool
 ):
-    from probe.instruments import LOCATE_DEMO_SPEC
+    from versa.instruments import LOCATE_DEMO_SPEC
 
     claim = _capability_claim(learner_id)
     await capability_store.create(claim)
@@ -115,7 +115,7 @@ async def test_present_instrument_creates_a_real_session_and_interaction(
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_instrument_mark_completed_and_abandoned(instrument_store, contract_store, learner_id, transcript, interaction_store, capability_store, clean_pool):
-    from probe.instruments import LOCATE_DEMO_SPEC
+    from versa.instruments import LOCATE_DEMO_SPEC
 
     claim = _capability_claim(learner_id)
     await capability_store.create(claim)
@@ -137,7 +137,7 @@ async def test_instrument_mark_completed_and_abandoned(instrument_store, contrac
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def real_instrument(capability_store, contract_store, instrument_store, transcript, interaction_store, learner_id, clean_pool):
-    from probe.instruments import LOCATE_DEMO_SPEC
+    from versa.instruments import LOCATE_DEMO_SPEC
 
     claim = _capability_claim(learner_id)
     await capability_store.create(claim)
@@ -189,7 +189,7 @@ async def test_write_instrument_evidence_supports_writes_through_the_existing_pa
     still passed to `write_instrument_evidence` (it takes both stores
     unconditionally, routing by contract.measures) even though this
     particular contract never touches it."""
-    from probe.instruments import LOCATE_DEMO_SPEC, LOCATE_SEEDED_ERROR_ELEMENT
+    from versa.instruments import LOCATE_DEMO_SPEC, LOCATE_SEEDED_ERROR_ELEMENT
 
     capability_claim = _capability_claim(learner_id)
     await capability_store.create(capability_claim)
@@ -231,7 +231,7 @@ async def test_write_instrument_evidence_uninformative_writes_nothing(
     claim_store, capability_store, contract_store, instrument_store, transcript, interaction_store,
     learner_id, clean_pool,
 ):
-    from probe.instruments import LOCATE_DEMO_SPEC
+    from versa.instruments import LOCATE_DEMO_SPEC
 
     capability_claim = _capability_claim(learner_id)
     await capability_store.create(capability_claim)
@@ -262,7 +262,7 @@ async def test_write_instrument_evidence_without_target_claim_is_discarded(
     """Out of scope for this build ("no instrument generation yet") --
     logged and discarded rather than guessing a new claim's statement/
     test text the contract doesn't carry."""
-    from probe.instruments import LOCATE_DEMO_SPEC, LOCATE_SEEDED_ERROR_ELEMENT
+    from versa.instruments import LOCATE_DEMO_SPEC, LOCATE_SEEDED_ERROR_ELEMENT
 
     contract = build_locate_demo_contract(target_claim_id=None)
     await contract_store.create(contract)

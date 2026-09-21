@@ -1,5 +1,5 @@
 [project]
-name = "probe"
+name = "versa"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -9,15 +9,17 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.31.0",
+    "fastapi>=0.141.1",
     "google-genai>=2.20.0",
     "pgvector>=0.5.0",
     "pydantic>=2.13.4",
     "python-dotenv>=1.2.3",
     "scipy>=1.18.1",
+    "uvicorn>=0.53.0",
 ]
 
 [project.scripts]
-probe = "probe.cli:main"
+versa = "versa.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.12.5,<0.13.0"]

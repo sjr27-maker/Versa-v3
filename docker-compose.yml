@@ -2,12 +2,12 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     ports:
-      - "5434:5432"
+      - "${VERSA_DB_PORT:-5434}:5432"
     environment:
-      POSTGRES_USER: probe
-      POSTGRES_PASSWORD: probe
-      POSTGRES_DB: probe
+      POSTGRES_USER: versa
+      POSTGRES_PASSWORD: versa
+      POSTGRES_DB: versa
     volumes:
-      - probe_pgdata:/var/lib/postgresql/data
+      - versa_pgdata:/var/lib/postgresql/data
 volumes:
-  probe_pgdata:
+  versa_pgdata:

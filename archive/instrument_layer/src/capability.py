@@ -72,7 +72,7 @@ from uuid import UUID
 import asyncpg
 from pydantic import BaseModel
 
-from probe.models import (
+from versa.models import (
     CapabilityClaim,
     CapabilityEvidence,
     CapabilityLabel,

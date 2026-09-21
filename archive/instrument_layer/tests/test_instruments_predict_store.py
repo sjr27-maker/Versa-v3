@@ -10,9 +10,9 @@ capability.py's own module docstring for the incident that made this
 the correct routing."""
 import pytest
 
-from probe.capability import CapabilityClaimStore
-from probe.claims import ClaimStore
-from probe.instruments import (
+from versa.capability import CapabilityClaimStore
+from versa.claims import ClaimStore
+from versa.instruments import (
     DEMO_CONTRACTS,
     PREDICT_CORRECT_OPTION,
     InstrumentEventStore,
@@ -24,7 +24,7 @@ from probe.instruments import (
     present_demo_instrument,
     write_instrument_evidence,
 )
-from probe.models import CapabilityLabel, EvidenceSource, InstrumentEvent, InstrumentEventType
+from versa.models import CapabilityLabel, EvidenceSource, InstrumentEvent, InstrumentEventType
 
 
 @pytest.mark.asyncio(loop_scope="session")

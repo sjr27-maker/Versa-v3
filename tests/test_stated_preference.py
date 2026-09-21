@@ -9,13 +9,13 @@ import json
 
 import pytest
 
-from probe.disambiguate import DisambiguationStore
-from probe.history_block import HistoryBlockConfig
-from probe.interactions import InteractionRecorder
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.models import StatedPreference, StatedPreferenceLabel
-from probe.retrieval_config import RetrievalConfig
+from versa.disambiguate import DisambiguationStore
+from versa.history_block import HistoryBlockConfig
+from versa.interactions import InteractionRecorder
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.models import StatedPreference, StatedPreferenceLabel
+from versa.retrieval_config import RetrievalConfig
 
 _NOT_AMBIGUOUS = json.dumps({"needs_branches": False, "branches": []})
 _HAS_PREFERENCE = json.dumps(
@@ -67,7 +67,7 @@ async def test_append_and_get_latest_round_trip(
     stated_preference_store, interaction_recorder, transcript, learner_id, clean_pool
 ):
     session_id = await transcript.create_session(learner_id)
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     interaction = await interaction_recorder.record(
         learner_id=learner_id, session_id=session_id, turn_number=0,
@@ -93,7 +93,7 @@ async def test_get_latest_ignores_false_rows(
     stated_preference_store, interaction_recorder, transcript, learner_id, clean_pool
 ):
     session_id = await transcript.create_session(learner_id)
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     interaction = await interaction_recorder.record(
         learner_id=learner_id, session_id=session_id, turn_number=0,
@@ -115,7 +115,7 @@ async def test_get_latest_returns_the_most_recent_true_row(
     stated_preference_store, interaction_recorder, transcript, learner_id, clean_pool
 ):
     session_id = await transcript.create_session(learner_id)
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     i0 = await interaction_recorder.record(
         learner_id=learner_id, session_id=session_id, turn_number=0,

@@ -1,8 +1,8 @@
 # PARKED: score_predictions.py's capability-side reader, extracted verbatim.
-# Restore by appending the code below to probe/score_predictions.py, re-adding
-# `from probe.capability import CapabilityClaimStore, CapabilityConfidenceConfig,
+# Restore by appending the code below to versa/score_predictions.py, re-adding
+# `from versa.capability import CapabilityClaimStore, CapabilityConfidenceConfig,
 # compute_capability_confidence` and CapabilityClaim/CapabilityEvidence/CapabilityLabel
-# to its probe.models import. The module-docstring paragraph that went with it:
+# to its versa.models import. The module-docstring paragraph that went with it:
 #
 # A SECOND READER, NOT NEW MACHINERY: `compute_capability_prediction_trials`/
 # `score_capability_predictions_for_all_learners` below apply the

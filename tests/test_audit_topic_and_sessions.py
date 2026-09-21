@@ -22,7 +22,7 @@ async def test_get_turn_returns_the_actual_text(transcript, clean_pool, learner_
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_get_turn_returns_none_for_unknown_turn(clean_pool):
-    from probe.audit import TranscriptStore
+    from versa.audit import TranscriptStore
 
     transcript = TranscriptStore(clean_pool)
     assert await transcript.get_turn(uuid4()) is None

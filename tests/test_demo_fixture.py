@@ -3,13 +3,13 @@ Confirms the two portraits are genuinely opposite and re-seeding is
 idempotent (no duplicate claims on a second call)."""
 import pytest
 
-from probe.claims import ClaimStore
-from probe.demo_fixture import (
+from versa.claims import ClaimStore
+from versa.demo_fixture import (
     ABSTRACT_PORTRAIT_LABEL,
     CONCRETE_PORTRAIT_LABEL,
     seed_demo_fixture,
 )
-from probe.models import ClaimStatus, StatedPreferenceLabel
+from versa.models import ClaimStatus, StatedPreferenceLabel
 
 
 @pytest.mark.asyncio(loop_scope="session")

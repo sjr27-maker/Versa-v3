@@ -4,7 +4,7 @@
 
 Instead of quietly assuming what a student meant, Versa recognizes uncertainty, asks one sharp clarifying question with real, clickable options — not vague "what do you prefer" quizzing — and remembers how every past ambiguity was resolved. Over time it starts recognizing a student's own thinking style, not from a survey, but from accumulated evidence.
 
-The Python package is named `probe`; **Versa** is the product name. This README describes the codebase as it currently stands.
+The Python package and CLI are both named `versa`. This README describes the codebase as it currently stands.
 
 ---
 
@@ -64,12 +64,12 @@ A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`)
 - **Memory layer** (`memory.py`) — `learner_facts` (within-session recall that can skip branching entirely when a past fact resolves the current message) and `thinking_style_candidates` (a cross-session order-of-reasoning pattern, promoted into the live prompt only after enough independent confirmations).
 - **Interaction / retrieval pipeline** (`interactions.py`, `retrieval.py`, `history_block.py`) — an append-only log of every exchange, with deterministic three-stage retrieval over a learner's own history and population-level patterns. Feeds the history block into the final-answer prompt; its LLM-based selection *predictions* are recorded but do not yet influence the student's response.
 - **Claim layer** (`claims.py`) — a durable, cross-session model of a learner's standing preferences, extracted **only** from episodes that were actually surprising (high prediction error), each claim carrying a falsifiable `test` and promoted only past an evidence/topic-spread gate.
-- **Parked: capability & instrument layers** (`archive/instrument_layer/`) — a separate capability-claim store plus purpose-built interactions (`locate`, `predict`) whose event streams were interpreted by hand-written deterministic contracts. Removed from the live architecture ahead of a redesign; nothing imports it and `pytest` never collects it. Restore steps are in that directory's README. Their migrations and tables remain in the schema, dormant.
+- **Parked: capability & instrument layers** (`archive/instrument_layer/`) — a separate capability-claim store plus purpose-built interactions (`locate`, `predict`) whose event streams were interpreted by hand-written deterministic contracts. Removed from the live architecture; nothing imports it and `pytest` never collects it. Restore steps are in that directory's README. Their migrations and tables remain in the schema, dormant.
 - **Population patterns** (`population_patterns.py`) — clusters interaction abstracts across many learners, surfacing only patterns backed by ≥20 distinct learners with no single learner dominating.
 - **Domain switch** (`domain_config.py`) — a prompts-only knob (`education` vs `general`) for testing whether the architecture is genuinely domain-independent.
 - **Reference bindings & stated preferences** (`reference_bindings.py`, in `interactions.py`) — exact-match memory of a learner's recurring phrases and explicitly stated preferences, threaded into the prompt.
 
-Every entry point builds the loop through the single assembly point `session_builder.build_session_loop`, so no two entry points can silently diverge in which stores they wire in. `probe chat` is the only interactive one today — the web UI was removed ahead of a redesign, and any future server should build its loop through the same function.
+Every entry point builds the loop through the single assembly point `session_builder.build_session_loop`, so no two entry points can silently diverge in which stores they wire in. `versa chat` and `versa serve` (the API the app talks to) both build their loop through it.
 
 ---
 
@@ -77,9 +77,11 @@ Every entry point builds the loop through the single assembly point `session_bui
 
 **Language:** Python 3.12+
 
-**Web:** none at present. The previous Starlette + single-page UI was removed ahead of a redesign; the CLI (`probe chat` and friends) is the only entry point.
+**Server:** FastAPI + uvicorn (`src/versa/server.py`), started with `versa serve`: REST for sign-in/sessions and one WebSocket per chat that streams the answer as it is written.
 
-**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 54 ordered SQL migrations in `src/probe/migrations/`, applied via `probe migrate` and tracked in a `schema_migrations` ledger.
+**App:** Flutter (Dart), one codebase for web, Windows, Android and iOS, in `app/`. Today: a working Sandbox chat plus labelled placeholders for everything else.
+
+**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 54 ordered SQL migrations in `src/versa/migrations/`, applied via `versa migrate` and tracked in a `schema_migrations` ledger.
 
 **LLM / embeddings:** Google Gen AI SDK (`google-genai`), Gemini API. Every LLM-calling command accepts `--stub` to run against an in-memory stub client that needs no key and costs nothing.
 
@@ -89,7 +91,7 @@ Every entry point builds the loop through the single assembly point `session_bui
 
 ### Gemini model tiers
 
-The tier→model mapping lives in `src/probe/model_config.py` and can be overridden by environment variable without a code change (Gemini preview model ids drift over time).
+The tier→model mapping lives in `src/versa/model_config.py` and can be overridden by environment variable without a code change (Gemini preview model ids drift over time).
 
 | Tier | Default model | Used by |
 |---|---|---|
@@ -117,7 +119,7 @@ Both `capable` and `best` are pinned to flash-class models because Pro-class mod
 
    ```bash
    git clone <repo-url>
-   cd probe
+   cd <repo-dir>
    ```
 
 2. Start Postgres (with pgvector) on port 5434:
@@ -137,62 +139,97 @@ Both `capable` and `best` are pinned to flash-class models because Pro-class mod
    ```bash
    cp .env.example .env
    # then edit .env and set:
-   #   DATABASE_URL=postgresql://probe:probe@localhost:5434/probe
+   #   DATABASE_URL=postgresql://versa:versa@localhost:5434/versa
    #   GEMINI_API_KEY=<your key>        # only needed for non-stub runs
    ```
 
 5. Apply migrations, then confirm:
 
    ```bash
-   uv run probe migrate
-   uv run probe migrate --status
+   uv run versa migrate
+   uv run versa migrate --status
    ```
 
 6. Start a session (no key needed with `--stub`):
 
    ```bash
-   uv run probe chat --learner <label> --stub
+   uv run versa chat --learner <label> --stub
    ```
+
+### Run the app
+
+The quickest way, on Windows:
+
+```powershell
+.\scripts\start.ps1            # real Gemini (needs GEMINI_API_KEY in .env)
+.\scripts\start.ps1 -Stub      # no key, no cost
+```
+
+It starts Docker + Postgres, applies migrations, builds the web app the first time, serves everything and opens **http://localhost:8000**. Sign in with any name (the same name next time = the same memory).
+
+By hand:
+
+```bash
+docker compose up -d
+uv run versa migrate
+(cd app && flutter build web --release)     # once, and after changing app/lib
+uv run versa serve                           # API + the built app at http://localhost:8000
+```
+
+Flutter is not on your PATH by default here: use `C:\src\flutter\bin\flutter`. Other targets: `flutter run -d windows`, or `flutter run -d edge --dart-define=VERSA_API=http://localhost:8000` for hot reload against a running `versa serve`.
+
+The server has **no authentication** and binds to 127.0.0.1: local development only.
 
 ---
 
 ## CLI reference
 
-Every command is available as `uv run probe <command>`. Commands that call an LLM accept `--stub` to run with no key and no cost.
+Every command is available as `uv run versa <command>`. Commands that call an LLM accept `--stub` to run with no key and no cost.
 
 | Command | What it does |
 |---|---|
-| `probe chat --learner <label\|uuid>` | Start an interactive disambiguation-mode session. A label resumes a matching learner or creates one; a UUID must already exist. Accepts `--stub`. |
-| `probe migrate` | Apply pending SQL migrations in order, once each (idempotent). |
-| `probe migrate --status` | Show applied/pending migrations without changing anything. |
-| `probe migrate --baseline` | Stamp every migration as already-applied without running it — for a DB that already has the full schema but no ledger. |
-| `probe consolidate-session <session-id>` | Run the cross-session thinking-style detection step for one completed session on demand. Accepts `--stub`. |
-| `probe aggregate-patterns` | Cluster every learner's latest interaction abstracts and write readable population patterns (≥20 distinct learners, ≤25% single-learner share). |
-| `probe seed-demo-fixture` | (Re)apply two hand-authored, opposite-portrait demo learners plus a fixed question set. Idempotent; no LLM/embedding call. |
-| `probe compare-portraits [--question]` | Three-column wrong-portrait control: the same question run against the concrete portrait, the abstract portrait, and a zero-claims control, side by side. Accepts `--stub` (under a stub all three columns are identical by construction). |
-| `probe review-claims --learner <label\|uuid>` | Read-only listing of one learner's claims: statement, test, status, confidence, evidence count, topic spread, and the interactions behind each evidence row. |
-| `probe score-predictions [--exclude-contaminated]` | Read-only reliability-diagram check: observed-vs-predicted hit rate per confidence bucket plus an overall Brier score, pooled across all learners. |
+| `versa serve [--port 8000] [--stub]` | Run the API the app talks to, and serve the built web app (`app/build/web`) at `/`. |
+| `versa chat --learner <label\|uuid>` | Start an interactive disambiguation-mode session. A label resumes a matching learner or creates one; a UUID must already exist. Accepts `--stub`. |
+| `versa migrate` | Apply pending SQL migrations in order, once each (idempotent). |
+| `versa migrate --status` | Show applied/pending migrations without changing anything. |
+| `versa migrate --baseline` | Stamp every migration as already-applied without running it — for a DB that already has the full schema but no ledger. |
+| `versa consolidate-session <session-id>` | Run the cross-session thinking-style detection step for one completed session on demand. Accepts `--stub`. |
+| `versa aggregate-patterns` | Cluster every learner's latest interaction abstracts and write readable population patterns (≥20 distinct learners, ≤25% single-learner share). |
+| `versa seed-demo-fixture` | (Re)apply two hand-authored, opposite-portrait demo learners plus a fixed question set. Idempotent; no LLM/embedding call. |
+| `versa compare-portraits [--question]` | Three-column wrong-portrait control: the same question run against the concrete portrait, the abstract portrait, and a zero-claims control, side by side. Accepts `--stub` (under a stub all three columns are identical by construction). |
+| `versa review-claims --learner <label\|uuid>` | Read-only listing of one learner's claims: statement, test, status, confidence, evidence count, topic spread, and the interactions behind each evidence row. |
+| `versa score-predictions [--exclude-contaminated]` | Read-only reliability-diagram check: observed-vs-predicted hit rate per confidence bucket plus an overall Brier score, pooled across all learners. |
 
 ---
 
 ## Testing
 
-The automated suite runs entirely against a stub LLM/embedding client with **no external calls and no API key required**. It shares `DATABASE_URL` with the dev DB by default — running `pytest` wipes and rebuilds that database from migrations, so point it at a throwaway/dev database, not a persistent one.
+The automated suite runs entirely against a stub LLM/embedding client with **no external calls and no API key required**. It wipes and rebuilds the database named by `VERSA_TEST_DATABASE_URL` (a separate `versa_test` database, so your dev data is safe). **Set it**: if it is unset the suite falls back to a default that can be your dev database.
 
 ```bash
+docker compose exec postgres createdb -U versa versa_test     # once
+# .env:  VERSA_TEST_DATABASE_URL=postgresql://versa:versa@localhost:5434/versa_test
 uv run pytest
+(cd app && flutter test)                                       # the app's tests
+```
+
+Two tools measure the real thing (a few cents of Gemini calls each):
+
+```bash
+uv run python scripts/measure_turn.py            # where a real turn's time goes, call by call
+uv run python scripts/eval_assess_thinking.py    # does limiting model thinking change when options appear?
 ```
 
 Try a live session against the real API:
 
 ```bash
-uv run probe chat --learner test-user
+uv run versa chat --learner test-user
 ```
 
 Or run the same thing with no API calls or cost:
 
 ```bash
-uv run probe chat --learner test-user --stub
+uv run versa chat --learner test-user --stub
 ```
 
 | Credential | Required for | Where to get it |
@@ -217,8 +254,10 @@ See `CLAUDE.md` for the full, numbered set with the rationale behind each one.
 ## Project layout
 
 ```
-src/probe/
-  cli.py                 # `probe` command entry point (argparse)
+src/versa/
+  cli.py                 # `versa` command entry point (argparse)
+  server.py              # HTTP + WebSocket API over SessionLoop (`versa serve`)
+  streaming.py           # per-turn answer streaming plumbing
   session_builder.py     # the one place a fully-wired SessionLoop is built
   loop.py                # SessionLoop — the turn orchestrator
   disambiguate.py        # the live three-call disambiguation mode
@@ -232,13 +271,17 @@ src/probe/
   llm.py, embeddings.py  # Gemini + stub clients
   migrations/*.sql        # 54 ordered schema migrations
 tests/                    # pytest suite (stub-backed, no external calls)
+app/                      # the Flutter app (web, Windows, Android, iOS)
+scripts/                  # start.ps1 (one-command launcher), measure_turn.py, eval_assess_thinking.py, bench_retrieval.py
+docs/verification-runs/   # saved output from past staged/grounding verification runs
 archive/instrument_layer/ # parked capability + instrument code (not imported; see its README)
-docker-compose.yml        # local Postgres 16 + pgvector on :5434
+docker-compose.yml        # local Postgres 16 + pgvector (port from VERSA_DB_PORT, default 5434)
 Dockerfile                # container image (uv sync; no entrypoint yet)
+docs/IDEAS.md             # parked ideas, deferred work, known issues, decisions log
 ```
 
 ---
 
 ## Deployment
 
-Deployed on Google Cloud Run, backed by Cloud SQL (Postgres + pgvector) and Secret Manager for credentials. The container (`Dockerfile`) runs `uv sync --frozen` and currently has no entrypoint, because the web server was removed ahead of a redesign — set `CMD` (and `PORT`/`EXPOSE`) once the new server exists.
+Deployed on Google Cloud Run, backed by Cloud SQL (Postgres + pgvector) and Secret Manager for credentials. The container (`Dockerfile`) runs `uv sync --frozen` and currently has no entrypoint on purpose: `versa serve` has no authentication yet, so it must not be exposed publicly. Add auth first, then set `CMD` (`versa serve --host 0.0.0.0 --port $PORT`) and build the web app into the image.

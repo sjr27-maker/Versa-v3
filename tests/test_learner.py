@@ -3,7 +3,7 @@ from uuid import uuid4
 import asyncpg
 import pytest
 
-from probe.cli import _resolve_learner
+from versa.cli import _resolve_learner
 
 
 @pytest.mark.asyncio(loop_scope="session")

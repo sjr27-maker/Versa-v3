@@ -5,18 +5,18 @@ here is called by handle_turn, only directly, matching the manual-
 trigger scope this build asked for."""
 import pytest
 
-from probe.audit import NodeCallStore, TranscriptStore
-from probe.claims import ClaimStore
-from probe.instruments import (
+from versa.audit import NodeCallStore, TranscriptStore
+from versa.claims import ClaimStore
+from versa.instruments import (
     PREDICT_CORRECT_OPTION,
     InstrumentEventStore,
     InstrumentOutcome,
     InstrumentPrimitive,
 )
-from probe.interactions import InteractionRecorder, InteractionStore, TurnOutcomeStore
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.models import EvidenceSource, InstrumentEvent, InstrumentEventType
+from versa.interactions import InteractionRecorder, InteractionStore, TurnOutcomeStore
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.models import EvidenceSource, InstrumentEvent, InstrumentEventType
 
 
 def _build_loop(pool, embedding_client):
@@ -52,7 +52,7 @@ async def test_present_instrument_turn_lands_at_the_next_real_turn_number(
     instrument = await loop.present_instrument_turn(session_id, InstrumentPrimitive.PREDICT)
     assert instrument.session_id == session_id  # same session, not a fresh one
 
-    from probe.instruments import InstrumentStore
+    from versa.instruments import InstrumentStore
 
     fetched = await InstrumentStore(clean_pool).get(instrument.id)
     async with clean_pool.acquire() as conn:
@@ -86,8 +86,8 @@ async def test_full_instrument_turn_flow_writes_evidence_through_the_normal_path
     events = await InstrumentEventStore(clean_pool).list_for_instrument(instrument.id)
     assert len(events) == 2  # both events landed through record_instrument_event
 
-    from probe.capability import CapabilityClaimStore
-    from probe.instruments import InteractionContractStore, InstrumentStore
+    from versa.capability import CapabilityClaimStore
+    from versa.instruments import InteractionContractStore, InstrumentStore
 
     fetched_instrument = await InstrumentStore(clean_pool).get(instrument.id)
     assert fetched_instrument.completed_at is not None
@@ -118,7 +118,7 @@ async def test_abandoned_instrument_turn_writes_no_evidence(
     outcome = await loop.finalize_instrument_turn(instrument.id)
     assert outcome is InstrumentOutcome.UNINFORMATIVE
 
-    from probe.instruments import InstrumentStore
+    from versa.instruments import InstrumentStore
 
     fetched_instrument = await InstrumentStore(clean_pool).get(instrument.id)
     assert fetched_instrument.abandoned is True

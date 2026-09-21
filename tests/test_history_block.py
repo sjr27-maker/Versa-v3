@@ -6,7 +6,7 @@ pipeline instead."""
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from probe.history_block import (
+from versa.history_block import (
     HistoryBlockConfig,
     HistoryItem,
     _condense,

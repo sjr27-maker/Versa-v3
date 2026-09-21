@@ -9,8 +9,8 @@ compute_confidence's own math a second time.
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from probe.models import Claim, ClaimEvidence, ClaimSource, ClaimWritePolicy, EvidenceDirection, StatedPreferenceLabel
-from probe.score_predictions import (
+from versa.models import Claim, ClaimEvidence, ClaimSource, ClaimWritePolicy, EvidenceDirection, StatedPreferenceLabel
+from versa.score_predictions import (
     CalibrationBin,
     PredictionTrial,
     brier_score,

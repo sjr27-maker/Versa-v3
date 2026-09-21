@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import pytest
 
-from probe.embeddings import EMBEDDING_DIM
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.memory import MemoryConfig
-from probe.models import LearnerFact, LearnerFactType
+from versa.embeddings import EMBEDDING_DIM
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.memory import MemoryConfig
+from versa.models import LearnerFact, LearnerFactType
 
 _NOT_AMBIGUOUS = json.dumps({"needs_branches": False, "branches": []})
 _TWO_BRANCHES = json.dumps(

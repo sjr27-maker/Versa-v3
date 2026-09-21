@@ -67,7 +67,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from probe.models import ApproachAxis, CapabilityLabel, MeasurementKind, StatedPreferenceLabel
+from versa.models import ApproachAxis, CapabilityLabel, MeasurementKind, StatedPreferenceLabel
 
 __all__ = ["METHOD_CAPABILITIES", "MeasurementKind", "MethodCapability"]
 

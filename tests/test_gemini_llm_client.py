@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 
+import httpx
 import pytest
 from google.genai import errors
 
-from probe.llm import GeminiLLMClient, LLMTransportError, _PooledGeminiLLMClient
+from versa.llm import GeminiLLMClient, LLMTransportError, _PooledGeminiLLMClient
 
 
 class _FakeResponse:
@@ -29,9 +30,11 @@ class _FakeModels:
     def __init__(self, outcomes: list) -> None:
         self._outcomes = list(outcomes)
         self.calls = 0
+        self.last_config = None
 
     async def generate_content(self, model, contents, config):
         self.calls += 1
+        self.last_config = config
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -86,7 +89,7 @@ async def test_retries_a_429_then_succeeds_and_counts_the_retry():
 @pytest.mark.asyncio
 async def test_logs_model_prompt_prefix_attempt_status_and_backoff(caplog):
     client, _fake = _fast_client([_rate_limited(), "ok"])
-    with caplog.at_level(logging.WARNING, logger="probe.llm"):
+    with caplog.at_level(logging.WARNING, logger="versa.llm"):
         await client.complete("SCORE:LEARNING_VALUE\naction=explain\n" + "x" * 200)
 
     records = [r for r in caplog.records if "retry" in r.getMessage().lower()]
@@ -134,3 +137,68 @@ async def test_pooled_client_sums_retry_count_across_its_delegates():
     await pooled.complete("second")  # round-robins to delegate 1 (0 retries)
 
     assert pooled.retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_is_sent_as_thinking_config():
+    fake = _FakeGenaiClient(["ok"])
+    client = GeminiLLMClient(fake, "m", thinking="minimal")
+    assert await client.complete("TEACH: hi") == "ok"
+    assert fake.models.last_config.thinking_config.thinking_level.value.lower() == "minimal"
+
+
+@pytest.mark.asyncio
+async def test_integer_thinking_setting_is_sent_as_a_budget():
+    fake = _FakeGenaiClient(["ok"])
+    client = GeminiLLMClient(fake, "m", thinking="0")
+    await client.complete("TEACH: hi")
+    assert fake.models.last_config.thinking_config.thinking_budget == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting", [None, "", "default"])
+async def test_default_thinking_sends_no_thinking_config(setting):
+    fake = _FakeGenaiClient(["ok"])
+    client = GeminiLLMClient(fake, "m", thinking=setting)
+    await client.complete("TEACH: hi")
+    cfg = fake.models.last_config
+    assert cfg is None or cfg.thinking_config is None
+
+
+def test_invalid_thinking_setting_fails_loudly_at_construction():
+    with pytest.raises(ValueError, match="invalid thinking setting"):
+        GeminiLLMClient(_FakeGenaiClient([]), "m", thinking="turbo")
+
+
+@pytest.mark.asyncio
+async def test_pooled_client_passes_thinking_to_every_delegate():
+    fakes = [_FakeGenaiClient(["a"]), _FakeGenaiClient(["b"])]
+    pooled = _PooledGeminiLLMClient(fakes, "m", thinking="low")
+    await pooled.complete("TEACH: x")
+    await pooled.complete("TEACH: y")
+    assert all(f.models.last_config.thinking_config.thinking_level.value.lower() == "low" for f in fakes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        httpx.ReadError("connection dropped mid-response"),
+        httpx.ConnectError("no route"),
+        httpx.ReadTimeout("slow"),
+        httpx.RemoteProtocolError("server disconnected"),
+    ],
+)
+async def test_transient_network_errors_are_retried(exc):
+    client, fake = _fast_client([exc, "ok"])
+    assert await client.complete("TEACH: hi") == "ok"
+    assert fake.models.calls == 2
+    assert client.retry_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_programming_error_from_httpx_is_not_retried():
+    client, fake = _fast_client([httpx.UnsupportedProtocol("ftp://"), "never reached"])
+    with pytest.raises(httpx.UnsupportedProtocol):
+        await client.complete("TEACH: hi")
+    assert fake.models.calls == 1

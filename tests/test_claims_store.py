@@ -8,15 +8,15 @@ from uuid import uuid4
 
 import pytest
 
-from probe.claims import (
+from versa.claims import (
     ClaimRestatementConfig,
     maybe_restate_claims,
     merge_duplicate_claims,
     reconcile_candidate,
 )
-from probe.embeddings import EMBEDDING_DIM
-from probe.llm import StubLLMClient
-from probe.models import (
+from versa.embeddings import EMBEDDING_DIM
+from versa.llm import StubLLMClient
+from versa.models import (
     ApproachAxis,
     Claim,
     ClaimCandidate,
@@ -141,7 +141,7 @@ async def test_contradict_is_terminal_even_after_refresh(claim_store, learner_id
 async def test_refresh_updates_confidence_from_evidence(
     claim_store, learner_id, transcript, interaction_recorder, clean_pool
 ):
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -169,7 +169,7 @@ async def test_refresh_updates_confidence_from_evidence(
 async def test_reconcile_new_candidate_creates_a_claim(
     claim_store, learner_id, transcript, interaction_recorder, embedding_client, clean_pool
 ):
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -195,8 +195,8 @@ async def test_reconcile_new_candidate_creates_a_claim(
 async def test_reconcile_matching_value_appends_supporting_evidence(
     claim_store, learner_id, transcript, interaction_recorder, clean_pool
 ):
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import QuestionAuthor
 
     statement_a = "wants concrete examples before the rule"
     statement_b = "prefers a worked example first"
@@ -247,8 +247,8 @@ async def test_reconcile_a_single_opposite_value_pick_lowers_confidence_but_does
     why (people are inconsistent; one off-persona pick doesn't disprove
     a standing trait). Same session as the supporting episode, same as
     before."""
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import QuestionAuthor
 
     statement_a = "wants concrete examples before the rule"
     statement_b = "wants the rule stated before any example"
@@ -300,8 +300,8 @@ async def test_reconcile_sustained_cross_session_reversal_derives_contradicted(
     confidence below the floor with contrary evidence from well over
     `contradiction_min_sessions` sessions, so the claim now legitimately
     earns `contradicted`."""
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import QuestionAuthor
 
     statement_a = "wants concrete examples before the rule"
     statement_b = "wants the rule stated before any example"
@@ -354,8 +354,8 @@ async def test_reconcile_an_ineligible_contradiction_is_recorded_but_does_not_cl
     in the ledger -- but must NOT flip the claim to contradicted. An
     ineligible pick has zero power to raise confidence; it must also
     have zero power to terminally close a claim."""
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import QuestionAuthor
 
     statement_a = "wants concrete examples before the rule"
     statement_b = "wants the rule stated before any example"
@@ -428,7 +428,7 @@ async def test_reconcile_retracts_a_new_claim_founded_on_a_subject_kind_episode(
     legitimate teaching-preference evidence -- it must be retracted
     immediately, not left live as a candidate competing for future
     evidence that belongs to a real claim."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -456,7 +456,7 @@ async def test_reconcile_does_not_retract_a_stated_preference_claim(
     (no live option set) but is a genuine self-report, not an
     uncontestable topic pick -- episode_kind=None must NOT trigger
     retraction."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -479,7 +479,7 @@ async def test_reconcile_does_not_retract_a_stated_preference_claim(
 async def test_reconcile_does_not_retract_an_eligible_approach_kind_claim(
     claim_store, learner_id, transcript, interaction_recorder, embedding_client, clean_pool
 ):
-    from probe.models import ApproachAxis, QuestionAuthor
+    from versa.models import ApproachAxis, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -506,7 +506,7 @@ async def test_reconcile_unrelated_label_below_similarity_creates_a_new_claim(
     """Two genuinely different statements (the stub's default
     near-orthogonal hashing, no canned override) must never match --
     each becomes its own claim."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -550,7 +550,7 @@ async def test_reconcile_matches_by_axis_even_when_statements_are_dissimilar(
     SAME axis reconcile to one claim, even though the stub's default
     (uncanned) hashing makes their embeddings near-orthogonal -- axis
     identity is an exact match, not a similarity judgment."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -597,7 +597,7 @@ async def test_reconcile_by_axis_single_opposite_value_does_not_close(
     but one opposite-value episode (same session) only lowers
     confidence -- same derived-contradiction rule as the similarity-
     based path (`evaluate_contradiction`)."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -641,7 +641,7 @@ async def test_reconcile_by_axis_does_not_reopen_a_contradicted_claim(
     """A contradicted claim is terminal -- once sustained cross-session
     reversal has actually earned that status, a later same-axis pick
     starts a fresh claim rather than implicitly reopening it."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_0 = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -707,8 +707,8 @@ async def test_reconcile_disambiguates_within_a_shared_axis_by_similarity(
     or a pre-fix legacy fragment), similarity picks which one a new
     candidate continues -- axis identity narrows the field, it doesn't
     replace disambiguation entirely."""
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import QuestionAuthor
 
     vec_a = [1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 2)
     vec_b = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
@@ -771,7 +771,7 @@ async def test_reconcile_with_no_axis_falls_back_to_similarity(
     """axis=None (a stated-preference or contradicted_intent trigger
     with no live option set) uses the same pure-similarity matching as
     before axis existed -- unrelated statements never merge."""
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -817,7 +817,7 @@ async def test_merge_duplicate_claims_collapses_same_axis_same_value_survivor_is
     repointed) while a COPY lands on the survivor."""
     from datetime import UTC, datetime, timedelta
 
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     session_old = await transcript.create_session(learner_id)
     i_old = await interaction_recorder.record(
@@ -885,7 +885,7 @@ async def test_merge_flips_direction_for_the_defined_opposite_value(
     not verbatim."""
     from datetime import UTC, datetime, timedelta
 
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     session_old = await transcript.create_session(learner_id)
     i_old = await interaction_recorder.record(
@@ -938,7 +938,7 @@ async def test_merge_leaves_axis_sharing_but_value_incompatible_claims_separate(
     """Sharing an axis is necessary but not sufficient -- a6c9cdb3-like
     claims (same axis, an unrelated value with no defined opposite
     relationship) are genuinely different traits and must not merge."""
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     i0 = await interaction_recorder.record(
@@ -1017,8 +1017,8 @@ async def test_reconcile_merges_reopened_fragments_before_matching(
     OLDER survivor."""
     from datetime import UTC, datetime, timedelta
 
-    from probe.embeddings import StubEmbeddingClient
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.embeddings import StubEmbeddingClient
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     vec_old = [1.0, 0.0] + [0.0] * (EMBEDDING_DIM - 2)
     vec_new = [0.0, 1.0] + [0.0] * (EMBEDDING_DIM - 2)
@@ -1097,7 +1097,7 @@ async def test_mark_evidence_contaminated_sets_the_note_without_changing_anythin
     """The one sanctioned mutation of an existing claim_evidence row --
     direction/topic/axis/eligibility all stay exactly as recorded; only
     the note is new."""
-    from probe.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -1134,7 +1134,7 @@ async def test_mark_evidence_contaminated_sets_the_note_without_changing_anythin
 async def test_reconcile_writes_a_founding_statement_row_on_claim_creation(
     claim_store, learner_id, transcript, interaction_recorder, embedding_client, clean_pool
 ):
-    from probe.models import QuestionAuthor
+    from versa.models import QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     interaction = await interaction_recorder.record(
@@ -1164,7 +1164,7 @@ async def test_reconcile_writes_a_founding_statement_row_on_claim_creation(
 async def test_append_statement_is_append_only_and_current_resolves_to_latest(
     claim_store, learner_id, clean_pool
 ):
-    from probe.models import ClaimStatementRecord
+    from versa.models import ClaimStatementRecord
 
     claim = _claim(learner_id)
     await claim_store.create(claim)
@@ -1191,7 +1191,7 @@ async def test_maybe_restate_claims_skips_below_the_evidence_threshold(
     """Two new rows since the last statement, threshold is 4 -- no
     restatement, and definitely no LLM call (a canned response that
     would fail the test if invoked proves this)."""
-    from probe.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     claim = _claim(learner_id, statement="founded on biology")
@@ -1224,7 +1224,7 @@ async def test_maybe_restate_claims_skips_when_evidence_never_left_the_founding_
 ):
     """Enough new rows, but every one is still the founding topic --
     nothing to generalize away from yet, so the existing wording stays."""
-    from probe.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     claim = _claim(learner_id, statement="founded on biology")
@@ -1259,7 +1259,7 @@ async def test_maybe_restate_claims_restates_once_both_conditions_hold(
     claim_statements row without touching Claim.statement."""
     import json as _json
 
-    from probe.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     claim = _claim(learner_id, statement="prefers analogies for biological explanations")
@@ -1322,7 +1322,7 @@ async def test_maybe_restate_claims_excludes_contaminated_evidence_from_the_llm_
     StubLLMClient's own recorded `.prompts`) to prove the contaminated
     topic never reached the LLM, and the domain-spread gate is judged
     against clean evidence only."""
-    from probe.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
+    from versa.models import ClaimEvidence, ClaimStatementRecord, EvidenceDirection, QuestionAuthor
 
     session_id = await transcript.create_session(learner_id)
     claim = _claim(learner_id, statement="founded on biology")

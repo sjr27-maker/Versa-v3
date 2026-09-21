@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from probe.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
-from probe.llm import StubLLMClient
-from probe.models import AmbiguityKind, ApproachAxis, DisambiguationBranch
+from versa.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
+from versa.llm import StubLLMClient
+from versa.models import AmbiguityKind, ApproachAxis, DisambiguationBranch
 
 
 @pytest.mark.asyncio(loop_scope="session")

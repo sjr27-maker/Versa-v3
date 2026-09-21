@@ -8,9 +8,9 @@ import json
 
 import pytest
 
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.models import BranchStatus, OptionStatus
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.models import BranchStatus, OptionStatus
 
 
 def _make_loop(transcript, node_calls, disambiguation_store, llm=None, diagnostics_store=None):

@@ -5,9 +5,9 @@ unchanged (no capability-specific bucketing logic exists anywhere)."""
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from probe.capability import CapabilityConfidenceConfig
-from probe.models import CapabilityClaim, CapabilityEvidence, CapabilityLabel, ClaimWritePolicy, EvidenceDirection
-from probe.score_predictions import bucket_trials, compute_capability_prediction_trials
+from versa.capability import CapabilityConfidenceConfig
+from versa.models import CapabilityClaim, CapabilityEvidence, CapabilityLabel, ClaimWritePolicy, EvidenceDirection
+from versa.score_predictions import bucket_trials, compute_capability_prediction_trials
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

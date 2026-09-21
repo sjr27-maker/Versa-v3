@@ -1,5 +1,5 @@
 # PARKED: SessionLoop's three instrument methods, extracted verbatim from
-# probe/loop.py (they were class members -- restore by pasting back inside
+# versa/loop.py (they were class members -- restore by pasting back inside
 # `class SessionLoop`, just above `_build_disambiguation_history`).
 
     # ─────────────────────────── instrument turns (manual trigger) ─────
@@ -10,8 +10,8 @@
     # /instrument route) only tells you about someone doing an
     # exercise. These three methods are the whole of that wiring: no
     # router exists yet, nothing here decides WHEN to present one --
-    # `handle_turn` never calls any of them. A caller (the CLI, the
-    # web UI, or eventually a router) picks the primitive and calls
+    # `handle_turn` never calls any of them. A caller (the CLI, or
+    # eventually a router) picks the primitive and calls
     # `present_instrument_turn` directly.
 
     async def present_instrument_turn(
@@ -24,7 +24,7 @@
         (`claim_store`/`retrieval_pool` -- the same dependency
         `extract_claims_for_session` already has): an instrument's
         evidence has nowhere to go without it."""
-        from probe import instruments as _instruments
+        from versa import instruments as _instruments
 
         if self._claim_store is None or self._retrieval_pool is None:
             raise RuntimeError(
@@ -35,7 +35,7 @@
         turns = await self._transcript.list_turns(session_id)
         turn_number = max((t.turn_index for t in turns), default=-1) + 1
 
-        from probe.capability import CapabilityClaimStore
+        from versa.capability import CapabilityClaimStore
 
         interaction_store = InteractionStore(self._retrieval_pool)
         instrument_store = _instruments.InstrumentStore(self._retrieval_pool)
@@ -50,7 +50,7 @@
         """Appends one raw event through the normal path -- no
         interpretation happens here (instrument_events' own "nothing
         writes an interpretation back onto a row here")."""
-        from probe import instruments as _instruments
+        from versa import instruments as _instruments
 
         await _instruments.InstrumentEventStore(self._retrieval_pool).append(event)
 
@@ -64,8 +64,8 @@
         webserver.py's standalone `/finalize` route performs, now
         available on a session that's actually being tutored rather
         than only on the isolated demo page."""
-        from probe import instruments as _instruments
-        from probe.capability import CapabilityClaimStore
+        from versa import instruments as _instruments
+        from versa.capability import CapabilityClaimStore
 
         instrument_store = _instruments.InstrumentStore(self._retrieval_pool)
         contract_store = _instruments.InteractionContractStore(self._retrieval_pool)

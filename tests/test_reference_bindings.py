@@ -12,19 +12,19 @@ from uuid import uuid4
 
 import pytest
 
-from probe.disambiguate import DisambiguationStore
-from probe.history_block import HistoryBlockConfig
-from probe.interactions import InteractionRecorder
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.models import QuestionAuthor, ReferenceBinding
-from probe.reference_bindings import (
+from versa.disambiguate import DisambiguationStore
+from versa.history_block import HistoryBlockConfig
+from versa.interactions import InteractionRecorder
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.models import QuestionAuthor, ReferenceBinding
+from versa.reference_bindings import (
     ReferenceBindingConfig,
     ReferenceBindingMatch,
     match_reference_bindings,
     render_reference_bindings_block,
 )
-from probe.retrieval_config import RetrievalConfig
+from versa.retrieval_config import RetrievalConfig
 
 _NOT_AMBIGUOUS = json.dumps({"needs_branches": False, "branches": []})
 _NO_RESOLUTION = json.dumps(

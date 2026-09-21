@@ -3,5 +3,5 @@ RUN pip install uv
 WORKDIR /app
 COPY . .
 RUN uv sync --frozen
-# No entrypoint on purpose: the web UI/server was removed ahead of a
-# redesign. Set CMD (and EXPOSE/PORT) once the new server exists.
+# No entrypoint yet: there is no server. Set CMD (and EXPOSE/PORT) once
+# one exists.

@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from probe.embeddings import EMBEDDING_DIM
-from probe.models import LearnerFact, LearnerFactType, ThinkingStyleStatus
+from versa.embeddings import EMBEDDING_DIM
+from versa.models import LearnerFact, LearnerFactType, ThinkingStyleStatus
 
 
 def _vec(*, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> list[float]:

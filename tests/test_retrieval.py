@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from probe.models import EntryState, HelpLevel, QuestionAuthor, TurnOutcomeLabel
-from probe.retrieval import (
+from versa.models import EntryState, HelpLevel, QuestionAuthor, TurnOutcomeLabel
+from versa.retrieval import (
     RecallHit,
     RetrievalContext,
     retrieve,
@@ -18,7 +18,7 @@ from probe.retrieval import (
     stage2_recall,
     stage3_rerank,
 )
-from probe.retrieval_config import RetrievalConfig, RetrievalWeights
+from versa.retrieval_config import RetrievalConfig, RetrievalWeights
 
 
 def _vec(x: float) -> list[float]:
@@ -233,7 +233,7 @@ async def test_stage2_tags_hits_by_which_embedding_column_matched(
         question_text="what is a derivative?", question_author=QuestionAuthor.LEARNER,
         originating_question=None, did_branch=False, response_text="an answer",
     )
-    from probe.models import InteractionAbstract
+    from versa.models import InteractionAbstract
 
     await interaction_abstract_store.append(
         InteractionAbstract(

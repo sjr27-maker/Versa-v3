@@ -4,14 +4,14 @@ event streams by hand against the real hand-authored locate contract
 predicates shipped, not a synthetic stand-in."""
 from uuid import uuid4
 
-from probe.instruments import (
+from versa.instruments import (
     LOCATE_DIAGNOSTIC_WRONG_ELEMENT,
     LOCATE_SEEDED_ERROR_ELEMENT,
     InstrumentOutcome,
     build_locate_demo_contract,
     interpret_instrument,
 )
-from probe.models import InstrumentEvent, InstrumentEventType
+from versa.models import InstrumentEvent, InstrumentEventType
 
 CONTRACT = build_locate_demo_contract(target_claim_id=uuid4())
 

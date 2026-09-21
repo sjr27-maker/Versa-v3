@@ -10,12 +10,12 @@ import json
 
 import pytest
 
-from probe.disambiguate import DisambiguationStore
-from probe.history_block import TEMPLATE_VERSION, HistoryBlockConfig
-from probe.interactions import InteractionRecorder
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.retrieval_config import RetrievalConfig
+from versa.disambiguate import DisambiguationStore
+from versa.history_block import TEMPLATE_VERSION, HistoryBlockConfig
+from versa.interactions import InteractionRecorder
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.retrieval_config import RetrievalConfig
 
 
 def _make_loop(

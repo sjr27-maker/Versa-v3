@@ -5,17 +5,17 @@ import pytest
 import pytest_asyncio
 from dotenv import load_dotenv
 
-from probe.audit import NodeCallStore, TranscriptStore
-from probe.db import create_pool
-from probe.diagnostics import TurnDiagnosticsStore
-from probe.disambiguate import DisambiguationStore
-from probe.embeddings import StubEmbeddingClient
-from probe.learner import LearnerStore
-from probe.memory import LearnerFactStore, ThinkingStyleStore
+from versa.audit import NodeCallStore, TranscriptStore
+from versa.db import create_pool
+from versa.diagnostics import TurnDiagnosticsStore
+from versa.disambiguate import DisambiguationStore
+from versa.embeddings import StubEmbeddingClient
+from versa.learner import LearnerStore
+from versa.memory import LearnerFactStore, ThinkingStyleStore
 
 # Root cause of two real data-loss incidents in this project's history:
-# `.env` has defined a genuinely separate PROBE_TEST_DATABASE_URL
-# (pointing at `probe_test`, not the dev database `probe`) the whole
+# `.env` has defined a genuinely separate VERSA_TEST_DATABASE_URL
+# (pointing at `versa_test`, not the dev database `versa`) the whole
 # time, but nothing here ever called load_dotenv() -- os.getenv() was
 # silently reading an unset environment variable and falling through
 # to the SAME hardcoded default DATABASE_URL also falls back to,
@@ -25,12 +25,12 @@ from probe.memory import LearnerFactStore, ThinkingStyleStore
 # below now only matters if .env itself is missing.
 load_dotenv()
 DATABASE_URL = os.getenv(
-    "PROBE_TEST_DATABASE_URL",
-    "postgresql://probe:probe@localhost:5434/probe",
+    "VERSA_TEST_DATABASE_URL",
+    "postgresql://versa:versa@localhost:5434/versa",
 )
 
 MIGRATIONS_DIR = (
-    Path(__file__).resolve().parent.parent / "src" / "probe" / "migrations"
+    Path(__file__).resolve().parent.parent / "src" / "versa" / "migrations"
 )
 MIGRATIONS = sorted(MIGRATIONS_DIR.glob("*.sql"))
 
@@ -149,7 +149,7 @@ async def transcript(clean_pool):
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def evidence_store(clean_pool):
-    from probe.evidence import EvidenceStore
+    from versa.evidence import EvidenceStore
 
     return EvidenceStore(clean_pool)
 
@@ -181,64 +181,64 @@ async def thinking_style_store(clean_pool):
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def interaction_store(clean_pool):
-    from probe.interactions import InteractionStore
+    from versa.interactions import InteractionStore
 
     return InteractionStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def interaction_option_store(clean_pool):
-    from probe.interactions import InteractionOptionStore
+    from versa.interactions import InteractionOptionStore
 
     return InteractionOptionStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def interaction_abstract_store(clean_pool):
-    from probe.interactions import InteractionAbstractStore
+    from versa.interactions import InteractionAbstractStore
 
     return InteractionAbstractStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def turn_outcome_store(clean_pool):
-    from probe.interactions import TurnOutcomeStore
+    from versa.interactions import TurnOutcomeStore
 
     return TurnOutcomeStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def prediction_store(clean_pool):
-    from probe.interactions import PredictionStore
+    from versa.interactions import PredictionStore
 
     return PredictionStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def stated_preference_store(clean_pool):
-    from probe.interactions import StatedPreferenceStore
+    from versa.interactions import StatedPreferenceStore
 
     return StatedPreferenceStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def reference_binding_store(clean_pool):
-    from probe.interactions import ReferenceBindingStore
+    from versa.interactions import ReferenceBindingStore
 
     return ReferenceBindingStore(clean_pool)
 
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def claim_store(clean_pool):
-    from probe.claims import ClaimStore
+    from versa.claims import ClaimStore
 
     return ClaimStore(clean_pool)
 
 
 @pytest_asyncio.fixture
 def interaction_recorder(interaction_store, turn_outcome_store, embedding_client):
-    from probe.interactions import InteractionRecorder
-    from probe.retrieval_config import RetrievalConfig
+    from versa.interactions import InteractionRecorder
+    from versa.retrieval_config import RetrievalConfig
 
     return InteractionRecorder(
         interaction_store,

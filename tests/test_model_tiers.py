@@ -9,9 +9,9 @@ to exercise the tier assignment in isolation.
 
 from unittest.mock import Mock
 
-from probe.llm import ModelTierClients, StubLLMClient
-from probe.loop import SessionLoop
-from probe.model_config import ModelTierConfig
+from versa.llm import ModelTierClients, StubLLMClient
+from versa.loop import SessionLoop
+from versa.model_config import ModelTierConfig
 
 
 def test_model_tier_config_defaults_when_no_env_vars_set(monkeypatch):

@@ -8,10 +8,10 @@ import json
 
 import pytest
 
-from probe.llm import StubLLMClient
-from probe.loop import SessionLoop
-from probe.memory import MemoryConfig
-from probe.models import ThinkingStyleStatus
+from versa.llm import StubLLMClient
+from versa.loop import SessionLoop
+from versa.memory import MemoryConfig
+from versa.models import ThinkingStyleStatus
 
 
 def _make_loop(
@@ -97,8 +97,8 @@ async def test_explicit_consolidate_session_ignores_turn_count(
     transcript, node_calls, clean_pool, learner_id, disambiguation_store,
     learner_fact_store, thinking_style_store, embedding_client,
 ):
-    """The standalone command / web UI button are deliberate,
-    unambiguous triggers — no turn-count gate, unlike run_interactive's
+    """The standalone command is a deliberate,
+    unambiguous trigger — no turn-count gate, unlike run_interactive's
     own auto-trigger."""
     llm = StubLLMClient(
         canned={

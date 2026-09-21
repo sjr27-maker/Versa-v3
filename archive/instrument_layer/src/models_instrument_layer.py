@@ -1,7 +1,7 @@
 """PARKED: the instrument-layer row shapes, extracted verbatim from
-`probe/models.py` (everything from the "instrument layer" marker to the
+`versa/models.py` (everything from the "instrument layer" marker to the
 end of that file). To restore, append this file's body below the
-imports to `probe/models.py` (it needs `model_validator` imported from
+imports to `versa/models.py` (it needs `model_validator` imported from
 pydantic there alongside `field_validator`). See README.md in this
 directory."""
 from datetime import datetime
@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from probe.models import ApproachAxis, StatedPreferenceLabel, _utcnow
+from versa.models import ApproachAxis, StatedPreferenceLabel, _utcnow
 
 
 # ─────────────────────────── instrument layer (migrations 050-052) ────

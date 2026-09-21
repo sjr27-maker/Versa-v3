@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-import probe.evidence as evidence_module
-from probe.models import EvidenceRecord, EvidenceSourceType
+import versa.evidence as evidence_module
+from versa.models import EvidenceRecord, EvidenceSourceType
 
 
 def test_evidence_module_has_no_delete():

@@ -1,21 +1,23 @@
-# probe
+# versa
 
 ## Setup
 
 Copy `.env.example` to `.env` and fill in:
 
-- `DATABASE_URL` — Postgres connection string (dev DB and the test suite
-  share this by default; running `pytest` wipes and rebuilds it from
-  migrations). For a real, persistent database (Cloud SQL, staging),
-  apply the schema with `probe migrate` — it runs every
-  `src/probe/migrations/*.sql` in order, once each, tracked in a
-  `schema_migrations` ledger table, and is safe to re-run. `probe
-  migrate --status` shows applied/pending; `probe migrate --baseline`
+- `DATABASE_URL` — Postgres connection string for the dev database. The
+  test suite does NOT use it: it wipes and rebuilds the database named by
+  `VERSA_TEST_DATABASE_URL` (a separate `versa_test`; if that is unset it
+  falls back to a default that can be the dev database, so set it). For a
+  real, persistent database (Cloud SQL, staging),
+  apply the schema with `versa migrate` — it runs every
+  `src/versa/migrations/*.sql` in order, once each, tracked in a
+  `schema_migrations` ledger table, and is safe to re-run. `versa
+  migrate --status` shows applied/pending; `versa migrate --baseline`
   adopts a database that already has the full schema but no ledger
   (stamps every migration as applied without running it). `pytest`
   does not use this path.
 - `GEMINI_API_KEY` — required for any real (non-stub) LLM call. Get one
-  at https://aistudio.google.com/apikey. Every `probe` command that
+  at https://aistudio.google.com/apikey. Every `versa` command that
   calls an LLM (`chat`, `consolidate-session`) accepts `--stub` to run against
   `StubLLMClient` instead, which needs no key and costs nothing.
 
@@ -24,11 +26,11 @@ optional overrides for the tier→model mapping in `model_config.py` —
 only needed if the defaults there go stale (Gemini preview model ids
 shift over time).
 
-There is currently no web UI or server — `probe chat` and the other `probe`
-CLI commands (`consolidate-session`, `migrate`, `review-claims`,
-`score-predictions`, `compare-portraits`, ...) are the only entry points.
-The previous single-page UI and its Starlette API were removed ahead of a
-redesign; a future server should build its `SessionLoop` through
+Entry points: `versa chat` and the other `versa` CLI commands
+(`consolidate-session`, `migrate`, `review-claims`, `score-predictions`,
+`compare-portraits`, ...), and `versa serve` — the HTTP/WebSocket API the
+Flutter app in `app/` talks to (`src/versa/server.py`; no authentication yet,
+local only). Every entry point builds its `SessionLoop` through
 `session_builder.build_session_loop`, the one shared assembly point.
 
 ## Invariants
@@ -47,7 +49,7 @@ never delete rows. Concretely:
   probability/confidence *and* appends the evidence ref that justified
   the update — it does not overwrite prior evidence.
 
-Why: probe's whole premise is auditing how beliefs evolved over time.
+Why: Versa's whole premise is auditing how beliefs evolved over time.
 Deleting a hypothesis or overwriting its evidence destroys the record
 we're trying to build. If something "shouldn't be there anymore," archive
 it; the trail matters more than tidiness.
@@ -71,7 +73,7 @@ Do not call `node.run(...)` from production code paths outside the loop.
 
 Why: the audit trail is the product. If a node executed and we don't
 have its inputs+outputs on disk, we can't reconstruct how a belief
-changed — which defeats the point of building probe in the first place.
+changed — which defeats the point of building versa in the first place.
 
 ### 3. Value-function terms are individually disable-able
 
@@ -91,12 +93,12 @@ breakdown, don't collapse to a single float.
 ### 4. RETIRED — the concept graph is gone
 
 This invariant governed `ConceptGraph` and `concept_nodes`, both of
-which no longer exist: `src/probe/concept_graph.py` and
-`src/probe/seed.py` were deleted in commit 5451b95, and migration
+which no longer exist: `src/versa/concept_graph.py` and
+`src/versa/seed.py` were deleted in commit 5451b95, and migration
 `032_retire_full_mode.sql` drops `concept_nodes`, `concept_graphs`,
 `concept_prerequisites`, and `learner_overlay`. There is no
-`ConceptNode` model, no `ConceptGraph` class, and no `probe seed-graph`
-command; `probe chat` reports "minimal_branch mode — no concept graph".
+`ConceptNode` model, no `ConceptGraph` class, and no `versa seed-graph`
+command; `versa chat` reports "minimal_branch mode — no concept graph".
 
 The entry is kept as a numbered tombstone rather than deleted so the
 later invariants keep the numbers they are cross-referenced by —
@@ -130,7 +132,7 @@ either: the rationale is again distinct, so it gets its own entry.
 
 Why: a `WorldModelRevision` is a claim about the concept graph, evidence-
 backed the same way a `Hypothesis` is a claim about the learner — and
-probe's premise (invariant 1) is auditing how *all* beliefs evolved, not
+Versa's premise (invariant 1) is auditing how *all* beliefs evolved, not
 just learner-facing ones. Deleting a resolved revision would erase the
 record of what was proposed, what a human decided about it, and why —
 exactly the trail that makes a rejected-but-plausible claim or an
@@ -159,7 +161,7 @@ a terminal status, the same way a hypothesis retires to `archived`
 rather than disappearing, not erasing the record that a generation
 happened and what it predicted. Crucially, this store does **not**
 write into `HypothesisStore`: a branch match is a single-turn,
-episodic signal, and probe's premise (invariant 1) is auditing
+episodic signal, and Versa's premise (invariant 1) is auditing
 *confirmed*, evidence-backed belief — promoting a branch into a real
 `Hypothesis` on one coincidental match would let episodic noise
 corrupt that durable record. Only a future consolidation step (not
@@ -192,7 +194,7 @@ didn't exist when that invariant was written and are new stores in
 their own right, so they get their own entry rather than being
 silently folded into invariant 2's wording after the fact.
 
-Why: both exist specifically so the web UI can *read* what already
+Why: both exist specifically so a UI can *read* what already
 happened instead of recomputing it — a per-turn call-count breakdown,
 whether `MAX_CALLS_PER_TURN` fired, a hypothesis's tier history. If
 either could be edited or pruned, "zero business logic in the UI"

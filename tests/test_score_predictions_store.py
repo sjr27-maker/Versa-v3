@@ -8,9 +8,9 @@ from uuid import uuid4
 
 import pytest
 
-from probe.claims import reconcile_candidate
-from probe.models import ApproachAxis, ClaimCandidate, QuestionAuthor, StatedPreferenceLabel
-from probe.score_predictions import score_predictions_for_all_learners
+from versa.claims import reconcile_candidate
+from versa.models import ApproachAxis, ClaimCandidate, QuestionAuthor, StatedPreferenceLabel
+from versa.score_predictions import score_predictions_for_all_learners
 
 
 @pytest.mark.asyncio(loop_scope="session")
