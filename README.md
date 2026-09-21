@@ -282,6 +282,12 @@ docs/IDEAS.md             # parked ideas, deferred work, known issues, decisions
 
 ---
 
+## License
+
+[MIT](LICENSE). You may use, modify and distribute this code, including commercially, as long as the copyright and license notice stay with it.
+
+---
+
 ## Deployment
 
 Deployed on Google Cloud Run, backed by Cloud SQL (Postgres + pgvector) and Secret Manager for credentials. The container (`Dockerfile`) runs `uv sync --frozen` and currently has no entrypoint on purpose: `versa serve` has no authentication yet, so it must not be exposed publicly. Add auth first, then set `CMD` (`versa serve --host 0.0.0.0 --port $PORT`) and build the web app into the image.
