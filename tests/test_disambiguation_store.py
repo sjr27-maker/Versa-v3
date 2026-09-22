@@ -161,3 +161,34 @@ async def test_supersede_open_options_leaves_selected_untouched(
 async def test_get_branch_and_get_option_return_none_for_unknown_id(disambiguation_store):
     assert await disambiguation_store.get_branch(uuid4()) is None
     assert await disambiguation_store.get_option(uuid4()) is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_get_turn_for_index_finds_the_exact_turn(
+    disambiguation_store, transcript, learner_id
+):
+    session_id = await transcript.create_session(learner_id)
+    turn_0 = await disambiguation_store.create_turn(
+        session_id, 0, needs_branches=False, turn_had_direct_answer=True
+    )
+    turn_2 = await disambiguation_store.create_turn(
+        session_id, 2, needs_branches=True, turn_had_direct_answer=False
+    )
+
+    assert (await disambiguation_store.get_turn_for_index(session_id, 0)).id == turn_0.id
+    assert (await disambiguation_store.get_turn_for_index(session_id, 2)).id == turn_2.id
+    # turn 1 was a click-resolution: it re-used turn 0's branches rather
+    # than running AssessAndBranch again, so it has no row of its own.
+    assert await disambiguation_store.get_turn_for_index(session_id, 1) is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_get_turn_for_index_scopes_to_the_right_session(
+    disambiguation_store, transcript, learner_id
+):
+    session_a = await transcript.create_session(learner_id)
+    session_b = await transcript.create_session(learner_id)
+    await disambiguation_store.create_turn(
+        session_a, 0, needs_branches=True, turn_had_direct_answer=False
+    )
+    assert await disambiguation_store.get_turn_for_index(session_b, 0) is None

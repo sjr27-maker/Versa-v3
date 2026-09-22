@@ -119,10 +119,12 @@ void main() {
     expect(question.optionsResolved, isFalse);
     expect(chat.status, ChatStatus.ready);
 
+    final messageCountBeforePick = chat.messages.length;
     chat.pickOption(question, question.options[0]);
     expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1'});
-    expect(chat.messages[chat.messages.length - 2].text, 'Calculus derivatives',
-        reason: 'the chosen reading shows as what the person said');
+    expect(chat.messages.length, messageCountBeforePick + 1,
+        reason: 'no echoed user bubble -- only the tutor\'s next turn is added');
+    expect(chat.messages.last.role, Role.tutor);
     expect(question.chosenOptionId, 'o1');
     expect(chat.status, ChatStatus.thinking);
 
@@ -197,5 +199,188 @@ void main() {
     final (chat, transport, _) = await _started();
     chat.dispose();
     expect(transport.closed, isTrue);
+  });
+
+  group('resuming a past chat', () {
+    Future<(ChatController, FakeTransport, FakeBackend)> resumedChat(
+      List<Map<String, dynamic>> historyRows,
+    ) async {
+      final backend = FakeBackend()..historyBySession['session-old'] = historyRows;
+      final transport = FakeTransport();
+      final chat = ChatController(
+        api: backend.api,
+        learner: _learner,
+        resumeSessionId: 'session-old',
+        transportFactory: (_) async => transport,
+      );
+      await chat.start();
+      return (chat, transport, backend);
+    }
+
+    test('loads the existing session id and its history, without creating a new session',
+        () async {
+      final (chat, _, backend) = await resumedChat([
+        {
+          'turn_index': 0, 'student_text': 'what is a derivative?', 'kind': 'answer',
+          'tutor_text': 'a rate of change', 'options_message': null, 'options': [],
+        },
+      ]);
+      expect(chat.sessionId, 'session-old');
+      expect(backend.sessionsCreated, 0);
+      expect(chat.status, ChatStatus.ready);
+      expect(chat.messages.map((m) => (m.role, m.text)), [
+        (Role.user, 'what is a derivative?'),
+        (Role.tutor, 'a rate of change'),
+      ]);
+    });
+
+    test('an unresolved options turn resumes clickable, with the buttons intact', () async {
+      final (chat, transport, _) = await resumedChat([
+        {
+          'turn_index': 0, 'student_text': 'can you help me with derivatives?', 'kind': 'options',
+          'tutor_text': null, 'options_message': 'Which of these did you mean?',
+          'options': [
+            {'id': 'o1', 'text': 'Calculus', 'status': 'open'},
+            {'id': 'o2', 'text': 'Finance', 'status': 'open'},
+          ],
+        },
+      ]);
+      final question = chat.messages.last;
+      expect(question.hasOptions, isTrue);
+      expect(question.optionsOpen, isTrue);
+      expect(question.optionsResolved, isFalse);
+
+      chat.pickOption(question, question.options[0]);
+      expect(transport.sent.single, {'type': 'select_option', 'option_id': 'o1'});
+    });
+
+    test('a resolved options turn resumes with the pick shown and buttons disabled', () async {
+      final (chat, _, _) = await resumedChat([
+        {
+          'turn_index': 0, 'student_text': 'can you help me with derivatives?', 'kind': 'options',
+          'tutor_text': null, 'options_message': 'Which of these did you mean?',
+          'options': [
+            {'id': 'o1', 'text': 'Calculus', 'status': 'selected'},
+            {'id': 'o2', 'text': 'Finance', 'status': 'superseded'},
+          ],
+        },
+        {
+          // null, not the clicked option's own text: that's what a real
+          // click-resolution turn reconstructs to (session_history.py) --
+          // it must not come back as a second, echoed user bubble.
+          'turn_index': 1, 'student_text': null, 'kind': 'answer',
+          'tutor_text': 'the power rule …', 'options_message': null, 'options': [],
+        },
+      ]);
+      final question = chat.messages[1];
+      expect(question.chosenOptionId, 'o1');
+      expect(question.optionsOpen, isFalse);
+      // even the chosen one can no longer be re-clicked (already resolved)
+      expect(chat.canSend, isTrue);
+      expect(chat.messages.map((m) => m.role), [Role.tutor, Role.tutor],
+          reason: 'no echoed user bubble for the click-resolution turn');
+    });
+
+    test('a typed-past turn (all superseded, none selected) resumes with no button clickable',
+        () async {
+      final (chat, transport, _) = await resumedChat([
+        {
+          'turn_index': 0, 'student_text': 'can you help me with derivatives?', 'kind': 'options',
+          'tutor_text': null, 'options_message': 'Which of these did you mean?',
+          'options': [
+            {'id': 'o1', 'text': 'Calculus', 'status': 'superseded'},
+            {'id': 'o2', 'text': 'Finance', 'status': 'superseded'},
+          ],
+        },
+      ]);
+      final question = chat.messages.last;
+      expect(question.optionsOpen, isFalse);
+      expect(question.optionsResolved, isFalse, reason: 'nothing was ever clicked');
+
+      chat.pickOption(question, question.options[0]);
+      expect(transport.sent, isEmpty, reason: 'a stale, non-open button must refuse a click');
+    });
+
+    test('a pending (no recorded response) turn resumes as a neutral note', () async {
+      final (chat, _, _) = await resumedChat([
+        {
+          'turn_index': 0, 'student_text': 'hello?', 'kind': 'pending',
+          'tutor_text': null, 'options_message': null, 'options': [],
+        },
+      ]);
+      final note = chat.messages.last;
+      expect(note.isError, isTrue);
+      expect(note.hasOptions, isFalse);
+    });
+
+    test('reconnecting after a resume does not reload history a second time', () async {
+      final backend = FakeBackend()
+        ..historyBySession['session-old'] = [
+          {
+            'turn_index': 0, 'student_text': 'hi', 'kind': 'answer',
+            'tutor_text': 'hello', 'options_message': null, 'options': [],
+          },
+        ];
+      // A fresh, never-listened-to FakeTransport each call -- reconnect()
+      // must not hang waiting on the PREVIOUS one to finish closing.
+      final chat = ChatController(
+        api: backend.api,
+        learner: _learner,
+        resumeSessionId: 'session-old',
+        transportFactory: (_) async => FakeTransport(),
+      );
+      await chat.start();
+      expect(chat.messages.length, 2);
+
+      await chat.reconnect();
+
+      expect(chat.messages.length, 2, reason: 'history is not appended again on reconnect');
+    });
+  });
+
+  group('typing past open options', () {
+    test('sending a fresh message closes the immediately preceding open options', () async {
+      final (chat, transport, _) = await _started();
+      chat.send('can you help me with derivatives?');
+      transport.emit(const OptionsEvent('Which of these did you mean?', [
+        ChatOption(id: 'o1', text: 'Calculus derivatives'),
+        ChatOption(id: 'o2', text: 'Financial derivatives'),
+      ]));
+      transport.emit(const Done(
+          turnIndex: 0, kind: 'options', text: 'Which of these did you mean?',
+          firstOutputMs: 1, totalMs: 2));
+      await _tick();
+      final question = chat.messages.last;
+      expect(question.optionsOpen, isTrue);
+
+      chat.send('actually, never mind, something else entirely');
+      expect(question.optionsOpen, isFalse, reason: 'typing past mirrors the server superseding it');
+
+      // the stale buttons must now refuse a click, exactly like the live server would
+      final before = transport.sent.length;
+      chat.pickOption(question, question.options[0]);
+      expect(transport.sent.length, before);
+    });
+
+    test('an already-resolved options message is left alone by a later send', () async {
+      final (chat, transport, _) = await _started();
+      chat.send('can you help me with derivatives?');
+      transport.emit(const OptionsEvent('Which of these did you mean?', [
+        ChatOption(id: 'o1', text: 'Calculus derivatives'),
+      ]));
+      transport.emit(const Done(
+          turnIndex: 0, kind: 'options', text: 'Which of these did you mean?',
+          firstOutputMs: 1, totalMs: 2));
+      await _tick();
+      final question = chat.messages.last;
+      chat.pickOption(question, question.options[0]);
+      transport.emit(const Done(
+          turnIndex: 1, kind: 'answer', text: 'the power rule …', firstOutputMs: 1, totalMs: 2));
+      await _tick();
+
+      expect(question.chosenOptionId, 'o1');
+      chat.send('a brand new question');
+      expect(question.chosenOptionId, 'o1', reason: 'a resolved pick is never rewritten');
+    });
   });
 }

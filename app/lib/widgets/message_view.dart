@@ -94,8 +94,8 @@ class MessageView extends StatelessWidget {
                         _OptionChip(
                           option: o,
                           chosen: message.chosenOptionId == o.id,
-                          dimmed: message.optionsResolved && message.chosenOptionId != o.id,
-                          enabled: canPickOption && !message.optionsResolved,
+                          dimmed: !message.optionsOpen && message.chosenOptionId != o.id,
+                          enabled: canPickOption && message.optionsOpen && !message.optionsResolved,
                           onTap: () => onPickOption(o),
                         ),
                     ],

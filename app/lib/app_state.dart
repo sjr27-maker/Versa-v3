@@ -60,7 +60,7 @@ class AppState extends ChangeNotifier {
   }
 }
 
-typedef ChatFactory = ChatController Function(AppState app);
+typedef ChatFactory = ChatController Function(AppState app, {String? resumeSessionId});
 
 /// Where the person is in the app, and the one live Sandbox chat, which
 /// survives switching tabs (so browsing Settings doesn't lose the
@@ -68,7 +68,11 @@ typedef ChatFactory = ChatController Function(AppState app);
 class ShellState extends ChangeNotifier {
   ShellState({required this.app, ChatFactory? chatFactory})
       : _chatFactory = chatFactory ??
-            ((app) => ChatController(api: app.api, learner: app.learner!));
+            ((app, {resumeSessionId}) => ChatController(
+                  api: app.api,
+                  learner: app.learner!,
+                  resumeSessionId: resumeSessionId,
+                ));
 
   final AppState app;
   final ChatFactory _chatFactory;
@@ -85,6 +89,12 @@ class ShellState extends ChangeNotifier {
   /// The Sandbox chat is showing (as opposed to the mode picker).
   bool inSandbox = false;
 
+  /// This learner's Sandbox chats (the chat-history sidebar) — one mode's
+  /// own list, never mixed with another mode's. Kept on `ShellState`, not
+  /// on `ChatController`, since it outlives any one chat.
+  final List<ChatSummary> sandboxHistory = [];
+  bool sandboxHistoryLoading = false;
+
   void goTab(int index) {
     tab = index;
     notifyListeners();
@@ -93,14 +103,59 @@ class ShellState extends ChangeNotifier {
   void openSandbox() {
     tab = tabModes;
     inSandbox = true;
-    sandbox ??= _chatFactory(app)..start();
+    if (sandbox == null) {
+      sandbox = _chatFactory(app)..start();
+      _wireSandbox(sandbox!);
+    }
+    refreshSandboxHistory();
     notifyListeners();
   }
 
   void newSandboxChat() {
     sandbox?.dispose();
     sandbox = _chatFactory(app)..start();
+    _wireSandbox(sandbox!);
+    refreshSandboxHistory();
     notifyListeners();
+  }
+
+  /// Reopen a past Sandbox chat picked from the sidebar.
+  void openSandboxChat(ChatSummary chat) {
+    if (sandbox?.sessionId == chat.sessionId) return; // already the open one
+    sandbox?.dispose();
+    sandbox = _chatFactory(app, resumeSessionId: chat.sessionId)..start();
+    _wireSandbox(sandbox!);
+    refreshSandboxHistory(); // keeps the highlighted row in step with the switch
+    notifyListeners();
+  }
+
+  /// Refetches the sidebar list. Best-effort: a failure (e.g. a hiccup mid-
+  /// turn) leaves the list as it was rather than surfacing a second error
+  /// on top of whatever the chat itself is already showing.
+  Future<void> refreshSandboxHistory() async {
+    sandboxHistoryLoading = true;
+    notifyListeners();
+    try {
+      final rows = await app.api.listSessions(app.learner!.id, mode: 'sandbox');
+      sandboxHistory
+        ..clear()
+        ..addAll(rows);
+    } catch (_) {
+      // leave sandboxHistory as it was
+    }
+    sandboxHistoryLoading = false;
+    notifyListeners();
+  }
+
+  /// Keeps the sidebar's preview/recency in step with the active chat: a
+  /// refetch each time a turn finishes (busy -> ready), not on every delta.
+  void _wireSandbox(ChatController c) {
+    var previous = c.status;
+    c.addListener(() {
+      final wasBusy = previous == ChatStatus.thinking || previous == ChatStatus.streaming;
+      if (wasBusy && c.status == ChatStatus.ready) refreshSandboxHistory();
+      previous = c.status;
+    });
   }
 
   void closeSandbox() {
@@ -114,6 +169,7 @@ class ShellState extends ChangeNotifier {
     sandbox = null;
     inSandbox = false;
     tab = tabHome;
+    sandboxHistory.clear();
     notifyListeners();
   }
 

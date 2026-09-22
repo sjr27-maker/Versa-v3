@@ -19,7 +19,7 @@ import asyncpg
 from pydantic import BaseModel
 
 from versa.ablation import AblationConfig
-from versa.models import NodeCall, SessionSummary, TurnRecord
+from versa.models import ChatSummary, NodeCall, SessionSummary, TurnRecord
 
 
 def to_jsonable(value: Any) -> Any:
@@ -55,6 +55,7 @@ class TranscriptStore:
         learner_id: UUID,
         session_id: UUID | None = None,
         ablation_config: AblationConfig | None = None,
+        app_mode: str = "sandbox",
     ) -> UUID:
         # ablation_config is fixed for the session's lifetime (see
         # set_ablation_config's raise-if-turns-exist guard below) — None
@@ -62,14 +63,21 @@ class TranscriptStore:
         # AblationConfig() so get_ablation_config's default
         # interpretation stays the single source of truth for what NULL
         # means, not duplicated into every INSERT.
+        #
+        # `app_mode` (migration 055) is a DIFFERENT axis entirely — which
+        # product surface the learner picked (server.py's SessionIn.mode),
+        # not the reasoning architecture ablation_config names. Defaults
+        # to "sandbox" because every CLI-created session (`versa chat`)
+        # predates app modes and is one, by construction.
         session_id = session_id or uuid4()
         async with self._pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO sessions (id, learner_id, ablation_config) "
-                "VALUES ($1, $2, $3)",
+                "INSERT INTO sessions (id, learner_id, ablation_config, app_mode) "
+                "VALUES ($1, $2, $3, $4)",
                 session_id,
                 learner_id,
                 ablation_config.model_dump(mode="json") if ablation_config else None,
+                app_mode,
             )
         return session_id
 
@@ -173,6 +181,48 @@ class TranscriptStore:
             )
             for row in rows
         ]
+
+    async def list_session_summaries(
+        self, learner_id: UUID, app_mode: str
+    ) -> list[ChatSummary]:
+        """This learner's chats WITHIN one app_mode, most-recently-active
+        first — the app's chat-history sidebar (server.py's
+        `GET /api/learners/{id}/sessions`). A separate query from
+        `list_sessions_for_learner` above (that one is mode-agnostic,
+        unordered-by-activity, and feeds a different, older caller) —
+        see `ChatSummary`'s own docstring for why the two aren't merged.
+
+        `preview` is the FIRST turn's text (a scalar subquery, not a
+        second JOIN+GROUP BY dimension — every other aggregate here is
+        per-session, and mixing in a per-row text column would either
+        break the GROUP BY or require picking one arbitrarily via
+        DISTINCT ON; the subquery keeps the aggregate query simple and
+        costs nothing extra a personal chat list wouldn't already pay).
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    s.id AS session_id,
+                    s.app_mode,
+                    s.created_at,
+                    count(t.id) AS turn_count,
+                    COALESCE(max(t.created_at), s.created_at) AS last_activity_at,
+                    (
+                        SELECT t2.text FROM turns t2
+                        WHERE t2.session_id = s.id
+                        ORDER BY t2.turn_index LIMIT 1
+                    ) AS preview
+                FROM sessions s
+                LEFT JOIN turns t ON t.session_id = s.id
+                WHERE s.learner_id = $1 AND s.app_mode = $2
+                GROUP BY s.id, s.app_mode, s.created_at
+                ORDER BY last_activity_at DESC
+                """,
+                learner_id,
+                app_mode,
+            )
+        return [ChatSummary(**dict(row)) for row in rows]
 
     async def count_sessions_for_learner(self, learner_id: UUID) -> int:
         async with self._pool.acquire() as conn:

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
@@ -288,6 +289,66 @@ class SessionSummary(BaseModel):
     topic: str | None = None
     turn_count: int
     created_at: datetime
+
+
+class ChatSummary(BaseModel):
+    """One row for the app's chat-history sidebar (server.py's
+    `GET /api/learners/{id}/sessions`) — a learner's prior chat WITHIN
+    ONE app_mode (migration 055), read-only, listed newest-active-first.
+    Deliberately a separate model from `SessionSummary` above, which
+    keeps its own (unrelated) shape and callers: this one is
+    client-facing wire shape, that one is the CLI's resume view.
+
+    `preview` is the chat's opening message, or None for a chat that
+    was just created and has no turns yet (rendered as "New chat" by
+    the client) — never re-summarized, the same "read what was already
+    written, don't regenerate it" discipline `history_block.py` and
+    `session_history.py` both follow.
+
+    `last_activity_at` is the latest turn's timestamp, falling back to
+    `created_at` for a turn-less chat — sidebar order tracks USE, not
+    creation, so a chat you keep returning to stays near the top.
+    """
+
+    session_id: UUID
+    app_mode: str
+    turn_count: int
+    created_at: datetime
+    last_activity_at: datetime
+    preview: str | None = None
+
+
+class HistoryOption(BaseModel):
+    """One reading as it stood the moment a resumed chat asked for it —
+    `status` read straight back out of `disambiguation_options`
+    (invariant 9), never re-derived, so a resumed view can never show a
+    button as clickable that the live app would have refused."""
+
+    id: UUID
+    text: str
+    status: OptionStatus
+
+
+class HistoryTurn(BaseModel):
+    """One turn of `session_history.reconstruct_session_history`'s
+    turn-by-turn replay of a session — see that module's docstring for
+    exactly how `kind` is decided.
+
+    `student_text` is `turns.text` verbatim EXCEPT on a click-resolution
+    answer turn, where `turns.text` is the clicked option's own
+    system-authored question copy, never something the student said —
+    the live turn shows no bubble for it either (see
+    `ChatController.pickOption`'s own comment), and a resumed chat must
+    read the same: `session_history._reconstruct_turn` sets this to
+    None on exactly that case, and the client renders no student bubble
+    for a turn where this is None."""
+
+    turn_index: int
+    student_text: str | None
+    kind: Literal["answer", "options", "pending"]
+    tutor_text: str | None = None
+    options_message: str | None = None
+    options: list[HistoryOption] = Field(default_factory=list)
 
 
 class LearnerSummary(BaseModel):

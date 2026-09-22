@@ -38,6 +38,9 @@ class ChatMessage {
     this.streaming = false,
     this.isError = false,
     this.options = const [],
+    this.chosenOptionId,
+    this.optionsOpen = true,
+    this.timing,
   });
 
   final int id;
@@ -54,6 +57,12 @@ class ChatMessage {
   /// Clickable readings offered instead of an answer ("which did you mean?").
   List<ChatOption> options;
   String? chosenOptionId;
+
+  /// Still awaiting a decision: at least one reading is clickable. False the
+  /// moment ANY of a click, typing past instead (see ChatController.send),
+  /// or (for a chat loaded from history) the server already recording every
+  /// reading as resolved settles it — a stale button must never look live.
+  bool optionsOpen;
   Timing? timing;
 
   bool get hasOptions => options.isNotEmpty;
@@ -130,4 +139,84 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
       return ErrorEvent(json['message'] as String? ?? 'something went wrong');
   }
   return null; // unknown frame types are ignored, never fatal
+}
+
+// ------------------------------------------------------------- chat history
+
+/// One row of the chat-history sidebar (`GET /api/learners/{id}/sessions`) --
+/// this learner's chats within ONE app mode, newest-active first. `preview`
+/// is null for a chat with no messages yet ("New chat" in the UI).
+class ChatSummary {
+  const ChatSummary({
+    required this.sessionId,
+    required this.appMode,
+    required this.turnCount,
+    required this.createdAt,
+    required this.lastActivityAt,
+    this.preview,
+  });
+
+  final String sessionId;
+  final String appMode;
+  final int turnCount;
+  final DateTime createdAt;
+  final DateTime lastActivityAt;
+  final String? preview;
+
+  factory ChatSummary.fromJson(Map<String, dynamic> json) => ChatSummary(
+        sessionId: json['session_id'] as String,
+        appMode: json['app_mode'] as String,
+        turnCount: (json['turn_count'] as num).toInt(),
+        createdAt: DateTime.parse(json['created_at'] as String),
+        lastActivityAt: DateTime.parse(json['last_activity_at'] as String),
+        preview: json['preview'] as String?,
+      );
+}
+
+const _noResponseText = 'No response was recorded for this message.';
+
+/// `GET /api/sessions/{id}/history`'s turn-by-turn record, expanded into the
+/// same `ChatMessage` shape the live chat builds turn by turn (see
+/// ChatController._onEvent) -- one rendering path either way, not two.
+List<ChatMessage> parseSessionHistory(List<dynamic> json) {
+  final messages = <ChatMessage>[];
+  var id = 0;
+  for (final raw in json) {
+    final turn = raw as Map<String, dynamic>;
+    // null (not just empty) on a resumed click-resolution answer turn --
+    // the live chat shows no bubble for a click either (see
+    // ChatController.pickOption), so a resumed chat must not add one just
+    // because the option's own copy is sitting in student_text.
+    final studentText = turn['student_text'] as String?;
+    if (studentText != null) {
+      messages.add(ChatMessage(id: id++, role: Role.user, text: studentText));
+    }
+    switch (turn['kind']) {
+      case 'answer':
+        messages.add(
+          ChatMessage(id: id++, role: Role.tutor, text: turn['tutor_text'] as String? ?? ''),
+        );
+      case 'options':
+        final rows = (turn['options'] as List? ?? const []).cast<Map<String, dynamic>>();
+        final options = [
+          for (final o in rows) ChatOption(id: o['id'] as String, text: o['text'] as String),
+        ];
+        final selected = rows.where((o) => o['status'] == 'selected');
+        messages.add(
+          ChatMessage(
+            id: id++,
+            role: Role.tutor,
+            text: turn['options_message'] as String? ?? '',
+            options: options,
+            chosenOptionId: selected.isEmpty ? null : selected.first['id'] as String,
+            optionsOpen: rows.any((o) => o['status'] == 'open'),
+          ),
+        );
+      case 'pending':
+        messages.add(
+          ChatMessage(id: id++, role: Role.tutor, text: _noResponseText, isError: true),
+        );
+    }
+  }
+  return messages;
 }

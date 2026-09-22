@@ -942,6 +942,25 @@ class DisambiguationStore:
             )
         return self._row_to_turn(row) if row is not None else None
 
+    async def get_turn_for_index(
+        self, session_id: UUID, turn_index: int
+    ) -> DisambiguationTurn | None:
+        """The DisambiguationTurn a SPECIFIC turn_index produced, if any —
+        `session_history.py`'s per-turn replay needs the exact turn a
+        client is reconstructing, not just the latest one `get_latest_turn`
+        answers. A click-resolution turn has none (it re-uses an earlier
+        turn's branches rather than running AssessAndBranch again — see
+        `DisambiguationTurn`'s own docstring), so None here is expected,
+        not an error."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM disambiguation_turns "
+                "WHERE session_id = $1 AND turn_index = $2",
+                session_id,
+                turn_index,
+            )
+        return self._row_to_turn(row) if row is not None else None
+
     async def create_options(self, options: list[Option]) -> list[Option]:
         if not options:
             return []

@@ -51,6 +51,29 @@ class VersaApi {
     return (jsonDecode(r.body) as Map<String, dynamic>)['session_id'] as String;
   }
 
+  /// This learner's chats within one app mode, newest-active first — the
+  /// chat-history sidebar.
+  Future<List<ChatSummary>> listSessions(String learnerId, {String mode = 'sandbox'}) async {
+    final r = await _http
+        .get(_uri('/api/learners/$learnerId/sessions').replace(queryParameters: {'mode': mode}))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load chat history'));
+    return [
+      for (final row in jsonDecode(r.body) as List)
+        ChatSummary.fromJson(row as Map<String, dynamic>),
+    ];
+  }
+
+  /// One chat's turn-by-turn record, to resume it (a page reload, or a past
+  /// chat picked from the sidebar).
+  Future<List<ChatMessage>> getSessionHistory(String sessionId) async {
+    final r = await _http
+        .get(_uri('/api/sessions/$sessionId/history'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this chat'));
+    return parseSessionHistory(jsonDecode(r.body) as List);
+  }
+
   /// `ws://…/api/sessions/{id}/chat` (or `wss://` behind https).
   Uri chatUri(String sessionId) {
     final u = Uri.parse(baseUrl);

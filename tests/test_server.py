@@ -183,6 +183,65 @@ async def test_the_browser_may_call_from_a_localhost_dev_origin(live):
     assert "access-control-allow-origin" not in stranger.headers
 
 
+@pytest.mark.asyncio(loop_scope="session")
+async def test_list_sessions_shows_a_turnless_chat_as_new_and_orders_by_activity(live):
+    async with httpx.AsyncClient(base_url=live.http) as client:
+        learner = (await client.post("/api/learners", json={"label": "sidebar"})).json()
+        lid = learner["id"]
+        first = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
+        second = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
+        rows = (await client.get(f"/api/learners/{lid}/sessions", params={"mode": "sandbox"})).json()
+
+    assert [r["session_id"] for r in rows] == [second, first], "newest chat first, none used yet"
+    assert all(r["preview"] is None and r["turn_count"] == 0 for r in rows)
+    assert all(r["app_mode"] == "sandbox" for r in rows)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_list_sessions_for_an_unknown_learner_is_404(live):
+    async with httpx.AsyncClient(base_url=live.http) as client:
+        r = await client.get(
+            "/api/learners/00000000-0000-0000-0000-000000000000/sessions",
+            params={"mode": "sandbox"},
+        )
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_session_history_for_an_unknown_session_is_404(live):
+    async with httpx.AsyncClient(base_url=live.http) as client:
+        r = await client.get("/api/sessions/00000000-0000-0000-0000-000000000000/history")
+    assert r.status_code == 404
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_session_history_reconstructs_a_real_conversation_and_appears_in_the_sidebar(
+    live, new_chat
+):
+    learner_id, session_id = await new_chat("resume")
+    async with websockets.connect(f"{live.ws}/api/sessions/{session_id}/chat") as ws:
+        await _turn(ws, {"type": "message", "text": "what is a derivative?"})
+
+    async with httpx.AsyncClient(base_url=live.http) as client:
+        history = (await client.get(f"/api/sessions/{session_id}/history")).json()
+        rows = (
+            await client.get(f"/api/learners/{learner_id}/sessions", params={"mode": "sandbox"})
+        ).json()
+
+    (turn,) = history
+    assert turn == {
+        "turn_index": 0,
+        "student_text": "what is a derivative?",
+        "kind": "answer",
+        "tutor_text": _ANSWER,
+        "options_message": None,
+        "options": [],
+    }
+    (row,) = [r for r in rows if r["session_id"] == session_id]
+    assert row["turn_count"] == 1
+    assert row["preview"] == "what is a derivative?"
+
+
 # ------------------------------------------------------------------- chat
 
 

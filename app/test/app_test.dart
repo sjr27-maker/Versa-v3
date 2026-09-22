@@ -31,9 +31,10 @@ Future<void> _boot(
   await tester.pumpWidget(VersaApp(
     api: backend.api,
     prefs: p,
-    chatFactory: (AppState app) => ChatController(
+    chatFactory: (AppState app, {resumeSessionId}) => ChatController(
       api: app.api,
       learner: app.learner!,
+      resumeSessionId: resumeSessionId,
       transportFactory: (_) async => transport ?? FakeTransport(),
     ),
   ));
@@ -212,8 +213,8 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('option-o1')));
       await tester.pump(const Duration(milliseconds: 20));
       expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1'});
-      expect(find.text('Calculus derivatives'), findsNWidgets(2),
-          reason: 'the chosen reading also appears as what you said');
+      expect(find.text('Calculus derivatives'), findsOneWidget,
+          reason: 'the chosen reading stays on its chip -- no echoed user bubble');
 
       transport.emit(const Delta('The power rule …'));
       transport.emit(const Done(
@@ -287,9 +288,10 @@ void main() {
       await tester.pumpWidget(VersaApp(
         api: backend.api,
         prefs: prefs,
-        chatFactory: (app) => ChatController(
+        chatFactory: (app, {resumeSessionId}) => ChatController(
           api: app.api,
           learner: app.learner!,
+          resumeSessionId: resumeSessionId,
           transportFactory: (_) async => transport,
         ),
       ));
@@ -360,6 +362,111 @@ void main() {
       await tester.pump(const Duration(milliseconds: 20));
       expect(find.text('Hello there'), findsOneWidget);
       expect(tester.takeException(), isNull, reason: 'no layout overflow on a phone');
+    });
+  });
+
+  group('the chat history sidebar', () {
+    testWidgets('does not show on Home or the Modes picker', (tester) async {
+      _size(tester, 1400, 900);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('nav-Modes')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsNothing);
+    });
+
+    testWidgets('lists past chats newest-active first, active one shown by its own', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final learnerId = backend.learnerIdFor('Asha');
+      final older = backend.seedSession(
+        learnerId: learnerId,
+        preview: 'what is a derivative?',
+        turnCount: 2,
+        lastActivityAt: DateTime.now().subtract(const Duration(hours: 2)),
+      );
+      final newer = backend.seedSession(
+        learnerId: learnerId,
+        preview: 'and an integral?',
+        turnCount: 1,
+        lastActivityAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      );
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsOneWidget);
+      expect(find.text('what is a derivative?'), findsOneWidget);
+      expect(find.text('and an integral?'), findsOneWidget);
+      final newerY = tester.getCenter(find.byKey(ValueKey('chat-row-$newer'))).dy;
+      final olderY = tester.getCenter(find.byKey(ValueKey('chat-row-$older'))).dy;
+      expect(newerY, lessThan(olderY), reason: 'the more recently used chat sorts first');
+    });
+
+    testWidgets('clicking a past chat resumes it, replacing what was on screen', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final learnerId = backend.learnerIdFor('Asha');
+      final oldChat = backend.seedSession(
+        learnerId: learnerId, preview: 'an older question', turnCount: 1,
+      );
+      backend.historyBySession[oldChat] = [
+        {
+          'turn_index': 0, 'student_text': 'an older question', 'kind': 'answer',
+          'tutor_text': 'an older answer', 'options_message': null, 'options': [],
+        },
+      ];
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      expect(find.text("What's on your mind, Asha?"), findsOneWidget, reason: 'the freshly opened chat is empty');
+
+      await tester.tap(find.byKey(ValueKey('chat-row-$oldChat')));
+      await tester.pumpAndSettle();
+
+      // "an older question" now appears twice by design: once in the
+      // sidebar row (which persists) and once as the resumed conversation's
+      // own first bubble.
+      expect(find.text('an older question'), findsNWidgets(2));
+      expect(find.text('an older answer'), findsOneWidget);
+    });
+
+    testWidgets('New chat in the sidebar starts a fresh chat, losing nothing already saved',
+        (tester) async {
+      _size(tester, 1400, 900);
+      final transport = FakeTransport();
+      await _boot(tester,
+          backend: FakeBackend(), transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      await _type(tester, 'hello from the first chat');
+
+      await tester.tap(find.byKey(const ValueKey('history-new-chat')));
+      await tester.pumpAndSettle();
+
+      expect(find.text("What's on your mind, Asha?"), findsOneWidget);
+      expect(find.text('hello from the first chat'), findsNothing);
+    });
+
+    testWidgets('on a phone, chat history opens from a header icon instead of a column',
+        (tester) async {
+      _size(tester, 400, 800);
+      final backend = FakeBackend();
+      final learnerId = backend.learnerIdFor('Asha');
+      backend.seedSession(learnerId: learnerId, preview: 'an old one', turnCount: 1);
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byType(NavigationDestination).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('mode-sandbox')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsNothing);
+      expect(find.byKey(const ValueKey('history-button')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('history-button')));
+      await tester.pumpAndSettle();
+      expect(find.text('an old one'), findsOneWidget);
     });
   });
 }

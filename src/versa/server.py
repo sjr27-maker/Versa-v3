@@ -8,6 +8,9 @@ transport:
     GET  /api/health                       liveness + whether the LLM is live or a stub
     POST /api/learners      {label}        get-or-create a learner by name (no passwords yet)
     POST /api/sessions      {learner_id}   start a chat
+    GET  /api/learners/{id}/sessions       this learner's chats within one app mode
+                                            (the chat-history sidebar), newest-active-first
+    GET  /api/sessions/{id}/history         one chat's turn-by-turn record, to resume it
     WS   /api/sessions/{id}/chat           one chat, one turn at a time
 
 Chat protocol (JSON text frames).
@@ -57,15 +60,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from versa.audit import TranscriptStore
+from versa.audit import NodeCallStore, TranscriptStore
 from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients
 from versa.loop import SessionLoop
-from versa.models import OptionStatus
+from versa.models import ChatSummary, HistoryTurn, OptionStatus
 from versa.session_builder import build_session_loop
+from versa.session_history import reconstruct_session_history
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +115,7 @@ def create_app(
     learners = LearnerStore(pool)
     transcript = TranscriptStore(pool)
     disambiguation = DisambiguationStore(pool)
+    node_calls = NodeCallStore(pool)
     session_locks: dict[UUID, asyncio.Lock] = {}
 
     app = FastAPI(title="Versa", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -140,9 +145,31 @@ def create_app(
         if await learners.get(body.learner_id) is None:
             raise HTTPException(status_code=404, detail="unknown learner")
         session_id = await transcript.create_session(
-            body.learner_id, ablation_config=loop.ablation_config
+            body.learner_id, ablation_config=loop.ablation_config, app_mode=body.mode
         )
         return SessionOut(session_id=session_id, learner_id=body.learner_id, mode=body.mode)
+
+    @api.get("/learners/{learner_id}/sessions", response_model=list[ChatSummary])
+    async def list_sessions(learner_id: UUID, mode: str = "sandbox") -> list[ChatSummary]:
+        """The chat-history sidebar: this learner's chats within ONE app
+        mode, newest-active first (`ChatSummary.last_activity_at`) — a
+        chat with no turns yet (just created) still appears, with
+        `preview=None`, so "New chat" shows up immediately, not only
+        after its first message."""
+        if await learners.get(learner_id) is None:
+            raise HTTPException(status_code=404, detail="unknown learner")
+        return await transcript.list_session_summaries(learner_id, mode)
+
+    @api.get("/sessions/{session_id}/history", response_model=list[HistoryTurn])
+    async def get_session_history(session_id: UUID) -> list[HistoryTurn]:
+        """A chat's turn-by-turn record, for a client reopening it (a
+        page reload, or a past chat picked from the sidebar) — see
+        session_history.py for exactly how each turn is read back."""
+        try:
+            await transcript.get_learner_id(session_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="unknown session") from None
+        return await reconstruct_session_history(transcript, node_calls, disambiguation, session_id)
 
     async def next_turn_index(session_id: UUID) -> int:
         turns = await transcript.list_turns(session_id)

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../chat_controller.dart';
 import '../theme.dart';
+import '../widgets/chat_history_rail.dart';
 import '../widgets/composer.dart';
 import '../widgets/message_view.dart';
 import '../widgets/placeholder_page.dart';
@@ -22,6 +23,14 @@ class SandboxScreen extends StatelessWidget {
       final wide = c.maxWidth >= 1000;
       return Row(
         children: [
+          if (wide)
+            ChatHistoryRail(
+              chats: shell.sandboxHistory,
+              loading: shell.sandboxHistoryLoading,
+              activeSessionId: chat.sessionId,
+              onSelect: shell.openSandboxChat,
+              onNewChat: shell.newSandboxChat,
+            ),
           Expanded(child: _ChatColumn(chat: chat, shell: shell)),
           if (wide) const _KnobsRail(),
         ],
@@ -181,6 +190,20 @@ class _Header extends StatelessWidget {
               onPressed: shell.closeSandbox,
               icon: const Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
             ),
+            if (compact)
+              IconButton(
+                key: const ValueKey('history-button'),
+                tooltip: 'Chat history',
+                onPressed: () => showChatHistorySheet(
+                  context,
+                  chats: shell.sandboxHistory,
+                  loading: shell.sandboxHistoryLoading,
+                  activeSessionId: chat.sessionId,
+                  onSelect: shell.openSandboxChat,
+                  onNewChat: shell.newSandboxChat,
+                ),
+                icon: const Icon(Icons.history_rounded, color: Paper.faint, size: 20),
+              ),
             if (!compact) ...[
               const SizedBox(width: 4),
               Container(

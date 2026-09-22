@@ -38,6 +38,7 @@ class ChatController extends ChangeNotifier {
   ChatController({
     required this.api,
     required this.learner,
+    this.resumeSessionId,
     TransportFactory? transportFactory,
   }) : _transportFactory = transportFactory ??
             ((sessionId) => WebSocketChatTransport.connect(api.chatUri(sessionId)));
@@ -45,6 +46,13 @@ class ChatController extends ChangeNotifier {
   final VersaApi api;
   final Learner learner;
   final TransportFactory _transportFactory;
+
+  /// Set to reopen an EXISTING chat (a page reload, or one picked from the
+  /// chat-history sidebar) instead of starting a new one: `start()` then
+  /// loads its history via `api.getSessionHistory` rather than calling
+  /// `api.createSession`.
+  final String? resumeSessionId;
+  bool _historyLoaded = false;
 
   final List<ChatMessage> messages = [];
   ChatStatus status = ChatStatus.connecting;
@@ -69,7 +77,18 @@ class ChatController extends ChangeNotifier {
     problem = null;
     _notify();
     try {
-      sessionId ??= await api.createSession(learner.id);
+      if (resumeSessionId != null) {
+        sessionId = resumeSessionId;
+        if (!_historyLoaded) {
+          messages.addAll(await api.getSessionHistory(resumeSessionId!));
+          _nextId = messages.isEmpty
+              ? 0
+              : messages.map((m) => m.id).reduce((a, b) => a > b ? a : b) + 1;
+          _historyLoaded = true; // a later reconnect() must not replay it again
+        }
+      } else {
+        sessionId ??= await api.createSession(learner.id);
+      }
       await _connect();
     } catch (e) {
       status = ChatStatus.disconnected;
@@ -121,16 +140,36 @@ class ChatController extends ChangeNotifier {
   void send(String text) {
     final trimmed = text.trim();
     if (!canSend || trimmed.isEmpty) return;
+    _invalidateStaleOptions();
     messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed));
     _beginTurn();
     _transport!.sendMessage(trimmed);
     _notify();
   }
 
+  /// Typing a fresh message instead of clicking supersedes whatever options
+  /// are still open on the SERVER (see disambiguate.py's module docstring,
+  /// step 3b) — mirrored locally the instant it happens, not only after the
+  /// next round-trip, so the old buttons stop looking clickable right away.
+  /// Only the immediately preceding tutor turn can still be open: nothing
+  /// can already follow an unresolved options message except a click.
+  void _invalidateStaleOptions() {
+    if (messages.isEmpty) return;
+    final last = messages.last;
+    if (last.role == Role.tutor && last.hasOptions && last.optionsOpen) {
+      last.optionsOpen = false;
+    }
+  }
+
   void pickOption(ChatMessage message, ChatOption option) {
-    if (!canSend || message.optionsResolved) return;
+    if (!canSend || !message.optionsOpen || message.optionsResolved) return;
     message.chosenOptionId = option.id;
-    messages.add(ChatMessage(id: _nextId++, role: Role.user, text: option.text));
+    message.optionsOpen = false;
+    // No echoed "you said" bubble: the chosen reading already shows via
+    // the highlighted chip on `message` itself (see MessageView's
+    // _OptionChip) -- adding a second bubble here just repeated the
+    // option's own question-phrased copy back as if the person had said
+    // it themselves.
     _beginTurn();
     _transport!.selectOption(option.id);
     _notify();

@@ -12,6 +12,59 @@ enough to build) · `done` (moved to the log at the bottom).
 
 ## 1. Ideas
 
+### Store the *reason*, make it the primary retrieval key — `parked`
+*Raised by you, 2026-09-22.* Your words: "storing reasons of why this
+response was given, as in the reason the situation will be explained, so in
+semantic retrieval the reason becomes a main thing" — and, on why it matters:
+"this will contribute to thinking style detection too."
+
+**Reading (confirmed by you):** today `WriteLearnerFact` (`memory.py`) writes
+`situation` + `resolution` and embeds their concatenation — a description of
+*what* was unclear and *what* was chosen. This adds a third field, `reason` —
+the causal justification for why that response fit this specific student —
+and makes retrieval match on the reason (instead of, or alongside, the
+surface situation/resolution). The bet: two episodes with nothing in common
+on the surface can share the same underlying reason, so reason-based
+retrieval could surface a relevant memory that situation/resolution
+similarity would miss entirely — which is also why it could feed `claims.py`
+and thinking-style detection richer signal than raw episodes do today.
+
+- **Why it helps:** richer semantic retrieval (matches on *why*, not just
+  *what*); a natural stepping-stone toward claim extraction and thinking-style
+  detection, which are already trying to detect recurring reasons, just
+  slowly and only after independent confirmation.
+- **The open concern (yours):** how good will the LLM-generated reasoning
+  actually be? `WriteLearnerFact` runs *after* `FinalAnswer` already
+  answered — a `reason` is a reconstructed causal story, not a trace of what
+  actually happened, and a fluent model produces a plausible-sounding story
+  on every call whether or not it's true (the same confabulation risk
+  `claims.py`'s own docstring names). There's also a drift risk in the same
+  shape as the topic-centroid cascade `interactions.py` already killed
+  (`topics_removal`): reason text is more abstract than situation/resolution
+  by construction, so it's more exposed to genericizing if future reasons get
+  seeded from matched-retrieval context.
+- **Mitigation plan discussed, not built:** don't replace the existing
+  embedding outright — add `reason` retrieval alongside it and measure
+  whether a reason-based match gets confirmed by `ConfirmFactMatch` more
+  often than a situation/resolution-based match before trusting it as
+  primary. Treat a single-episode `reason` as a candidate needing
+  corroboration, the same posture `claims.py` and `thinking_style_candidates`
+  already take, rather than something asserted once and immediately weighted.
+  Once there's enough data, run reason-driven retrieval hits through
+  `score_predictions`-style calibration (bucket by confidence, check observed
+  hit rate) the same way claim confidence is checked today.
+- **What it would touch:** `memory.py` (`WriteLearnerFact`'s prompt + which
+  text gets embedded), `models.py` (`LearnerFact` gets a `reason` field —
+  additive, doesn't conflict with invariant 10's append-only rule), a new
+  migration, `loop.py` only if more context needs threading into the write
+  call, plus the memory test files.
+- **Why parked, not building yet:** another instance was live-editing
+  `src/versa/models.py` in this same working directory (uncommitted, for the
+  chat-history-per-mode feature) when this came up — same file this idea
+  needs to extend (`LearnerFact`). Revisit once that lands.
+
+---
+
 ### Show options first, remember second ("oh wait…")  — `idea`
 *Raised by you, 2026-09-22.* Your words: "embedding can be done later after
 ambiguous and options generation are done. It can be made funny and
@@ -94,17 +147,29 @@ Built 2026-09-22: `versa serve` (REST + one WebSocket per chat), the Flutter app
 with a working Sandbox chat, `scripts/start.ps1` (one-command launcher), and
 per-session pending-options state in the loop. See the decisions log.
 
-- **Chat history & resume** — `ready`. Reloading the page starts a fresh chat:
-  no endpoint returns a session's messages and the History page is a
-  placeholder. Needs `GET /api/learners/{id}/sessions` and
-  `GET /api/sessions/{id}/messages`, then reopen-and-continue.
+- **Chat history & resume** — `done` (2026-09-22). See the decisions log.
+  The global History nav page is still a placeholder — it could now show the
+  same per-mode list read across all modes; not built yet since Sandbox is
+  the only live mode.
 - **Authentication** — `parked`. Sign-in is a name only; the server has no auth
   and binds 127.0.0.1. Must exist before any deployment (the Dockerfile
   deliberately has no entrypoint).
-- **Repeatable browser end-to-end check** — `ready`. The script that drove the
-  real app (sign in → streamed answer → options → click → new chat, with a
-  screenshot per step) lives in a scratch folder. Worth committing
-  (puppeteer-core + Edge) so what was proved can be re-proved after every change.
+- **Repeatable browser end-to-end check** — `ready`. The scripts that drove the
+  real app (sign in → streamed answer → options → click → new chat; and
+  separately the sidebar → new chat → resume flow) live in a scratch folder.
+  Worth committing (puppeteer-core + Edge) so what was proved can be re-proved
+  after every change — see the note below on their one real gotcha first.
+- **Flutter web accessibility-tree lag (e2e-testing gotcha)** — `note`
+  (found 2026-09-22). After a widget subtree swap that replaces a whole
+  controller (e.g. switching to a resumed chat), the CANVAS repaints
+  correctly almost immediately, but the `flt-semantics` accessibility DOM
+  overlay a puppeteer script reads can lag several seconds, or not catch up
+  in headless mode at all, even though the pixels are already right
+  (confirmed by screenshot). A script that re-queries or waits on the
+  semantics tree before/after clicking can flake; one that captures an
+  element's coordinates once and clicks immediately is reliable. Not an app
+  bug — screen readers hitting the same lag would be a real accessibility
+  issue worth a proper look separately from this workaround.
 - **Math in answers** — `idea`. Models write LaTeX (`$x^5$`); the app shows it raw.
 - **Offline web build** — `idea`. The web build fetches CanvasKit and the Roboto
   font from Google's CDN on load. `flutter build web --no-web-resources-cdn`
@@ -154,6 +219,23 @@ per-session pending-options state in the loop. See the decisions log.
 
 ## 6. Decisions log
 
+- **2026-09-22** — Added the chat-history sidebar: `sessions.app_mode` (migration
+  055, separate from `ablation_config` — product mode vs. reasoning
+  architecture), `TranscriptStore.list_session_summaries` (per-mode, ordered by
+  last activity, with a preview), `session_history.py` (replays a session's real
+  `turns`/`node_calls`/`disambiguation_*` rows into the same turn-by-turn shape
+  the live chat renders — no new write path), two endpoints
+  (`GET /api/learners/{id}/sessions`, `GET /api/sessions/{id}/history`), and a
+  resumable `ChatController` (`resumeSessionId`). Shown only inside a mode's own
+  chat screen (a persistent left rail on wide, a header icon + sheet on
+  narrow), never on the Modes picker — per your request. Fixed two real bugs
+  found along the way: typing past open options left the old buttons looking
+  clickable (now closed locally, mirroring the server); a double-tap or a
+  typed-past button could replay/error confusingly (now refused server-side
+  and reflected in the UI via a new `optionsOpen` flag). Checked end to end in
+  a real browser against live Gemini: a real answer, "New chat", the old chat
+  still listed with its real preview, clicking it back in replays the exact
+  original conversation.
 - **2026-09-22** — Built the first app: `versa serve` (FastAPI; REST + a WebSocket
   per chat), Flutter Sandbox chat with plain fonts, labelled placeholders for the
   rest. Checked end to end in a real browser against live Gemini (answer streams,

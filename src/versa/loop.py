@@ -1416,6 +1416,16 @@ class SessionLoop:
             )
         )
         if not teach_failed and self._memory_enabled:
+            # Same substitution _run_final_answer's own embed_text makes:
+            # on a click-resolution turn turn_text is the clicked
+            # option's system-authored question copy, never the
+            # student's words -- WriteLearnerFact must record what the
+            # student actually said, not the button's own copy.
+            fact_student_message = (
+                originating_question
+                if question_author is QuestionAuthor.SYSTEM_OPTION
+                else turn_text
+            )
 
             async def _write_fact() -> None:
                 await self._call_node_or_warn(
@@ -1430,7 +1440,7 @@ class SessionLoop:
                     session_id=session_id,
                     turn_index=turn_index,
                     source_turn_id=turn_id,
-                    student_message=turn_text,
+                    student_message=fact_student_message,
                     tutor_message=message,
                     branch_statements=branch_statements,
                 )
@@ -1592,7 +1602,15 @@ class SessionLoop:
                 self.final_answer,
                 session_id,
                 turn_index,
-                student_message=turn_text,
+                # embed_text, not turn_text: on a click-resolution turn
+                # turn_text is the clicked option's own system-authored
+                # question copy, never the student's words (see
+                # _finish_turn_with_fact's docstring). FinalAnswer needs
+                # the same originating_question substitution the
+                # history-block/reference-binding lookups above already
+                # get, or it ends up "answering" its own button's
+                # question text back to itself.
+                student_message=embed_text,
                 branch_context=branch_context,
                 recent_history=recent_history,
                 memory_context=memory_context,
