@@ -11,8 +11,13 @@ abstract class ChatTransport {
   /// Server frames, in order. Completes (onDone) when the connection drops.
   Stream<ServerEvent> get events;
 
-  void sendMessage(String text);
-  void selectOption(String optionId);
+  /// [stage]: the stage (the slime) is showing, so the server should act
+  /// this turn out on it (server.py's "stage" frames).
+  void sendMessage(String text, {bool stage = false});
+  void selectOption(String optionId, {bool stage = false});
+
+  /// Rewrite the latest answer at the chat's current slider levels.
+  void regenerate(int requestId);
   Future<void> close();
 }
 
@@ -36,12 +41,16 @@ class WebSocketChatTransport implements ChatTransport {
       .cast<ServerEvent>();
 
   @override
-  void sendMessage(String text) =>
-      _channel.sink.add(jsonEncode({'type': 'message', 'text': text}));
+  void sendMessage(String text, {bool stage = false}) =>
+      _channel.sink.add(jsonEncode({'type': 'message', 'text': text, if (stage) 'stage': true}));
 
   @override
-  void selectOption(String optionId) =>
-      _channel.sink.add(jsonEncode({'type': 'select_option', 'option_id': optionId}));
+  void selectOption(String optionId, {bool stage = false}) => _channel.sink
+      .add(jsonEncode({'type': 'select_option', 'option_id': optionId, if (stage) 'stage': true}));
+
+  @override
+  void regenerate(int requestId) =>
+      _channel.sink.add(jsonEncode({'type': 'regenerate', 'request_id': requestId}));
 
   @override
   Future<void> close() async {

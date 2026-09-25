@@ -120,6 +120,7 @@ from versa.models import (
     DisambiguationAssessment,
     DisambiguationBranch,
     DisambiguationTurn,
+    DisambiguationTurnKind,
     Option,
     OptionProposal,
     OptionSet,
@@ -180,6 +181,7 @@ def _assess_prompt(
     thinking_style_hint: str = "",
     reference_binding_hint: str = "",
     domain: DomainConfig | None = None,
+    lesson_context: str = "",
 ) -> str:
     d = domain or DomainConfig.education()
     history_block = (
@@ -217,6 +219,7 @@ def _assess_prompt(
         f"{history_block}"
         f"{thinking_style_block}"
         f"{reference_binding_block}"
+        f"{lesson_context}"
         f"{typed_past_note}"
         f"\n{d.actor_noun.capitalize()}'s message: {message}\n\n"
         f"Is this message genuinely ambiguous or under-specified "
@@ -296,6 +299,7 @@ class AssessAndBranch:
         typed_past_note: str = "",
         thinking_style_hint: str = "",
         reference_binding_hint: str = "",
+        lesson_context: str = "",
     ) -> DisambiguationAssessment:
         self.last_call_count = 0
         rejected_reason = ""
@@ -304,6 +308,7 @@ class AssessAndBranch:
                 _assess_prompt(
                     message, recent_history, typed_past_note, rejected_reason,
                     thinking_style_hint, reference_binding_hint, self._domain,
+                    lesson_context,
                 )
             )
             self.last_call_count += 1
@@ -369,6 +374,10 @@ def _options_prompt(
     message: str,
     recent_history: str = "",
     reference_binding_hint: str = "",
+    thinking_style_hint: str = "",
+    learner_history_block: str = "",
+    structural_requirement: str = "",
+    claim_constraints_block: str = "",
     rejected_reason: str = "",
     domain: DomainConfig | None = None,
 ) -> str:
@@ -383,12 +392,25 @@ def _options_prompt(
         )
     if reference_binding_hint:
         context_block += reference_binding_hint
+    thinking_style_block = ""
+    if thinking_style_hint:
+        thinking_style_block = (
+            "\nAcross many prior sessions, this student has confirmed "
+            f"pattern(s) in how they move through material: {thinking_style_hint}\n"
+            "Use this only to judge whether a reading is one this "
+            "student would find genuinely ambiguous, not to assume "
+            "anything about the current subject matter itself.\n"
+        )
     correction = ""
     if rejected_reason:
         correction = f"\nYour previous attempt was rejected: {rejected_reason}.\n"
     return (
         "DISAMBIGUATE:OPTIONS\n"
+        f"{structural_requirement}"
+        f"{claim_constraints_block}"
         f"{context_block}"
+        f"{thinking_style_block}"
+        f"{learner_history_block}"
         f"\n{d.actor_noun.capitalize()}'s message: {message}\n\n"
         f"These are the candidate distinct readings of that message:\n{listing}\n\n"
         "FIRST, decide which kind of ambiguity is actually live here:\n"
@@ -577,6 +599,19 @@ class DisambiguationOptions:
     operates on `Branch`, not `DisambiguationBranch`; keeping the audit
     trail unambiguous between them matters more here than reusing a
     name.
+
+    `thinking_style_hint`/`learner_history_block`/`structural_requirement`/
+    `claim_constraints_block` (IDEAS.md "richer, context-aware options",
+    step 1) are the same personalization context `FinalAnswer` gets —
+    this was previously the least personalized node in the turn despite
+    phrasing what the student actually clicks. All four are optional and
+    pre-rendered/pre-computed by the caller, same discipline as
+    `reference_binding_hint`: this method does no retrieval or
+    classification of its own, only places what it is given. Threading
+    them in does not yet feed anything back from a click into a claim or
+    a reason (step 2/3 of that same IDEAS.md entry) — see its own
+    circularity concern for why that stays separate until a guard for it
+    is actually designed.
     """
 
     def __init__(self, llm: LLMClient, domain_config: DomainConfig | None = None) -> None:
@@ -590,6 +625,10 @@ class DisambiguationOptions:
         message: str = "",
         recent_history: str = "",
         reference_binding_hint: str = "",
+        thinking_style_hint: str = "",
+        learner_history_block: str = "",
+        structural_requirement: str = "",
+        claim_constraints_block: str = "",
     ) -> OptionSet:
         self.last_call_count = 0
         if not branches:
@@ -599,8 +638,16 @@ class DisambiguationOptions:
         for _ in range(_MAX_OPTIONS_ATTEMPTS):
             raw = await self._llm.complete(
                 _options_prompt(
-                    branches, message, recent_history, reference_binding_hint,
-                    rejected_reason, self._domain,
+                    branches,
+                    message,
+                    recent_history=recent_history,
+                    reference_binding_hint=reference_binding_hint,
+                    thinking_style_hint=thinking_style_hint,
+                    learner_history_block=learner_history_block,
+                    structural_requirement=structural_requirement,
+                    claim_constraints_block=claim_constraints_block,
+                    rejected_reason=rejected_reason,
+                    domain=self._domain,
                 )
             )
             self.last_call_count += 1
@@ -736,8 +783,19 @@ class FinalAnswer:
         structural_requirement: str = "",
         reference_bindings_block: str = "",
         claim_constraints_block: str = "",
+        knob_directive: str = "",
+        lesson_context: str = "",
     ) -> str:
-        """`learner_history_block` is a fully pre-rendered block from
+        """`knob_directive` (session_knobs.render_knob_directive) is the
+        person's per-session length/depth/tone controls, pre-rendered;
+        empty when every knob is at its default.
+
+        `lesson_context` (topics.render_lesson_context) is the course,
+        chapter, lesson, task list and teaching rules for a Learn-a-topic
+        lesson chat; empty for every other session, so their prompts are
+        unchanged.
+
+        `learner_history_block` is a fully pre-rendered block from
         history_block.py — this method never builds it, only places it
         in the prompt. Distinct from `recent_history` below: that is
         THIS session's own recent turns (conversation continuity, a
@@ -765,7 +823,14 @@ class FinalAnswer:
             context_block = (
                 f"\nThe {d.actor_noun}'s earlier message was ambiguous; they "
                 f"confirmed they meant this specific reading: {branch_context!r}. "
-                "Answer accordingly -- do not re-ask which they meant.\n"
+                "This is a SETTLED FACT about what they want, decided by "
+                "their own click -- it is not a question for you to weigh, "
+                "answer, reconsider, or argue against, even if it reads "
+                "like a question. Do not say \"no\" to it, do not open by "
+                "addressing it as a proposal, do not present the "
+                "alternative(s) they didn't choose. Build your answer as "
+                "if they had stated this directly themselves, and only "
+                "this -- do not re-ask which they meant.\n"
             )
         memory_block = ""
         if memory_context:
@@ -788,6 +853,8 @@ class FinalAnswer:
             f"{d.final_answer_role_line}"
             f"{structural_requirement}"
             f"{claim_constraints_block}"
+            f"{knob_directive}"
+            f"{lesson_context}"
             f"{context_block}"
             f"{memory_block}"
             f"{reference_bindings_block}"
@@ -839,23 +906,29 @@ class DisambiguationStore:
         self._pool = pool
 
     async def create_turn(
-        self, session_id: UUID, turn_index: int, needs_branches: bool, turn_had_direct_answer: bool
+        self,
+        session_id: UUID,
+        turn_index: int,
+        needs_branches: bool,
+        turn_had_direct_answer: bool,
+        kind: DisambiguationTurnKind = DisambiguationTurnKind.AMBIGUITY,
     ) -> DisambiguationTurn:
         turn_id = uuid4()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 INSERT INTO disambiguation_turns
-                    (id, session_id, turn_index, needs_branches, turn_had_direct_answer)
-                VALUES ($1, $2, $3, $4, $5)
+                    (id, session_id, turn_index, needs_branches, turn_had_direct_answer, kind)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id, session_id, turn_index, needs_branches,
-                          turn_had_direct_answer, created_at
+                          turn_had_direct_answer, kind, created_at
                 """,
                 turn_id,
                 session_id,
                 turn_index,
                 needs_branches,
                 turn_had_direct_answer,
+                kind.value,
             )
         return self._row_to_turn(row)
 
@@ -951,13 +1024,34 @@ class DisambiguationStore:
         answers. A click-resolution turn has none (it re-uses an earlier
         turn's branches rather than running AssessAndBranch again — see
         `DisambiguationTurn`'s own docstring), so None here is expected,
-        not an error."""
+        not an error.
+
+        A turn can hold more than one row: with memory checked alongside
+        AssessAndBranch (loop.py, IDEAS.md "show options first, remember
+        second"), an assessment memory overtook is still recorded
+        (invariant 9) before the row that decided what the student saw
+        (e.g. a reason confirmation). The LATEST row is that deciding one."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT * FROM disambiguation_turns "
-                "WHERE session_id = $1 AND turn_index = $2",
+                "WHERE session_id = $1 AND turn_index = $2 "
+                "ORDER BY created_at DESC LIMIT 1",
                 session_id,
                 turn_index,
+            )
+        return self._row_to_turn(row) if row is not None else None
+
+    async def get_turn(self, disambiguation_turn_id: UUID) -> DisambiguationTurn | None:
+        """The DisambiguationTurn a specific ID names — click resolution
+        (loop.py's `_handle_disambiguation_turn`) only ever has a
+        matched branch's `disambiguation_turn_id`, not its turn_index,
+        and needs to know that turn's `kind` to route the click
+        correctly (an ordinary branch-reading click resolves completely
+        differently from a reason-confirmation click — see
+        `DisambiguationTurnKind`'s own docstring)."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM disambiguation_turns WHERE id = $1", disambiguation_turn_id
             )
         return self._row_to_turn(row) if row is not None else None
 
@@ -1059,3 +1153,43 @@ def build_typed_past_note(prior_branches: list[DisambiguationBranch]) -> str:
         return ""
     listing = "\n".join(f"- {b.statement}" for b in prior_branches)
     return _TYPED_PAST_NOTE_TEMPLATE.format(prior_readings=listing)
+
+
+# Fixed, code-owned strings for the reason-confirmation flow
+# (loop.py's `_handle_disambiguation_turn`, DisambiguationTurnKind.
+# REASON_CONFIRMATION) -- never LLM-generated, unlike an ordinary
+# branch's statement/option text. That is exactly why comparing a
+# clicked option's text against these two constants directly, at
+# resolution time, is safe: OptionProposal's own docstring names
+# inferring meaning from unpredictable LLM-generated option text as a
+# real, previously-hit failure mode (three documented incidents) --
+# these are neither unpredictable nor LLM-generated, so that concern
+# does not apply.
+#
+# Exported (not module-private) because both loop.py (the live turn)
+# and session_history.py (a resumed chat's reconstruction) need the
+# identical literals -- the same "reused exactly, not two
+# independently-phrased copies" discipline OPTIONS_QUESTION's own
+# module (session_history.py) already follows for the ordinary case.
+REASON_CONFIRM_YES_TEXT = "Yes, that's right"
+REASON_CONFIRM_NO_TEXT = "No, something else"
+
+# The "no" branch's own DisambiguationBranch.statement -- never shown
+# to the student (only the two option texts above are), it exists
+# purely so the branch pair has a real, non-empty statement for the
+# audit trail, matching every other DisambiguationBranch.
+REASON_REJECTED_STATEMENT = "the offered reason does not apply"
+
+
+def render_reason_confirmation_message(reason: str) -> str:
+    """The fixed question shown when a REASON-based memory match
+    (memory.EmbedAndSearchFacts, `matched_via="reason"`) is found —
+    see IDEAS.md's "ask for confirmation directly" entry. `reason` is
+    expected to read naturally spliced after "because" (see
+    memory._fact_prompt's reason instruction, which asks for exactly
+    that phrasing) — this function does no further rewriting of it.
+
+    Read by BOTH the live turn (loop.py) and a resumed chat's
+    reconstruction (session_history.py), so the two can never phrase
+    the same past turn two different ways."""
+    return f"Before I answer — it looks like this is because {reason}. Is that right?"

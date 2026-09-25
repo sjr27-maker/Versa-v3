@@ -236,6 +236,7 @@ async def test_session_history_reconstructs_a_real_conversation_and_appears_in_t
         "tutor_text": _ANSWER,
         "options_message": None,
         "options": [],
+        "claim_update": None,
     }
     (row,) = [r for r in rows if r["session_id"] == session_id]
     assert row["turn_count"] == 1

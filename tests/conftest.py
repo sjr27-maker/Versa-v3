@@ -50,6 +50,21 @@ async def pool():
         # comprehensive (includes the tables migration 032 retires) so
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
+        await conn.execute("DROP TABLE IF EXISTS lesson_task_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_signals CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS lesson_tasks CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_lessons CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_chapters CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topics CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_nodes CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_generations CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_explorations CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS topic_resources CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS answer_versions CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS feed_generations CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS item_qna CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS explanation_cache CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS student_reviews CASCADE")
         await conn.execute("DROP TABLE IF EXISTS predictions CASCADE")
         await conn.execute("DROP TABLE IF EXISTS instrument_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS instruments CASCADE")
@@ -133,6 +148,10 @@ async def clean_pool(pool):
             "disambiguation_turns, learner_facts, thinking_style_candidates, "
             "predictions, instrument_events, instruments, interaction_contracts, "
             "capability_evidence, capability_claims, "
+            "item_qna, explanation_cache, student_reviews, feed_generations, "
+            "lesson_task_events, topic_signals, lesson_tasks, topic_lessons, "
+            "topic_chapters, topics, topic_nodes, topic_generations, topic_explorations, "
+            "topic_resources, "
             "claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
             "turn_outcomes, "
             "interaction_abstracts, "
@@ -233,6 +252,27 @@ async def claim_store(clean_pool):
     from versa.claims import ClaimStore
 
     return ClaimStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def review_store(clean_pool):
+    from versa.reviews import ReviewStore
+
+    return ReviewStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def explanation_cache_store(clean_pool):
+    from versa.reviews import ExplanationCacheStore
+
+    return ExplanationCacheStore(clean_pool)
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def qna_store(clean_pool):
+    from versa.reviews import ItemQnAStore
+
+    return ItemQnAStore(clean_pool)
 
 
 @pytest_asyncio.fixture

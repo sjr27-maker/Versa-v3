@@ -1,7 +1,8 @@
 import pytest
 
 from versa.diagnostics import TurnDiagnosticsStore
-from versa.models import TurnDiagnostics
+from versa.embeddings import EMBEDDING_DIM
+from versa.models import LearnerFact, LearnerFactType, TurnDiagnostics
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -65,6 +66,7 @@ async def test_every_field_roundtrips_write_to_read(transcript, clean_pool, lear
         # matched_fact_id left None: it FKs to learner_facts, and this
         # store-level test writes no fact. Its own round-trip is covered
         # by test_memory_loop_wiring's end-to-end skip test.
+        memory_match_via="reason",
     )
     await store.record(diagnostics)
 
@@ -185,3 +187,55 @@ async def test_teach_failed_flag_and_empty_warnings_roundtrip(
     assert fetched.teach_failed is True
     assert fetched.warnings == []
     assert fetched.entropy_bits is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_declined_fact_ids_for_learner_finds_only_declined_matches(
+    transcript, clean_pool, learner_id, learner_store, learner_fact_store,
+):
+    """The read side of the "don't re-offer an already-declined reason"
+    fix (loop.py's matched_via == "reason" branch) -- backed entirely
+    by the existing reason_confirmed_by_student/matched_fact_id
+    columns, no new schema."""
+    store = TurnDiagnosticsStore(clean_pool)
+    session_id = await transcript.create_session(learner_id)
+    turn_id = await transcript.record_turn(session_id, 0, "seed turn")
+    zero_vec = [0.0] * EMBEDDING_DIM
+
+    async def _seed_fact() -> object:
+        fact = await learner_fact_store.add(LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=0,
+            fact_type=LearnerFactType.DIRECT_ANSWER,
+            situation="s", resolution="r", embedding=zero_vec,
+            reason="a reason", reason_embedding=zero_vec, source_turn_id=turn_id,
+        ))
+        return fact.id
+
+    declined_fact = await _seed_fact()
+    confirmed_fact = await _seed_fact()
+    offered_not_yet_resolved_fact = await _seed_fact()
+
+    await store.record(TurnDiagnostics(
+        session_id=session_id, turn_index=0, node_call_counts={}, total_call_count=1,
+        guardrail_fired=False, entropy_bits=None, duration_ms=1.0, warnings=[],
+        teach_failed=False, matched_fact_id=declined_fact, memory_match_via="reason",
+        reason_confirmed_by_student=False,
+    ))
+    await store.record(TurnDiagnostics(
+        session_id=session_id, turn_index=1, node_call_counts={}, total_call_count=1,
+        guardrail_fired=False, entropy_bits=None, duration_ms=1.0, warnings=[],
+        teach_failed=False, matched_fact_id=confirmed_fact, memory_match_via="reason",
+        reason_confirmed_by_student=True,
+    ))
+    await store.record(TurnDiagnostics(
+        session_id=session_id, turn_index=2, node_call_counts={}, total_call_count=1,
+        guardrail_fired=False, entropy_bits=None, duration_ms=1.0, warnings=[],
+        teach_failed=False, matched_fact_id=offered_not_yet_resolved_fact,
+        memory_match_via="reason", reason_confirmed_by_student=None,
+    ))
+
+    declined = await store.declined_fact_ids_for_learner(learner_id)
+    assert declined == {declined_fact}
+
+    other_learner = await learner_store.create()
+    assert await store.declined_fact_ids_for_learner(other_learner.id) == set()

@@ -5,8 +5,8 @@ import '../app_state.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
-/// The four ways to use Versa. Only Sandbox is live; the others are visible
-/// placeholders that say so.
+/// The four ways to use Versa. Sandbox and Learn a topic are live; the others
+/// are visible placeholders that say so.
 class ModesScreen extends StatelessWidget {
   const ModesScreen({super.key});
 
@@ -42,9 +42,10 @@ class ModesScreen extends StatelessWidget {
                       cardKey: 'mode-learn',
                       icon: Icons.menu_book_outlined,
                       title: 'Learn a topic',
-                      blurb: 'Bring a syllabus or a title and work through it with progress tracked.',
-                      live: false,
-                      onTap: () => notBuilt('Learn a topic'),
+                      blurb: 'Search a subject or bring a PDF or link; pick the branches you want, '
+                          'then work through the chapters with your progress tracked.',
+                      live: true,
+                      onTap: shell.openTopics,
                     ),
                     _ModeCard(
                       width: width,

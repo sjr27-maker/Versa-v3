@@ -25,3 +25,10 @@ from contextvars import ContextVar
 DeltaSink = Callable[[str], Awaitable[None]]
 
 delta_sink: ContextVar[DeltaSink | None] = ContextVar("versa_delta_sink", default=None)
+
+# Mid-turn events other than answer text (loop.py `_emit_turn_event`): the
+# options shown before the turn is over, those options retracted, the
+# "I remember" beat. Same ContextVar reasoning as `delta_sink` above.
+TurnEventSink = Callable[[dict], Awaitable[None]]
+
+turn_events: ContextVar[TurnEventSink | None] = ContextVar("versa_turn_events", default=None)

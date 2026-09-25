@@ -30,8 +30,10 @@ from typing import Callable
 
 import asyncpg
 
+from versa.answer_versions import AnswerVersionStore
 from versa.audit import NodeCallStore, TranscriptStore
 from versa.claims import ClaimStore
+from versa.reviews import ReviewStore
 from versa.diagnostics import TurnDiagnosticsStore
 from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
@@ -50,6 +52,7 @@ from versa.llm import ModelTierClients
 from versa.loop import SessionLoop
 from versa.memory import LearnerFactStore, ThinkingStyleStore
 from versa.retrieval_config import RetrievalConfig
+from versa.topics import LessonHooks
 
 
 def build_interaction_pipeline_stores(pool: asyncpg.Pool, embedding_client: EmbeddingClient) -> dict:
@@ -93,12 +96,15 @@ def build_session_loop(
     embedding_client: EmbeddingClient,
     domain_config: DomainConfig | None = None,
     on_node_start: Callable[[str], None] | None = None,
+    on_claim_update: Callable[[object, dict], None] | None = None,
+    on_lesson_progress: Callable[[object, dict], None] | None = None,
 ) -> SessionLoop:
     """The one and only place a `SessionLoop` gets constructed — every
-    optional store wired in, unconditionally. `on_node_start` is the
-    one param that may genuinely differ by caller (a server can forward
-    node-progress to a client; the CLI has nothing to forward to), so it
-    stays a parameter rather than being hidden away too.
+    optional store wired in, unconditionally. `on_node_start`/
+    `on_claim_update` are the params that may genuinely differ by caller
+    (a server can forward node-progress or a sandbox-chat claim update to
+    a client; the CLI has nothing to forward to), so they stay parameters
+    rather than being hidden away too.
 
     The embedding client is wrapped ONCE here in `TurnCachedEmbeddings` and
     the wrapper is what both the loop and the interaction recorder receive,
@@ -118,5 +124,10 @@ def build_session_loop(
         thinking_style_store=ThinkingStyleStore(pool),
         embedding_client=embedding_client,
         domain_config=domain_config,
+        review_store=ReviewStore(pool),
+        on_claim_update=on_claim_update,
+        answer_version_store=AnswerVersionStore(pool),
+        # Learn-a-topic lesson chats; inert for every non-lesson session.
+        lesson_hooks=LessonHooks(pool, tiers.fast, on_progress=on_lesson_progress),
         **build_interaction_pipeline_stores(pool, embedding_client),
     )

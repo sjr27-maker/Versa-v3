@@ -1,0 +1,21 @@
+-- versa: learner_fact_type (migration 030) gains 'reason_confirmed' --
+-- a fact written from a turn where the student DIRECTLY confirmed a
+-- reason-based memory match (clicked "Yes, that's right"), as opposed
+-- to 'direct_answer' (no confirmation involved, or the LLM-judged
+-- ConfirmFactMatch path a situation/resolution match still uses) or
+-- 'branch_resolution' (a click choosing WHICH reading was meant, not
+-- confirming a claim about the learner). See IDEAS.md's "ask for
+-- confirmation directly" entry.
+--
+-- This distinction is the whole point of asking directly instead of
+-- inferring: a 'reason_confirmed' fact is durably, queryably stronger
+-- evidence than any other fact_type -- a future claims/thinking-style
+-- read can prioritize it without re-deriving "was this actually
+-- confirmed" from anything.
+--
+-- ALTER TYPE ... ADD VALUE cannot run in the same transaction as a
+-- statement that USES the new value -- kept to its own migration file
+-- (each migration is its own transaction, see migrate.py), with
+-- nothing else in it, so that restriction never bites.
+
+ALTER TYPE learner_fact_type ADD VALUE IF NOT EXISTS 'reason_confirmed';

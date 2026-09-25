@@ -38,8 +38,10 @@ class TurnDiagnosticsStore:
                     memory_match_found, memory_match_confirmed_resolution,
                     branching_skipped_by_memory, matched_fact_id, created_at,
                     history_block_used, history_block_source_ids,
-                    history_block_template_version, reference_bindings_injected
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+                    history_block_template_version, reference_bindings_injected,
+                    memory_match_via, reason_confirmation_offered,
+                    reason_confirmed_by_student
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
                 """,
                 diagnostics.id,
                 diagnostics.session_id,
@@ -61,6 +63,9 @@ class TurnDiagnosticsStore:
                 diagnostics.history_block_source_ids,
                 diagnostics.history_block_template_version,
                 diagnostics.reference_bindings_injected,
+                diagnostics.memory_match_via,
+                diagnostics.reason_confirmation_offered,
+                diagnostics.reason_confirmed_by_student,
             )
         return diagnostics
 
@@ -82,6 +87,29 @@ class TurnDiagnosticsStore:
                 session_id,
             )
         return [self._row_to_diagnostics(row) for row in rows]
+
+    async def declined_fact_ids_for_learner(self, learner_id: UUID) -> set[UUID]:
+        """Every `learner_facts.id` this learner has already been asked
+        about (via a reason confirmation) and said no to, across every
+        session — the read side of the "don't re-ask an already-
+        declined reason" fix (see loop.py's `matched_via == "reason"`
+        branch). A JOIN against `sessions`, not a new column: the
+        existing `reason_confirmed_by_student=False` rows already ARE
+        this record; nothing new needs to be written to know it.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT d.matched_fact_id
+                FROM turn_diagnostics d
+                JOIN sessions s ON s.id = d.session_id
+                WHERE s.learner_id = $1
+                  AND d.reason_confirmed_by_student = FALSE
+                  AND d.matched_fact_id IS NOT NULL
+                """,
+                learner_id,
+            )
+        return {row["matched_fact_id"] for row in rows}
 
     async def mean_cost_by_config(self) -> list[AblationCostSummary]:
         """"What does this config cost" — mean per-turn wall-clock,

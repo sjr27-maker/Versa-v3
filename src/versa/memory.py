@@ -27,6 +27,17 @@ actually resolved. Two paths converge on the same underlying store,
   session-end step (`SessionLoop.consolidate_session`) — never live,
   mid-turn (see that method's own docstring for why).
 
+A THIRD, additive element (migration 056, see IDEAS.md's "Store the
+reason" entry): `WriteLearnerFact` may also record `reason` — why a
+resolution fit THIS student, when this specific exchange actually
+suggests one — with its own, independently-searched embedding.
+`EmbedAndSearchFacts` runs both searches and reports which one
+produced the winning candidate, so real usage can show whether a
+reason-based match earns any more trust than a situation/resolution
+one before it is ever treated as primary — see that class's own
+docstring for the mechanics, and `MemoryConfig.reason_similarity_
+threshold` for why it gets its own, independently-tunable bar.
+
 THE ONE RULE EVERYTHING HERE SERVES: nothing below may assert a
 pattern before it's actually been earned across independent evidence.
 Concretely:
@@ -70,6 +81,7 @@ from versa.models import (
     LearnerFact,
     LearnerFactType,
     PathSummary,
+    ReasonRelevance,
     ThinkingStyleCandidate,
     ThinkingStyleConfirmation,
     ThinkingStyleStatus,
@@ -105,6 +117,18 @@ class MemoryConfig(BaseModel):
     # skipped), so a slightly looser vector bar just means "ask the
     # confirming LLM a bit more often", never "skip on similarity alone".
     fact_similarity_threshold: float = 0.72
+    # The reason-embedding search's own bar (migration 056) -- a
+    # SEPARATE knob from fact_similarity_threshold above on purpose,
+    # not reused: reason text ("this student needs the concrete
+    # example first") is shorter and more abstract than a situation+
+    # resolution pair, so there is no reason to assume the same
+    # embedding-behaviour measurements that picked 0.72 for that pair
+    # transfer here. Starts equal to fact_similarity_threshold only
+    # because nothing has been measured yet for this path specifically
+    # (see IDEAS.md's "Store the reason" entry) -- it exists as its own
+    # field precisely so it CAN move independently once real reason
+    # matches accumulate to measure against.
+    reason_similarity_threshold: float = 0.72
     # Same reasoning / same measured embedding behaviour, for step 7's
     # search over thinking_style_candidates' path_summary embeddings —
     # an existing candidate is only worth ASKING ConfirmThinkingStyleMatch
@@ -145,6 +169,27 @@ def _fact_prompt(
     tutor_message: str,
     branch_statements: list[str] | None,
 ) -> str:
+    # The third field below (reason) is deliberately optional in both
+    # prompt variants and in the schema that backs WRITE:FACT
+    # (llm.py's _SCHEMA_BY_PREFIX) -- asking the model to abstain
+    # rather than always fill it in is what keeps this from becoming
+    # the confabulation-on-every-episode failure named in IDEAS.md's
+    # "Store the reason" entry. situation/resolution stay mandatory:
+    # only reason gets the "leave it out" instruction.
+    _REASON_INSTRUCTION = (
+        '"reason" (OPTIONAL): only if THIS specific exchange actually '
+        "shows something about how this student thinks or what they "
+        "needed — e.g. they asked for the concrete example before the "
+        "rule, or named their own approach explicitly. Leave it out "
+        "entirely if the resolution above already says everything "
+        "there is to say; do not invent a reason just to fill this in. "
+        "This may be shown directly to the student later as \"it looks "
+        'like this is because {reason}\" -- phrase it in the second '
+        'person, present tense, so it reads naturally spliced in there '
+        '(e.g. "you tend to want the concrete example before the '
+        'rule", not "wanted the concrete example" or "the student '
+        'wants").\n'
+    )
     if fact_type is LearnerFactType.BRANCH_RESOLUTION:
         listing = "\n".join(f"- {s}" for s in (branch_statements or []))
         return (
@@ -153,23 +198,27 @@ def _fact_prompt(
             f"were the distinct readings that were on offer:\n{listing}\n\n"
             f"The student's message that resolved it: {student_message}\n"
             f"How the tutor responded once resolved: {tutor_message}\n\n"
-            "Write two short, plain-English notes, in the student's own "
+            "Write short, plain-English notes, in the student's own "
             "terms where possible, for a future tutor to read back "
             "before ever asking something similar again:\n"
             '"situation": what was actually unclear or ambiguous\n'
-            '"resolution": which reading was correct and what was chosen\n\n'
-            'Respond with JSON: {"situation": "...", "resolution": "..."}'
+            '"resolution": which reading was correct and what was chosen\n'
+            f"{_REASON_INSTRUCTION}\n"
+            'Respond with JSON: {"situation": "...", "resolution": "...", '
+            '"reason": "..." or omit it entirely}'
         )
     return (
         "WRITE:FACT\n"
         f"The student asked or did this: {student_message}\n"
         f"The tutor answered: {tutor_message}\n\n"
-        "Write two short, plain-English notes, in the student's own "
+        "Write short, plain-English notes, in the student's own "
         "terms where possible, for a future tutor to read back before "
         "answering something similar again:\n"
         '"situation": what the student was actually asking or doing\n'
-        '"resolution": what was answered and how\n\n'
-        'Respond with JSON: {"situation": "...", "resolution": "..."}'
+        '"resolution": what was answered and how\n'
+        f"{_REASON_INSTRUCTION}\n"
+        'Respond with JSON: {"situation": "...", "resolution": "...", '
+        '"reason": "..." or omit it entirely}'
     )
 
 
@@ -182,9 +231,14 @@ def _parse_extracted_fact(raw: str, fallback_situation: str, fallback_resolution
         return ExtractedFact(situation=fallback_situation, resolution=fallback_resolution)
     situation = parsed.get("situation")
     resolution = parsed.get("resolution")
+    # No fallback for reason, unlike situation/resolution above: a
+    # missing or blank reason is a valid "nothing more to say" answer,
+    # not a parse failure to paper over with raw turn text.
+    reason = parsed.get("reason")
     return ExtractedFact(
         situation=str(situation) if situation else fallback_situation,
         resolution=str(resolution) if resolution else fallback_resolution,
+        reason=str(reason) if reason else None,
     )
 
 
@@ -221,13 +275,25 @@ class EmbedAndSearchFacts:
     current message and searches this learner's `learner_facts` by
     cosine similarity — a pure retrieval step, never itself a
     live-affecting judgment (see module docstring). Only ever returns
-    a populated match when similarity clears
-    `MemoryConfig.fact_similarity_threshold`; below that, this is
-    correctly reported as "nothing worth using," not a weak match.
+    a populated match when similarity clears the relevant threshold;
+    below that, this is correctly reported as "nothing worth using,"
+    not a weak match.
+
+    Runs TWO independent searches (migration 056) — the existing
+    situation+resolution `embedding`, and the additive `reason_embedding`
+    — and returns whichever single candidate is the best real match
+    (`FactSearchResult.matched_via` names which one). This is the
+    "add it alongside, don't replace" mitigation plan from IDEAS.md's
+    "Store the reason" entry: both paths feed the SAME downstream gate
+    (`ConfirmFactMatch` still has to agree either way), so this never
+    makes a skip more likely on an unproven signal — it only changes
+    WHICH stored fact gets offered to that gate.
 
     Fast in spirit (an embedding call, not a generation call), but
     still a real API call — `last_call_count` counts it toward
-    MAX_CALLS_PER_TURN like everything else.
+    MAX_CALLS_PER_TURN like everything else. Both searches below reuse
+    the ONE query embedding computed here; running two SQL searches on
+    one existing embedding costs no extra API call.
     """
 
     def __init__(
@@ -247,19 +313,62 @@ class EmbedAndSearchFacts:
         # facts are embedded as DOCUMENTs (see WriteLearnerFact).
         embedding = await self._embed.embed(message, task_type=embeddings.TASK_QUERY)
         self.last_call_count += 1
-        matches = await self._facts.search_similar(
+
+        situation_matches = await self._facts.search_similar(
             learner_id, embedding, limit=self._config.search_limit
         )
-        if not matches:
-            return FactSearchResult()
-        fact, similarity = matches[0]
-        if similarity < self._config.fact_similarity_threshold:
-            return FactSearchResult(similarity=similarity)
+        situation_hit = situation_matches[0] if situation_matches else None
+
+        # Naturally empty until this learner has at least one fact with
+        # a recorded reason — search_similar_by_reason filters to
+        # reason_embedding IS NOT NULL at the SQL level, not a special
+        # case handled here.
+        reason_matches = await self._facts.search_similar_by_reason(
+            learner_id, embedding, limit=self._config.search_limit
+        )
+        reason_hit = reason_matches[0] if reason_matches else None
+
+        situation_clears = (
+            situation_hit is not None
+            and situation_hit[1] >= self._config.fact_similarity_threshold
+        )
+        reason_clears = (
+            reason_hit is not None
+            and reason_hit[1] >= self._config.reason_similarity_threshold
+        )
+
+        if situation_clears and reason_clears:
+            # Both cleared their own bar -- higher similarity wins; an
+            # exact tie goes to situation/resolution, the proven path,
+            # not reason, which is still being measured (see the
+            # mitigation plan referenced above: reason must earn
+            # primacy, never default to it).
+            if reason_hit[1] > situation_hit[1]:
+                fact, similarity, matched_via = *reason_hit, "reason"
+            else:
+                fact, similarity, matched_via = *situation_hit, "situation_resolution"
+        elif reason_clears:
+            fact, similarity, matched_via = *reason_hit, "reason"
+        elif situation_clears:
+            fact, similarity, matched_via = *situation_hit, "situation_resolution"
+        else:
+            # Neither cleared its bar -- report whichever near-miss was
+            # closer, purely for node_calls visibility (no
+            # matched_fact_id: this is not a real match), same spirit
+            # as before this search was dual.
+            candidates = [h for h in (situation_hit, reason_hit) if h is not None]
+            if not candidates:
+                return FactSearchResult()
+            _, best_similarity = max(candidates, key=lambda h: h[1])
+            return FactSearchResult(similarity=best_similarity)
+
         return FactSearchResult(
             matched_fact_id=fact.id,
             situation=fact.situation,
             resolution=fact.resolution,
+            reason=fact.reason,
             similarity=similarity,
+            matched_via=matched_via,
         )
 
 
@@ -283,21 +392,89 @@ class ConfirmFactMatch:
         return _parse_fact_match_confirmation(raw)
 
 
+def _confirm_reason_relevance_prompt(reason: str, current_message: str) -> str:
+    return (
+        "CONFIRM:REASON_RELEVANT\n"
+        f"A pattern was previously noticed about this student: {reason}\n\n"
+        f"Their current message is: {current_message}\n\n"
+        "Does the current message still fit wanting that, or does it "
+        "already say the opposite -- e.g. asking for the reverse, "
+        "saying to stop doing it, or explicitly changing their mind? "
+        "Say true if the message is neutral or still consistent with "
+        "the pattern (an ordinary question, unrelated topic, or a "
+        "genuine repeat of it) -- only say false when the message "
+        "itself already, unambiguously contradicts the pattern.\n"
+        'Respond with JSON: {"still_applies": true or false}'
+    )
+
+
+def _parse_reason_relevance(raw: str) -> ReasonRelevance:
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return ReasonRelevance(still_applies=True)
+    if not isinstance(parsed, dict):
+        return ReasonRelevance(still_applies=True)
+    return ReasonRelevance(still_applies=bool(parsed.get("still_applies", True)))
+
+
+class ConfirmReasonRelevance:
+    """A cheap gate in front of the reason-confirmation offer
+    (loop.py's `matched_via == "reason"` branch) — see IDEAS.md's "ask
+    for confirmation directly" entry and its own follow-up finding.
+
+    That entry deliberately skipped `ConfirmFactMatch`-style judgment
+    for a reason match, on the reasoning that a direct yes/no from the
+    student is stronger evidence than another LLM's guess. A live run
+    found the gap that leaves open: `EmbedAndSearchFacts`' reason
+    search is pure cosine similarity, and similarity cannot tell "the
+    student still wants X" apart from "the student just said to stop
+    doing X" — the two are topically almost identical text. Confirmed
+    concretely: an explicit reversal of a stated preference ("forget
+    examples, just give me the abstract definition") still matched the
+    stored reason and got offered back as "is that right?", as if it
+    were being reconfirmed rather than rejected.
+
+    This does not reintroduce `ConfirmFactMatch` for reason matches in
+    general — a genuine match still goes straight to the student, no
+    LLM standing in for their answer. It only screens out the one
+    failure mode where the CURRENT message has already, by itself,
+    answered the question the confirmation was about to ask."""
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+        self.last_call_count: int = 0
+
+    async def run(self, reason: str, current_message: str) -> ReasonRelevance:
+        self.last_call_count = 0
+        raw = await self._llm.complete(
+            _confirm_reason_relevance_prompt(reason, current_message)
+        )
+        self.last_call_count += 1
+        return _parse_reason_relevance(raw)
+
+
 class WriteLearnerFact:
     """Step 5: writes exactly one fact per turn that actually resolved
     something (a click, or a direct answer — never a turn that only
     raised options with nothing decided yet). One LLM call extracts
-    `situation`/`resolution` in plain English; one embedding call
-    embeds their concatenation; the resulting `LearnerFact` is
-    persisted directly (same "a node performs its own store write" as
-    `Update`'s `HypothesisStore.add()` call) — see `ExtractedFact` for
-    why the node's *return value* deliberately excludes the embedding
-    and ids the persisted row actually has.
+    `situation`/`resolution` (and optionally `reason`) in plain
+    English; one embedding call embeds situation+resolution as before,
+    and a SECOND embedding call runs ONLY when a reason was actually
+    extracted (migration 056) — no reason, no wasted call. The
+    resulting `LearnerFact` is persisted directly (same "a node
+    performs its own store write" as `Update`'s `HypothesisStore.add()`
+    call) — see `ExtractedFact` for why the node's *return value*
+    deliberately excludes the embeddings and ids the persisted row
+    actually has.
 
-    A parse failure degrades to the raw student/tutor text as-is
-    (still a usable, if less polished, fact) rather than losing the
-    turn's memory-writing entirely — same "never crash on malformed
-    model output" discipline as every other parse-and-validate node.
+    A parse failure degrades to the raw student/tutor text as-is for
+    situation/resolution (still a usable, if less polished, fact)
+    rather than losing the turn's memory-writing entirely — same
+    "never crash on malformed model output" discipline as every other
+    parse-and-validate node. `reason` has no such fallback: a missing
+    reason just means none was written this turn, never a degraded
+    stand-in (see `_parse_extracted_fact`).
     """
 
     def __init__(
@@ -339,6 +516,18 @@ class WriteLearnerFact:
         )
         self.last_call_count += 1
 
+        # Second, INDEPENDENT document embedding (migration 056) --
+        # only when a reason was actually extracted. No reason means no
+        # embedding, no extra call, and reason_embedding stays NULL, so
+        # search_similar_by_reason never surfaces this row (see that
+        # method's own comment).
+        reason_embedding: list[float] | None = None
+        if extracted.reason:
+            reason_embedding = await self._embed.embed(
+                extracted.reason, task_type=embeddings.TASK_DOCUMENT
+            )
+            self.last_call_count += 1
+
         await self._facts.add(
             LearnerFact(
                 learner_id=learner_id,
@@ -348,6 +537,8 @@ class WriteLearnerFact:
                 situation=extracted.situation,
                 resolution=extracted.resolution,
                 embedding=embedding,
+                reason=extracted.reason,
+                reason_embedding=reason_embedding,
                 source_turn_id=source_turn_id,
             )
         )
@@ -459,8 +650,9 @@ class LearnerFactStore:
                 """
                 INSERT INTO learner_facts (
                     id, learner_id, session_id, turn_index, fact_type,
-                    situation, resolution, embedding, source_turn_id, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    situation, resolution, embedding, reason, reason_embedding,
+                    source_turn_id, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 """,
                 fact.id,
                 fact.learner_id,
@@ -470,6 +662,8 @@ class LearnerFactStore:
                 fact.situation,
                 fact.resolution,
                 fact.embedding,
+                fact.reason,
+                fact.reason_embedding,
                 fact.source_turn_id,
                 fact.created_at,
             )
@@ -479,10 +673,11 @@ class LearnerFactStore:
         self, learner_id: UUID, embedding: list[float], limit: int = 5
     ) -> list[tuple[LearnerFact, float]]:
         """Nearest `limit` facts for this learner by cosine similarity
-        (pgvector's `<=>` cosine-distance operator; similarity = 1 -
-        distance), nearest first. Empty for a learner with no facts
-        yet — the expected shape before any fact has ever been written
-        for them, not an error."""
+        over `embedding` (situation+resolution; pgvector's `<=>`
+        cosine-distance operator, similarity = 1 - distance), nearest
+        first. Empty for a learner with no facts yet — the expected
+        shape before any fact has ever been written for them, not an
+        error."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -490,6 +685,34 @@ class LearnerFactStore:
                 FROM learner_facts
                 WHERE learner_id = $1
                 ORDER BY embedding <=> $2
+                LIMIT $3
+                """,
+                learner_id,
+                embedding,
+                limit,
+            )
+        return [self._row_to_fact_with_similarity(row) for row in rows]
+
+    async def search_similar_by_reason(
+        self, learner_id: UUID, embedding: list[float], limit: int = 5
+    ) -> list[tuple[LearnerFact, float]]:
+        """The same nearest-neighbour search as `search_similar` above,
+        but over `reason_embedding` (migration 056) instead of
+        `embedding` — the second, independently-searched path
+        `memory.EmbedAndSearchFacts` compares against the first (see
+        that class's own docstring). `WHERE reason_embedding IS NOT
+        NULL` excludes every fact with no recorded reason at the SQL
+        level, not in Python: most facts will have none (see
+        `memory._fact_prompt`'s abstain-by-default instruction), and
+        there is no similarity score to compute against a NULL vector
+        anyway."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *, 1 - (reason_embedding <=> $2) AS similarity
+                FROM learner_facts
+                WHERE learner_id = $1 AND reason_embedding IS NOT NULL
+                ORDER BY reason_embedding <=> $2
                 LIMIT $3
                 """,
                 learner_id,
@@ -524,6 +747,12 @@ class LearnerFactStore:
     def _row_to_fact(self, row) -> LearnerFact:
         mapped = dict(row)
         mapped["embedding"] = mapped["embedding"].to_list()
+        # Unlike embedding (always NOT NULL), reason_embedding is
+        # nullable (migration 056) -- a row written before that
+        # migration, or any fact with no recorded reason, has no
+        # `.to_list()` to call.
+        if mapped["reason_embedding"] is not None:
+            mapped["reason_embedding"] = mapped["reason_embedding"].to_list()
         assert_row_consumed(LearnerFact, mapped)
         return LearnerFact(**mapped)
 
@@ -531,6 +760,8 @@ class LearnerFactStore:
         mapped = dict(row)
         similarity = mapped.pop("similarity")
         mapped["embedding"] = mapped["embedding"].to_list()
+        if mapped["reason_embedding"] is not None:
+            mapped["reason_embedding"] = mapped["reason_embedding"].to_list()
         assert_row_consumed(LearnerFact, mapped)
         return LearnerFact(**mapped), similarity
 
@@ -650,7 +881,7 @@ class ThinkingStyleStore:
                         ELSE status
                     END,
                     updated_at = NOW()
-                WHERE id = $1
+                WHERE id = $1 AND NOT ($2::uuid = ANY(session_ids))
                 RETURNING *
                 """,
                 candidate_id,
@@ -658,7 +889,13 @@ class ThinkingStyleStore:
                 promotion_threshold,
             )
         if row is None:
-            raise KeyError(f"thinking_style_candidate {candidate_id} not found")
+            # Either the candidate doesn't exist, or this session was already
+            # counted for it — a session is one independent confirmation,
+            # never two, so a repeat consolidation is a no-op.
+            existing = await self.get(candidate_id)
+            if existing is None:
+                raise KeyError(f"thinking_style_candidate {candidate_id} not found")
+            return existing
         return self._row_to_candidate(row)
 
     async def retire(self, candidate_id: UUID) -> ThinkingStyleCandidate:

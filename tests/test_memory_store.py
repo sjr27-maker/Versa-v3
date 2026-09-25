@@ -122,6 +122,106 @@ async def test_search_similar_returns_empty_for_a_learner_with_no_facts(learner_
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_reason_and_reason_embedding_roundtrip_and_default_to_none(
+    learner_fact_store, transcript, learner_id
+):
+    """migration 056: reason/reason_embedding are additive and nullable
+    -- a fact written with neither must round-trip as None on both
+    (not, say, an empty string or an empty vector), and a fact that
+    DOES carry a reason must round-trip it exactly, same as
+    situation/resolution already do."""
+    session_id = await transcript.create_session(learner_id)
+    plain_turn = await transcript.record_turn(session_id, 0, "no reason recorded")
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=0,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="s", resolution="r",
+            embedding=_vec(x=1.0), source_turn_id=plain_turn,
+        )
+    )
+    reasoned_turn = await transcript.record_turn(session_id, 1, "a reason recorded")
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=1,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="s2", resolution="r2",
+            embedding=_vec(x=1.0), reason="wanted the concrete example first",
+            reason_embedding=_vec(y=1.0), source_turn_id=reasoned_turn,
+        )
+    )
+
+    facts = await learner_fact_store.list_by_session(session_id)
+    plain, reasoned = facts
+    assert plain.reason is None
+    assert plain.reason_embedding is None
+    assert reasoned.reason == "wanted the concrete example first"
+    assert reasoned.reason_embedding == _vec(y=1.0)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_search_similar_by_reason_ranks_by_cosine_similarity_and_excludes_no_reason_facts(
+    learner_fact_store, transcript, learner_store, learner_id
+):
+    """The reason-embedding search (migration 056) is independent of
+    search_similar above: it must rank by REASON similarity (ignoring
+    how close each fact's situation/resolution embedding is), skip any
+    fact with no recorded reason entirely (not just rank it low), and
+    stay learner-scoped, same guarantees as search_similar."""
+    other_learner_id = (await learner_store.create()).id
+    session_id = await transcript.create_session(learner_id)
+    other_session_id = await transcript.create_session(other_learner_id)
+
+    near_turn = await transcript.record_turn(session_id, 0, "near")
+    far_turn = await transcript.record_turn(session_id, 1, "far")
+    no_reason_turn = await transcript.record_turn(session_id, 2, "no reason")
+    other_turn = await transcript.record_turn(other_session_id, 0, "other learner")
+
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=0,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="near by reason",
+            # situation/resolution embedding deliberately points AWAY
+            # from the query -- only the reason embedding is close,
+            # proving this search ranks on reason, not on `embedding`.
+            resolution="r", embedding=_vec(x=-1.0),
+            reason="near reason", reason_embedding=_vec(x=1.0, y=0.05),
+            source_turn_id=near_turn,
+        )
+    )
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=1,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="far by reason",
+            resolution="r", embedding=_vec(x=1.0),
+            reason="far reason", reason_embedding=_vec(x=0.2, y=1.0),
+            source_turn_id=far_turn,
+        )
+    )
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=learner_id, session_id=session_id, turn_index=2,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="no reason at all",
+            # embedding itself is a PERFECT match for the query, but
+            # with no reason recorded this must never appear.
+            resolution="r", embedding=_vec(x=1.0), source_turn_id=no_reason_turn,
+        )
+    )
+    await learner_fact_store.add(
+        LearnerFact(
+            learner_id=other_learner_id, session_id=other_session_id, turn_index=0,
+            fact_type=LearnerFactType.DIRECT_ANSWER, situation="belongs to someone else",
+            resolution="r", embedding=_vec(x=1.0),
+            reason="someone else's reason", reason_embedding=_vec(x=1.0),
+            source_turn_id=other_turn,
+        )
+    )
+
+    results = await learner_fact_store.search_similar_by_reason(learner_id, _vec(x=1.0), limit=5)
+    assert [f.situation for f, _sim in results] == ["near by reason", "far by reason"]
+    assert all(f.learner_id == learner_id for f, _sim in results)
+    assert results[0][1] > results[1][1]
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_thinking_style_create_and_confirm(thinking_style_store, learner_id):
     session_a, session_b = uuid4(), uuid4()
 

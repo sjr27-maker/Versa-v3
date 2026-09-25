@@ -23,10 +23,15 @@ class FakeTransport implements ChatTransport {
   Future<void> drop() => _controller.close();
 
   @override
-  void sendMessage(String text) => sent.add({'type': 'message', 'text': text});
+  void sendMessage(String text, {bool stage = false}) =>
+      sent.add({'type': 'message', 'text': text, if (stage) 'stage': 'true'});
 
   @override
-  void selectOption(String optionId) => sent.add({'type': 'select_option', 'option_id': optionId});
+  void selectOption(String optionId, {bool stage = false}) =>
+      sent.add({'type': 'select_option', 'option_id': optionId, if (stage) 'stage': 'true'});
+
+  @override
+  void regenerate(int requestId) => sent.add({'type': 'regenerate', 'request_id': '$requestId'});
 
   @override
   Future<void> close() async {
@@ -76,6 +81,18 @@ class FakeBackend {
   /// sessionId -> the raw HistoryTurn-shaped rows `GET .../history` returns.
   /// A test sets this directly; unset -> `[]` (a chat with nothing to replay).
   final Map<String, List<Map<String, dynamic>>> historyBySession = {};
+
+  /// learnerId -> the raw ThinkingStyleOut-shaped body `GET .../thinking-style`
+  /// returns. A test sets this directly; unset -> everything empty.
+  final Map<String, Map<String, dynamic>> thinkingStyleFor = {};
+
+  /// sessionId -> its knobs (unset = defaults); `patchedKnobs` logs every PATCH body.
+  final Map<String, Map<String, int>> knobsBySession = {};
+  final List<Map<String, dynamic>> patchedKnobs = [];
+  bool failKnobPatches = false;
+
+  Map<String, int> _knobs(String id) =>
+      knobsBySession.putIfAbsent(id, () => {'answer_length': 50, 'depth': 50});
 
   /// `upsertLearner`'s deterministic id for a given label — lets a test seed
   /// a chat for a learner before that learner has actually signed in.
@@ -144,9 +161,45 @@ class FakeBackend {
         ..sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
       return _json([for (final s in rows) s.toJson()]);
     }
+    // GET|PATCH /api/sessions/{id}/knobs
+    if (segments.length == 4 && segments[0] == 'api' && segments[1] == 'sessions' && segments[3] == 'knobs') {
+      final knobs = _knobs(segments[2]);
+      if (request.method == 'PATCH') {
+        if (failKnobPatches) return http.Response('boom', 500);
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        patchedKnobs.add(body);
+        for (final e in body.entries) {
+          knobs[e.key] = (e.value as num).toInt();
+        }
+      }
+      return _json(knobs);
+    }
     // GET /api/sessions/{id}/history
     if (segments.length == 4 && segments[0] == 'api' && segments[1] == 'sessions' && segments[3] == 'history') {
       return _json(historyBySession[segments[2]] ?? const []);
+    }
+    // POST /api/sessions/{id}/end
+    if (segments.length == 4 && segments[0] == 'api' && segments[1] == 'sessions' && segments[3] == 'end') {
+      return _json({'status': 'too_short'});
+    }
+    // GET /api/learners/{id}/sessions/all
+    if (segments.length == 5 &&
+        segments[0] == 'api' &&
+        segments[1] == 'learners' &&
+        segments[3] == 'sessions' &&
+        segments[4] == 'all') {
+      final learnerId = segments[2];
+      final rows = _sessions.where((s) => s.learnerId == learnerId).toList()
+        ..sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+      return _json([for (final s in rows) s.toJson()]);
+    }
+    // GET /api/learners/{id}/thinking-style
+    if (segments.length == 4 &&
+        segments[0] == 'api' &&
+        segments[1] == 'learners' &&
+        segments[3] == 'thinking-style') {
+      return _json(thinkingStyleFor[segments[2]] ??
+          {'promotion_threshold': 5, 'confirmed': [], 'emerging': [], 'retired': [], 'claims': []});
     }
     return http.Response('not found', 404);
   });

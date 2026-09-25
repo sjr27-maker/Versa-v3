@@ -18,6 +18,7 @@ class VersaApi {
 
   final String baseUrl;
   final http.Client _http;
+  http.Client get httpClient => _http;
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
@@ -45,10 +46,35 @@ class VersaApi {
     final r = await _http
         .post(_uri('/api/sessions'),
             headers: {'content-type': 'application/json'},
-            body: jsonEncode({'learner_id': learnerId, 'mode': 'sandbox'}))
+            body: jsonEncode({
+              'learner_id': learnerId,
+              'mode': 'sandbox',
+            }))
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not start a chat'));
     return (jsonDecode(r.body) as Map<String, dynamic>)['session_id'] as String;
+  }
+
+  Future<SessionKnobs> getKnobs(String sessionId) async {
+    final r = await _http
+        .get(_uri('/api/sessions/$sessionId/knobs'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load the chat controls'));
+    return SessionKnobs.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// Change the length and/or depth level (0-100).
+  Future<SessionKnobs> patchKnobs(String sessionId, {int? answerLength, int? depth}) async {
+    final r = await _http
+        .patch(_uri('/api/sessions/$sessionId/knobs'),
+            headers: {'content-type': 'application/json'},
+            body: jsonEncode({
+              'answer_length': ?answerLength,
+              'depth': ?depth,
+            }))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not change the chat controls'));
+    return SessionKnobs.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
   /// This learner's chats within one app mode, newest-active first — the
@@ -72,6 +98,131 @@ class VersaApi {
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this chat'));
     return parseSessionHistory(jsonDecode(r.body) as List);
+  }
+
+  /// Every mode's chats together, newest-active first — the History page.
+  Future<List<ChatSummary>> listAllSessions(String learnerId) async {
+    final r = await _http
+        .get(_uri('/api/learners/$learnerId/sessions/all'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load history'));
+    return [
+      for (final row in jsonDecode(r.body) as List)
+        ChatSummary.fromJson(row as Map<String, dynamic>),
+    ];
+  }
+
+  /// Best-effort: consolidation is a background nicety, never worth
+  /// surfacing an error for.
+  Future<void> endSession(String sessionId) async {
+    try {
+      await _http.post(_uri('/api/sessions/$sessionId/end')).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
+  Future<ThinkingStyleOverview> getThinkingStyle(String learnerId, {bool includeArchived = false}) async {
+    final r = await _http
+        .get(_uri('/api/learners/$learnerId/thinking-style')
+            .replace(queryParameters: {'include_archived': '$includeArchived'}))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load thinking style'));
+    return ThinkingStyleOverview.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ClaimDetail> getClaim(String claimId) async {
+    final r = await _http.get(_uri('/api/claims/$claimId')).timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this claim'));
+    return ClaimDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ThinkingStyleDetail> getThinkingStyleCandidate(String id) async {
+    final r = await _http
+        .get(_uri('/api/thinking-style/candidates/$id'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this pattern'));
+    return ThinkingStyleDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ClaimDetail> reviewClaim(String claimId, String action, {String? revisedStatement}) async {
+    final r = await _http
+        .post(_uri('/api/claims/$claimId/review'),
+            headers: {'content-type': 'application/json'},
+            body: jsonEncode({'action': action, 'revised_statement': ?revisedStatement}))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not save that change'));
+    return ClaimDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ThinkingStyleDetail> reviewThinkingStyle(String id, String action, {String? revisedStatement}) async {
+    final r = await _http
+        .post(_uri('/api/thinking-style/candidates/$id/review'),
+            headers: {'content-type': 'application/json'},
+            body: jsonEncode({'action': action, 'revised_statement': ?revisedStatement}))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not save that change'));
+    return ThinkingStyleDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ClaimDetail> undoClaimReview(String claimId, String reviewId) async {
+    final r = await _http
+        .post(_uri('/api/claims/$claimId/reviews/$reviewId/undo'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not undo that'));
+    return ClaimDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<ThinkingStyleDetail> undoThinkingStyleReview(String id, String reviewId) async {
+    final r = await _http
+        .post(_uri('/api/thinking-style/candidates/$id/reviews/$reviewId/undo'))
+        .timeout(const Duration(seconds: 15));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not undo that'));
+    return ThinkingStyleDetail.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<String> whyClaim(String claimId) async {
+    final r = await _http.get(_uri('/api/claims/$claimId/why')).timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not explain this'));
+    return (jsonDecode(r.body) as Map<String, dynamic>)['explanation'] as String;
+  }
+
+  Future<String> whyThinkingStyle(String id) async {
+    final r = await _http
+        .get(_uri('/api/thinking-style/candidates/$id/why'))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not explain this'));
+    return (jsonDecode(r.body) as Map<String, dynamic>)['explanation'] as String;
+  }
+
+  Future<List<QnAEntry>> listClaimQna(String claimId) async {
+    final r = await _http.get(_uri('/api/claims/$claimId/qna')).timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this conversation'));
+    return [for (final row in jsonDecode(r.body) as List) QnAEntry.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<List<QnAEntry>> listThinkingStyleQna(String id) async {
+    final r = await _http
+        .get(_uri('/api/thinking-style/candidates/$id/qna'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load this conversation'));
+    return [for (final row in jsonDecode(r.body) as List) QnAEntry.fromJson(row as Map<String, dynamic>)];
+  }
+
+  Future<QnAEntry> askClaim(String claimId, String question) async {
+    final r = await _http
+        .post(_uri('/api/claims/$claimId/qna'),
+            headers: {'content-type': 'application/json'}, body: jsonEncode({'question': question}))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not ask that'));
+    return QnAEntry.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  Future<QnAEntry> askThinkingStyle(String id, String question) async {
+    final r = await _http
+        .post(_uri('/api/thinking-style/candidates/$id/qna'),
+            headers: {'content-type': 'application/json'}, body: jsonEncode({'question': question}))
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not ask that'));
+    return QnAEntry.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
   /// `ws://…/api/sessions/{id}/chat` (or `wss://` behind https).

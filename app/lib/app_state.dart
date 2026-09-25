@@ -15,6 +15,7 @@ class AppState extends ChangeNotifier {
 
   static const _kLabel = 'learner_label';
   static const _kTiming = 'show_timing';
+  static const _kStagePanel = 'show_stage_panel';
 
   Learner? learner;
   bool loaded = false;
@@ -23,9 +24,19 @@ class AppState extends ChangeNotifier {
   /// On by default so the speed can be judged while testing by hand.
   bool showTiming = true;
 
+  /// The "Animations" knob (session_knobs, sandbox_screen.dart): whether the
+  /// stage panel (widgets/stage_panel.dart) is available at all, in any
+  /// mode. Off by default — the design is primarily for topic mode, not
+  /// built yet, and stays opt-in for Sandbox until there's something to
+  /// actually show there. A global app setting, not per-session, same tier
+  /// as showTiming: the animation itself doesn't exist yet, only the
+  /// layout it will live in, so there is nothing session-specific to store.
+  bool showStagePanel = false;
+
   Future<void> load() async {
     _prefs ??= await SharedPreferences.getInstance();
     showTiming = _prefs!.getBool(_kTiming) ?? true;
+    showStagePanel = _prefs!.getBool(_kStagePanel) ?? false;
     final label = _prefs!.getString(_kLabel);
     if (label != null && label.isNotEmpty) {
       try {
@@ -58,9 +69,18 @@ class AppState extends ChangeNotifier {
     _prefs?.setBool(_kTiming, value);
     notifyListeners();
   }
+
+  void setShowStagePanel(bool value) {
+    showStagePanel = value;
+    _prefs?.setBool(_kStagePanel, value);
+    notifyListeners();
+  }
 }
 
-typedef ChatFactory = ChatController Function(AppState app, {String? resumeSessionId});
+typedef ChatFactory = ChatController Function(
+  AppState app, {
+  String? resumeSessionId,
+});
 
 /// Where the person is in the app, and the one live Sandbox chat, which
 /// survives switching tabs (so browsing Settings doesn't lose the
@@ -95,6 +115,43 @@ class ShellState extends ChangeNotifier {
   final List<ChatSummary> sandboxHistory = [];
   bool sandboxHistoryLoading = false;
 
+  /// Minimized state for the two side panels a chat screen can show — the
+  /// chat-history rail and the stage panel (widgets/stage_panel.dart).
+  /// Separate from AppState.showStagePanel: that's whether the stage panel
+  /// exists at all (the "Animations" knob); this is just whether it's
+  /// currently taking up space in THIS view. Ephemeral (not persisted) —
+  /// unlike the knob, minimizing is a per-glance convenience, not a
+  /// setting worth remembering across restarts.
+  bool historyRailCollapsed = false;
+  bool stagePanelCollapsed = false;
+
+  /// The app's own main navigation rail (shell.dart) and, inside Sandbox,
+  /// the session-knobs rail — same ephemeral, un-persisted minimize
+  /// pattern as the two above, added so the stage panel can genuinely get
+  /// equal room with the chat instead of competing with app chrome.
+  bool navRailCollapsed = false;
+  bool knobsRailCollapsed = false;
+
+  void toggleHistoryRailCollapsed() {
+    historyRailCollapsed = !historyRailCollapsed;
+    notifyListeners();
+  }
+
+  void toggleStagePanelCollapsed() {
+    stagePanelCollapsed = !stagePanelCollapsed;
+    notifyListeners();
+  }
+
+  void toggleNavRailCollapsed() {
+    navRailCollapsed = !navRailCollapsed;
+    notifyListeners();
+  }
+
+  void toggleKnobsRailCollapsed() {
+    knobsRailCollapsed = !knobsRailCollapsed;
+    notifyListeners();
+  }
+
   void goTab(int index) {
     tab = index;
     notifyListeners();
@@ -103,6 +160,7 @@ class ShellState extends ChangeNotifier {
   void openSandbox() {
     tab = tabModes;
     inSandbox = true;
+    inTopics = false;
     if (sandbox == null) {
       sandbox = _chatFactory(app)..start();
       _wireSandbox(sandbox!);
@@ -119,9 +177,16 @@ class ShellState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Reopen a past Sandbox chat picked from the sidebar.
+  /// Reopen a past Sandbox chat picked from the sidebar, or from the
+  /// History page (which isn't already showing Sandbox, unlike the
+  /// sidebar's own callers) -- so this always navigates there too.
   void openSandboxChat(ChatSummary chat) {
-    if (sandbox?.sessionId == chat.sessionId) return; // already the open one
+    tab = tabModes;
+    inSandbox = true;
+    if (sandbox?.sessionId == chat.sessionId) {
+      notifyListeners();
+      return; // already the open one
+    }
     sandbox?.dispose();
     sandbox = _chatFactory(app, resumeSessionId: chat.sessionId)..start();
     _wireSandbox(sandbox!);
@@ -163,13 +228,56 @@ class ShellState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ------------------------------------------------------- Learn a topic
+
+  /// The Learn-a-topic screens are showing in the Modes tab (their own
+  /// nested navigation: topics home -> explorer / topic -> path / lesson).
+  bool inTopics = false;
+
+  /// A lesson asked for from outside the topic screens (a History row);
+  /// the topic screens open it and clear it via [takePendingLesson].
+  String? pendingLessonId;
+
+  void openTopics() {
+    tab = tabModes;
+    inSandbox = false;
+    inTopics = true;
+    notifyListeners();
+  }
+
+  void closeTopics() {
+    inTopics = false;
+    notifyListeners();
+  }
+
+  void openLesson(String lessonId) {
+    pendingLessonId = lessonId;
+    openTopics();
+  }
+
+  String? takePendingLesson() {
+    final id = pendingLessonId;
+    pendingLessonId = null;
+    return id;
+  }
+
+  /// A chat controller built the same way the Sandbox one is (so tests'
+  /// scripted connections apply to lesson chats too). The caller owns it.
+  ChatController makeChat({String? resumeSessionId}) =>
+      _chatFactory(app, resumeSessionId: resumeSessionId);
+
   /// Forget the live chat (e.g. after switching learner).
   void reset() {
     sandbox?.dispose();
     sandbox = null;
     inSandbox = false;
+    inTopics = false;
+    pendingLessonId = null;
     tab = tabHome;
     sandboxHistory.clear();
+    historyRailCollapsed = false;
+    stagePanelCollapsed = false;
+    knobsRailCollapsed = false;
     notifyListeners();
   }
 

@@ -13,12 +13,19 @@ class MessageView extends StatelessWidget {
     required this.showTiming,
     required this.canPickOption,
     required this.onPickOption,
+    this.onUndoClaimUpdate,
+    this.onViewClaimUpdate,
   });
 
   final ChatMessage message;
   final bool showTiming;
   final bool canPickOption;
   final void Function(ChatOption option) onPickOption;
+
+  /// The sandbox-chat claim-update flow's inline note actions -- null (no
+  /// note shown) unless `message.claimUpdate` is set.
+  final void Function(ClaimUpdate update)? onUndoClaimUpdate;
+  final void Function(ClaimUpdate update)? onViewClaimUpdate;
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +76,12 @@ class MessageView extends StatelessWidget {
               key: ValueKey('msg-${message.id}'),
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (message.recalled) ...[
+                  Text('Oh wait, I remember what you meant.',
+                      key: const ValueKey('recalled'),
+                      style: sans(12.5, color: Paper.muted).copyWith(fontStyle: FontStyle.italic)),
+                  const SizedBox(height: 6),
+                ],
                 if (message.pending)
                   const Padding(padding: EdgeInsets.only(top: 4), child: TypingDots())
                 else if (message.text.isNotEmpty)
@@ -84,6 +97,21 @@ class MessageView extends StatelessWidget {
                               style: sans(14, color: Paper.danger, height: 1.5)),
                         )
                       : SelectableText(message.text, style: sans(14.5, height: 1.65)),
+                if (message.rewriting) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    key: const ValueKey('rewriting'),
+                    children: [
+                      const SizedBox(
+                        width: 10,
+                        height: 10,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Paper.faint),
+                      ),
+                      const SizedBox(width: 6),
+                      Text('rewriting…', style: mono(11)),
+                    ],
+                  ),
+                ],
                 if (message.hasOptions) ...[
                   const SizedBox(height: 12),
                   Wrap(
@@ -105,6 +133,14 @@ class MessageView extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(_timingLabel(message), key: const ValueKey('timing'), style: mono(11)),
                 ],
+                if (message.claimUpdate != null) ...[
+                  const SizedBox(height: 8),
+                  _ClaimUpdateNote(
+                    update: message.claimUpdate!,
+                    onUndo: onUndoClaimUpdate,
+                    onView: onViewClaimUpdate,
+                  ),
+                ],
               ],
             ),
           ),
@@ -120,6 +156,45 @@ class MessageView extends StatelessWidget {
     final seen = m.hasOptions ? 'options shown' : 'first words';
     final done = m.hasOptions ? '' : ' · complete ${_seconds(t.totalMs)}';
     return '$seen ${_seconds(t.firstOutputMs)}$done';
+  }
+}
+
+class _ClaimUpdateNote extends StatelessWidget {
+  const _ClaimUpdateNote({required this.update, this.onUndo, this.onView});
+  final ClaimUpdate update;
+  final void Function(ClaimUpdate update)? onUndo;
+  final void Function(ClaimUpdate update)? onView;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('claim-update-note'),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Paper.accentSoft,
+        border: Border.all(color: Paper.accentLine),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.psychology_alt_outlined, size: 14, color: Paper.accentDark),
+          const SizedBox(width: 6),
+          Expanded(child: Text(update.noteText, style: sans(11.5, color: Paper.accentDark))),
+          if (onView != null)
+            TextButton(
+              onPressed: () => onView!(update),
+              style: TextButton.styleFrom(minimumSize: Size.zero, padding: const EdgeInsets.symmetric(horizontal: 6)),
+              child: const Text('View', style: TextStyle(fontSize: 11.5)),
+            ),
+          if (onUndo != null && update.reviewId != null)
+            TextButton(
+              onPressed: () => onUndo!(update),
+              style: TextButton.styleFrom(minimumSize: Size.zero, padding: const EdgeInsets.symmetric(horizontal: 6)),
+              child: const Text('Undo', style: TextStyle(fontSize: 11.5)),
+            ),
+        ],
+      ),
+    );
   }
 }
 

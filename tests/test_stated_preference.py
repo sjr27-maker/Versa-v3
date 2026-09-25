@@ -223,6 +223,62 @@ async def test_a_later_turn_gets_the_structural_requirement(
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_an_ambiguous_later_turn_gets_the_structural_requirement_in_options_too(
+    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
+    interaction_store, turn_outcome_store, interaction_option_store,
+    interaction_abstract_store, prediction_store, stated_preference_store,
+    embedding_client, diagnostics_store,
+):
+    """IDEAS.md "richer, context-aware options", step 1: the same
+    structural requirement FinalAnswer gets must also reach
+    DisambiguationOptions when the turn ends in options, not just when
+    it ends in a direct answer -- proven end to end through the real
+    loop, not just at the node level (see test_disambiguate_nodes.py
+    for that)."""
+    llm = StubLLMClient(
+        canned={
+            "ASSESS:BRANCH": _NOT_AMBIGUOUS,
+            "FINAL:ANSWER": "an answer",
+            "CLASSIFY:STATED_PREFERENCE": _HAS_PREFERENCE,
+            "DISAMBIGUATE:OPTIONS": json.dumps(
+                {
+                    "kind": "subject",
+                    "axis": None,
+                    "options": [],
+                }
+            ),
+        }
+    )
+    session_id = await transcript.create_session(learner_id)
+    loop = _make_loop(
+        transcript, node_calls, disambiguation_store, interaction_store,
+        turn_outcome_store, interaction_option_store, interaction_abstract_store,
+        prediction_store, stated_preference_store, embedding_client, clean_pool, llm=llm,
+        diagnostics_store=diagnostics_store,
+    )
+    await loop.handle_turn(session_id, 0, "I always want the concrete case before the abstract rule.")
+    await loop.wait_for_background_tasks()
+
+    def _ambiguous(_prompt: str) -> str:
+        return json.dumps(
+            {
+                "needs_branches": True,
+                "branches": [
+                    {"statement": "wants the derivative rule explained"},
+                    {"statement": "wants a worked numeric example instead"},
+                ],
+            }
+        )
+
+    llm.canned["ASSESS:BRANCH"] = _ambiguous
+    await loop.handle_turn(session_id, 1, "what about the other one?")
+
+    call1 = await node_calls.get_call_for_turn(session_id, 1, "DisambiguationOptions")
+    req = call1.input_json["structural_requirement"]
+    assert "Open with a concrete worked example" in req
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_no_preference_leaves_the_requirement_empty(
     transcript, node_calls, clean_pool, learner_id, disambiguation_store,
     interaction_store, turn_outcome_store, interaction_option_store,

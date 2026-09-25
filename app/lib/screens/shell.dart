@@ -3,12 +3,14 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import '../widgets/collapsed_rail.dart';
 import 'history_screen.dart';
 import 'home_screen.dart';
 import 'modes_screen.dart';
 import 'sandbox_screen.dart';
 import 'settings_screen.dart';
 import 'thinking_style_screen.dart';
+import '../topic/topics_root.dart';
 
 class _Destination {
   const _Destination(this.label, this.icon, this.selectedIcon);
@@ -40,7 +42,9 @@ class Shell extends StatelessWidget {
       index: shell.tab,
       children: [
         const HomeScreen(),
-        shell.inSandbox ? const SandboxScreen() : const ModesScreen(),
+        shell.inSandbox
+            ? const SandboxScreen()
+            : (shell.inTopics ? const TopicsRoot() : const ModesScreen()),
         const HistoryScreen(),
         const ThinkingStyleScreen(),
         const SettingsScreen(),
@@ -52,7 +56,17 @@ class Shell extends StatelessWidget {
           backgroundColor: Paper.page,
           body: Row(
             children: [
-              _Rail(selected: shell.tab, onSelect: shell.goTab),
+              shell.navRailCollapsed
+                  ? CollapsedRailStrip(
+                      icon: Icons.menu_rounded,
+                      tooltip: 'Show menu',
+                      onExpand: shell.toggleNavRailCollapsed,
+                    )
+                  : _Rail(
+                      selected: shell.tab,
+                      onSelect: shell.goTab,
+                      onCollapse: shell.toggleNavRailCollapsed,
+                    ),
               Expanded(
                 child: Container(
                   decoration: const BoxDecoration(
@@ -90,9 +104,10 @@ class Shell extends StatelessWidget {
 }
 
 class _Rail extends StatelessWidget {
-  const _Rail({required this.selected, required this.onSelect});
+  const _Rail({required this.selected, required this.onSelect, required this.onCollapse});
   final int selected;
   final ValueChanged<int> onSelect;
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -105,7 +120,18 @@ class _Rail extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(left: 10, bottom: 24),
-              child: Text('Versa', style: serif(26)),
+              child: Row(
+                children: [
+                  Expanded(child: Text('Versa', style: serif(26))),
+                  IconButton(
+                    key: const ValueKey('nav-rail-collapse'),
+                    tooltip: 'Minimize menu',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: onCollapse,
+                    icon: const Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
+                  ),
+                ],
+              ),
             ),
             for (var i = 0; i < _destinations.length; i++)
               _RailItem(

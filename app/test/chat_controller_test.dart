@@ -277,8 +277,9 @@ void main() {
       expect(question.optionsOpen, isFalse);
       // even the chosen one can no longer be re-clicked (already resolved)
       expect(chat.canSend, isTrue);
-      expect(chat.messages.map((m) => m.role), [Role.tutor, Role.tutor],
-          reason: 'no echoed user bubble for the click-resolution turn');
+      expect(chat.messages.map((m) => m.role), [Role.user, Role.tutor, Role.tutor],
+          reason: 'turn 0\'s real question shows normally; only the click-resolution '
+              '(turn 1, student_text: null) has no echoed user bubble');
     });
 
     test('a typed-past turn (all superseded, none selected) resumes with no button clickable',
@@ -381,6 +382,144 @@ void main() {
       expect(question.chosenOptionId, 'o1');
       chat.send('a brand new question');
       expect(question.chosenOptionId, 'o1', reason: 'a resolved pick is never rewritten');
+    });
+  });
+
+  group('session knobs', () {
+    const rest = Duration(milliseconds: 20);
+
+    Future<(ChatController, FakeTransport, FakeBackend)> startedWithAnswer() async {
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      final chat = ChatController(
+        api: backend.api,
+        learner: _learner,
+        transportFactory: (_) async => transport,
+        knobDebounce: rest,
+      );
+      await chat.start();
+      chat.send('what is a derivative?');
+      transport.emit(const TurnStart(0));
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'the original answer', firstOutputMs: 1, totalMs: 2));
+      await _tick();
+      return (chat, transport, backend);
+    }
+
+    Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+
+    test('a new chat starts on the defaults', () async {
+      final (chat, _, _) = await _started();
+      expect(chat.knobs, const SessionKnobs());
+    });
+
+    test('the slider moves at once; one save happens after it rests', () async {
+      final (chat, transport, backend) = await startedWithAnswer();
+      chat.setKnobs(answerLength: 60);
+      chat.setKnobs(answerLength: 70);
+      chat.setKnobs(depth: 20);
+      expect(chat.knobs, const SessionKnobs(answerLength: 70, depth: 20));
+      expect(backend.patchedKnobs, isEmpty, reason: 'nothing is saved while it is still moving');
+
+      await settle();
+      expect(backend.patchedKnobs, [
+        {'answer_length': 70, 'depth': 20},
+      ]);
+      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '1'});
+    });
+
+    test('the rewrite streams in place of the old answer', () async {
+      final (chat, transport, _) = await startedWithAnswer();
+      final answer = chat.messages.last;
+      chat.setKnobs(depth: 90);
+      await settle();
+      expect(answer.rewriting, isTrue);
+      expect(chat.canSend, isFalse, reason: 'one thing at a time while it rewrites');
+
+      transport.emit(const RegenStart(1));
+      await _tick();
+      expect(answer.text, 'the original answer', reason: 'old text stays until new words arrive');
+      transport.emit(const RegenDelta(1, 'A much '));
+      transport.emit(const RegenDelta(1, 'deeper'));
+      await _tick();
+      expect(answer.text, 'A much deeper');
+
+      transport.emit(const RegenDone(1, 'A much deeper answer.'));
+      await _tick();
+      expect(answer.text, 'A much deeper answer.');
+      expect(answer.rewriting, isFalse);
+      expect(chat.canSend, isTrue);
+      expect(chat.messages.length, 2, reason: 'rewritten in place, not added');
+    });
+
+    test('a newer move supersedes a rewrite in flight', () async {
+      final (chat, transport, _) = await startedWithAnswer();
+      final answer = chat.messages.last;
+      chat.setKnobs(answerLength: 10);
+      await settle();
+      transport.emit(const RegenDelta(1, 'short '));
+      await _tick();
+
+      chat.setKnobs(answerLength: 95);
+      await settle();
+      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '2'});
+      transport.emit(const RegenDelta(1, 'stale piece'));
+      transport.emit(const RegenDone(1, 'stale answer'));
+      transport.emit(const RegenDelta(2, 'A long one'));
+      await _tick();
+      expect(answer.text, 'A long one');
+      transport.emit(const RegenDone(2, 'A long one, in full.'));
+      await _tick();
+      expect(answer.text, 'A long one, in full.');
+      expect(answer.rewriting, isFalse);
+    });
+
+    test('a rewrite that ends without an answer puts the old text back', () async {
+      final (chat, transport, _) = await startedWithAnswer();
+      final answer = chat.messages.last;
+      chat.setKnobs(depth: 5);
+      await settle();
+      transport.emit(const RegenDelta(1, 'half a'));
+      transport.emit(const RegenEnded(1));
+      await _tick();
+      expect(answer.text, 'the original answer');
+      expect(answer.rewriting, isFalse);
+    });
+
+    test('with options on screen the change is saved but nothing is rewritten', () async {
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      final chat = ChatController(
+        api: backend.api,
+        learner: _learner,
+        transportFactory: (_) async => transport,
+        knobDebounce: rest,
+      );
+      await chat.start();
+      chat.send('help with derivatives');
+      transport.emit(const OptionsEvent('Which of these did you mean?', [ChatOption(id: 'o1', text: 'rules')]));
+      transport.emit(const Done(turnIndex: 0, kind: 'options', text: 'Which of these did you mean?', firstOutputMs: 1, totalMs: 2));
+      await _tick();
+
+      chat.setKnobs(answerLength: 20);
+      await settle();
+      expect(backend.patchedKnobs, [
+        {'answer_length': 20, 'depth': 50},
+      ]);
+      expect(transport.sent.where((m) => m['type'] == 'regenerate'), isEmpty);
+    });
+
+    test('resuming a chat loads the levels it was left with', () async {
+      final backend = FakeBackend();
+      final id = backend.seedSession(learnerId: 'l1');
+      backend.knobsBySession[id] = {'answer_length': 80, 'depth': 15};
+      final chat = ChatController(
+        api: backend.api,
+        learner: _learner,
+        resumeSessionId: id,
+        transportFactory: (_) async => FakeTransport(),
+      );
+      await chat.start();
+      expect(chat.knobs, const SessionKnobs(answerLength: 80, depth: 15));
     });
   });
 }

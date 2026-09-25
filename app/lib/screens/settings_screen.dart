@@ -150,6 +150,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: app.setShowTiming,
                   ),
                 ),
+                Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    key: const ValueKey('stage-panel-switch'),
+                    contentPadding: EdgeInsets.zero,
+                    activeThumbColor: Colors.white,
+                    activeTrackColor: Paper.accent,
+                    title: Text('Stage panel', style: sans(14)),
+                    subtitle: Text(
+                        'Reserves space for an animation reactive to the chat (not built yet) '
+                        'in any mode — same as the Animations knob in Sandbox.',
+                        style: sans(12.5, color: Paper.muted)),
+                    value: app.showStagePanel,
+                    onChanged: app.setShowStagePanel,
+                  ),
+                ),
               ]),
               card([
                 Row(children: [

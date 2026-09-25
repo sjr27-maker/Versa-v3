@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -119,27 +120,37 @@ void main() {
       expect(find.byKey(const ValueKey('nav-Home')), findsNothing);
     });
 
-    testWidgets('Modes: Sandbox is live, the other three say they are coming', (tester) async {
+    testWidgets('Modes: Sandbox and Learn a topic are live, the other two say they are coming', (tester) async {
       _size(tester, 1400, 900);
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
       await tester.tap(find.byKey(const ValueKey('nav-Modes')));
       await tester.pumpAndSettle();
 
-      expect(find.text('LIVE'), findsOneWidget);
-      expect(find.text('COMING SOON'), findsNWidgets(3));
+      expect(find.text('LIVE'), findsNWidgets(2));
+      expect(find.text('COMING SOON'), findsNWidgets(2));
       await tester.tap(find.byKey(const ValueKey('mode-exam')));
       await tester.pump();
       expect(find.textContaining("isn't built yet"), findsOneWidget);
     });
 
-    testWidgets('History and Thinking style are labelled placeholders', (tester) async {
+    testWidgets('History shows past chats and an empty state when there are none', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final learnerId = backend.learnerIdFor('Asha');
+      backend.seedSession(learnerId: learnerId, preview: 'what is a derivative?', turnCount: 2);
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byKey(const ValueKey('nav-History')));
+      await tester.pumpAndSettle();
+      expect(find.text('what is a derivative?'), findsOneWidget);
+    });
+
+    testWidgets('Thinking style shows an honest empty state with no data yet', (tester) async {
       _size(tester, 1400, 900);
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
-      for (final label in ['History', 'Thinking style']) {
-        await tester.tap(find.byKey(ValueKey('nav-$label')));
-        await tester.pumpAndSettle();
-        expect(find.text('COMING SOON'), findsWidgets, reason: label);
-      }
+      await tester.tap(find.byKey(const ValueKey('nav-Thinking style')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Nothing confirmed yet'), findsOneWidget);
+      expect(find.textContaining('5 independent sessions'), findsOneWidget);
     });
 
     testWidgets('Home can start the Sandbox chat', (tester) async {
@@ -292,7 +303,7 @@ void main() {
           api: app.api,
           learner: app.learner!,
           resumeSessionId: resumeSessionId,
-          transportFactory: (_) async => transport,
+              transportFactory: (_) async => transport,
         ),
       ));
       await tester.pumpAndSettle();
@@ -467,6 +478,171 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('history-button')));
       await tester.pumpAndSettle();
       expect(find.text('an old one'), findsOneWidget);
+    });
+  });
+
+  group('the session knobs', () {
+    testWidgets('dragging a slider rewrites the latest answer in place', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'the original answer', firstOutputMs: 1, totalMs: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('the original answer'), findsOneWidget);
+      expect(find.byKey(const ValueKey('knob-length')), findsOneWidget);
+      expect(find.textContaining('Tone'), findsNothing);
+
+      await tester.drag(find.byKey(const ValueKey('knob-length')), const Offset(60, 0));
+      await tester.pump();
+      final shown = int.parse(
+          (tester.widget(find.byKey(const ValueKey("[<'knob-length'>]-value"))) as Text).data!);
+      expect(shown, greaterThan(50));
+      expect(backend.patchedKnobs, isEmpty, reason: 'saved only once the slider rests');
+
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      expect(backend.patchedKnobs.single['answer_length'], shown);
+      expect(transport.sent.last['type'], 'regenerate');
+      expect(find.byKey(const ValueKey('rewriting')), findsOneWidget);
+
+      final id = int.parse(transport.sent.last['request_id']!);
+      transport.emit(RegenDelta(id, 'A longer '));
+      await tester.pump();
+      expect(find.text('A longer '), findsOneWidget);
+      transport.emit(RegenDone(id, 'A longer answer, rewritten.'));
+      await tester.pumpAndSettle();
+      expect(find.text('A longer answer, rewritten.'), findsOneWidget);
+      expect(find.text('the original answer'), findsNothing);
+      expect(find.byKey(const ValueKey('rewriting')), findsNothing);
+    });
+
+    testWidgets('the mouse wheel over a slider nudges it', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      final depth = find.byKey(const ValueKey('knob-depth'));
+      Text value() => tester.widget(find.byKey(const ValueKey("[<'knob-depth'>]-value"))) as Text;
+      expect(value().data, '50');
+
+      final center = tester.getCenter(depth);
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(pointer.hover(center));
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 40)));
+      await tester.pump();
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, 40)));
+      await tester.pump();
+      expect(value().data, '60');
+      await tester.sendEventToBinding(pointer.scroll(const Offset(0, -40)));
+      await tester.pump();
+      expect(value().data, '55');
+
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      expect(backend.patchedKnobs, [
+        {'answer_length': 50, 'depth': 55},
+      ]);
+    });
+  });
+
+  group('the stage panel', () {
+    testWidgets('is off by default, even wide', (tester) async {
+      _size(tester, 1400, 900);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('stage-panel')), findsNothing);
+    });
+
+    testWidgets('the Animations knob shows it, wide', (tester) async {
+      _size(tester, 1400, 900);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('animations-knob')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('stage-panel')), findsOneWidget);
+    });
+
+    testWidgets('minimizing it leaves a strip that brings it back', (tester) async {
+      _size(tester, 1400, 900);
+      await _boot(tester,
+          backend: FakeBackend(),
+          prefs: {'learner_label': 'Asha', 'show_stage_panel': true});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('stage-panel-collapse')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsNothing);
+
+      await tester.tap(find.byTooltip('Show stage'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsOneWidget);
+    });
+
+    testWidgets('the chat-history rail can be minimized the same way', (tester) async {
+      _size(tester, 1400, 900);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('history-collapse')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsNothing);
+
+      await tester.tap(find.byTooltip('Show chats'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('chat-history-rail')), findsOneWidget);
+    });
+
+    testWidgets('on a phone, it only shows when enabled and toggles from the header',
+        (tester) async {
+      _size(tester, 400, 800);
+      await _boot(tester,
+          backend: FakeBackend(),
+          prefs: {'learner_label': 'Asha', 'show_stage_panel': true});
+      await tester.tap(find.byType(NavigationDestination).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('mode-sandbox')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('stage-toggle')), findsOneWidget);
+      expect(find.byKey(const ValueKey('stage-panel')), findsOneWidget,
+          reason: 'enabled and expanded by default');
+
+      await tester.tap(find.byKey(const ValueKey('stage-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('stage-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stage-panel')), findsOneWidget);
+    });
+
+    testWidgets('on a phone, no toggle icon at all when the knob is off', (tester) async {
+      _size(tester, 400, 800);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byType(NavigationDestination).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('mode-sandbox')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('stage-toggle')), findsNothing);
+      expect(find.byKey(const ValueKey('stage-panel')), findsNothing);
     });
   });
 }

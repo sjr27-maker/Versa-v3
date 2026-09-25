@@ -30,34 +30,42 @@ import logging
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 import asyncpg
 
+from versa import claims as _claims
+from versa import embeddings as _embeddings
+from versa import history_block as _history_block
+from versa import reference_bindings as _reference_bindings
+from versa import retrieval as _retrieval
 from versa.ablation import AblationConfig
+from versa.answer_versions import AnswerVersionStore, RegenerateAnswer
 from versa.audit import NodeCallStore, TranscriptStore
 from versa.baseline import MAX_CALLS_PER_TURN, BaselineTeach
-from versa import claims as _claims
-from versa.claims import ClaimConfidenceConfig, ClaimExtractor, ClaimStore, ExtractionConfig
+from versa.claims import (
+    ClaimConfidenceConfig,
+    ClaimExtractor,
+    ClaimStore,
+    ExtractionConfig,
+)
 from versa.diagnostics import TurnDiagnosticsStore
-from versa.domain_config import DomainConfig
 from versa.disambiguate import (
+    REASON_CONFIRM_NO_TEXT,
+    REASON_CONFIRM_YES_TEXT,
+    REASON_REJECTED_STATEMENT,
     AssessAndBranch,
     DisambiguationOptions,
     DisambiguationStore,
     FinalAnswer,
     build_typed_past_note,
+    render_reason_confirmation_message,
 )
-from versa import embeddings as _embeddings
-from versa import history_block as _history_block
-from versa import reference_bindings as _reference_bindings
-from versa import retrieval as _retrieval
+from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient
 from versa.history_block import HistoryBlockConfig
-from versa.reference_bindings import ReferenceBindingConfig
-from versa.retrieval import RetrievalContext
-from versa.streaming import DeltaSink, delta_sink
 from versa.interaction_nodes import (
     ABSTRACTOR_VERSION,
     CLASSIFIER_VERSION,
@@ -84,6 +92,7 @@ from versa.interactions import (
 from versa.llm import LLMClient, ModelTierClients
 from versa.memory import (
     ConfirmFactMatch,
+    ConfirmReasonRelevance,
     ConfirmThinkingStyleMatch,
     EmbedAndSearchFacts,
     LearnerFactStore,
@@ -96,6 +105,7 @@ from versa.models import (
     BranchStatus,
     DisambiguationAssessment,
     DisambiguationBranch,
+    DisambiguationTurnKind,
     ExtractedFact,
     FactMatchConfirmation,
     FactSearchResult,
@@ -108,12 +118,48 @@ from versa.models import (
     OptionStatus,
     Prediction,
     QuestionAuthor,
+    ReasonRelevance,
     StatedPreference,
     TurnDiagnostics,
     TurnOutcome,
 )
+from versa.reference_bindings import ReferenceBindingConfig
+from versa.retrieval import RetrievalContext
+from versa.reviews import (
+    MatchStatedPreferenceToClaim,
+    ReviewStore,
+    apply_stated_preference_to_claims,
+)
+from versa.session_knobs import render_knob_directive as _render_knob_directive
+from versa.streaming import DeltaSink, TurnEventSink, delta_sink, turn_events
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _MemoryOutcome:
+    """What `SessionLoop._memory_precheck` decided (see there)."""
+
+    found: bool = False
+    matched_fact_id: UUID | None = None
+    matched_via: str | None = None
+    # A reason the student should be asked to confirm (gates passed).
+    reason_text: str | None = None
+    # A confirmed past resolution to answer from.
+    memory_context: str | None = None
+
+
+async def _emit_turn_event(event: dict) -> None:
+    """Hand a mid-turn event (options shown early, options retracted, "I
+    remember") to whoever is running this turn -- see streaming.turn_events.
+    Best effort: no listener, or a failing one, never affects the turn."""
+    sink = turn_events.get()
+    if sink is None:
+        return
+    try:
+        await sink(event)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("turn event sink failed (%s); continuing the turn", exc)
 
 _TEACH_FAILURE_MESSAGE = (
     "the tutor failed to respond this turn — see Diagnostics for the "
@@ -137,6 +183,21 @@ _HISTORY_TURNS = 3
 _TAIL_STEPS: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "versa_turn_tail_steps", default=None
 )
+
+# This turn's Learn-a-topic lesson context (topics.LessonHooks.contexts_for):
+# (answer_context, assess_context), or None for any non-lesson session --
+# read by the AssessAndBranch and FinalAnswer call sites, which pass it only
+# when set, so every other session's node inputs stay exactly as they were.
+_LESSON_CONTEXT: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "versa_turn_lesson_context", default=None
+)
+
+
+def _lesson_kwargs(which: int) -> dict:
+    """`lesson_context=...` for a node call on a lesson turn (0 = FinalAnswer's
+    context, 1 = AssessAndBranch's), else nothing at all."""
+    contexts = _LESSON_CONTEXT.get()
+    return {"lesson_context": contexts[which]} if contexts else {}
 
 
 def _total_retry_count(tiers: ModelTierClients) -> int:
@@ -187,6 +248,10 @@ class SessionLoop:
         claim_store: ClaimStore | None = None,
         claim_extraction_config: ExtractionConfig | None = None,
         claim_confidence_config: ClaimConfidenceConfig | None = None,
+        review_store: ReviewStore | None = None,
+        on_claim_update: Callable[[UUID, dict], None] | None = None,
+        answer_version_store: AnswerVersionStore | None = None,
+        lesson_hooks=None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -221,6 +286,8 @@ class SessionLoop:
             tiers.fast, domain_config=self._domain_config
         )
         self.final_answer = FinalAnswer(tiers.best, domain_config=self._domain_config)
+        self.regenerate_answer = RegenerateAnswer(self.final_answer)
+        self._answer_versions = answer_version_store
         # The most recent AssessAndBranch-generating turn's id, if its
         # branches are still unresolved. None whenever the last turn was
         # a click resolution, a direct answer, or has already been
@@ -252,12 +319,14 @@ class SessionLoop:
                 embedding_client, learner_fact_store, self._memory_config
             )
             self.confirm_fact_match = ConfirmFactMatch(tiers.fast)
+            self.confirm_reason_relevance = ConfirmReasonRelevance(tiers.fast)
             self.write_learner_fact = WriteLearnerFact(
                 tiers.fast, embedding_client, learner_fact_store
             )
         else:
             self.embed_and_search_facts = None
             self.confirm_fact_match = None
+            self.confirm_reason_relevance = None
             self.write_learner_fact = None
         # Background-only (see consolidate_session) — needs the fact
         # store, the thinking-style store, and an embedding client.
@@ -329,6 +398,17 @@ class SessionLoop:
         self._claim_extraction_config = claim_extraction_config or ExtractionConfig()
         self._claim_confidence_config = claim_confidence_config or ClaimConfidenceConfig()
         self.claim_extractor = ClaimExtractor(tiers.fast)
+        # The sandbox-chat claim-update flow (IDEAS.md Thinking-style page):
+        # an explicit stated preference revises or creates a claim in the
+        # background, same off-critical-path discipline as every other
+        # classifier here. `on_claim_update` mirrors `on_node_start`'s own
+        # precedent ("a server can forward node-progress to a client; the
+        # CLI has nothing to forward to") for a different event.
+        self._review_store = review_store
+        self._on_claim_update = on_claim_update
+        # Learn-a-topic lesson chats (topics.LessonHooks); None disables it.
+        self._lesson_hooks = lesson_hooks
+        self.match_stated_preference_to_claim = MatchStatedPreferenceToClaim(tiers.fast)
         # Held separately (not read off claim_extractor, a private
         # detail of that class) for maybe_restate_claims's one fast-tier
         # call per qualifying claim -- see consolidate_session.
@@ -343,6 +423,10 @@ class SessionLoop:
         # latest turn (see `handle_turn(defer_tail=True)`); the next turn of
         # that session waits on it before starting.
         self._session_tails: dict[UUID, asyncio.Task] = {}
+
+    @property
+    def memory_config(self) -> MemoryConfig:
+        return self._memory_config
 
     def _fire_background(self, coro) -> None:
         task = asyncio.create_task(coro)
@@ -408,9 +492,15 @@ class SessionLoop:
         selected_option_id: UUID | None = None,
         *,
         on_delta: DeltaSink | None = None,
+        on_event: TurnEventSink | None = None,
         defer_tail: bool = False,
     ) -> str:
         """Run one turn and return the message to show.
+
+        `on_event` (streaming.py `turn_events`): mid-turn events a live
+        client can act on -- options shown before the turn is over, those
+        options retracted, the "I remember" beat. See
+        `_handle_disambiguation_turn`'s memory handling.
 
         `on_delta` (streaming.py): an async callback handed the answer text
         piece by piece as the model produces it, so a client can show the
@@ -441,8 +531,13 @@ class SessionLoop:
         sink_token = (
             delta_sink.set(self._guard_sink(on_delta)) if on_delta is not None else None
         )
+        event_token = turn_events.set(on_event) if on_event is not None else None
         steps: list | None = [] if defer_tail else None
         tail_token = _TAIL_STEPS.set(steps) if defer_tail else None
+        lesson_token = (
+            _LESSON_CONTEXT.set(await self._lesson_hooks.contexts_for(session_id))
+            if self._lesson_hooks is not None else None
+        )
         try:
             message = await self._handle_disambiguation_turn(
                 session_id, turn_index, turn_text, selected_option_id
@@ -450,10 +545,14 @@ class SessionLoop:
             if steps:
                 self._schedule_session_tail(session_id, steps)
         finally:
+            if lesson_token is not None:
+                _LESSON_CONTEXT.reset(lesson_token)
             if tail_token is not None:
                 _TAIL_STEPS.reset(tail_token)
             if sink_token is not None:
                 delta_sink.reset(sink_token)
+            if event_token is not None:
+                turn_events.reset(event_token)
             if embed_token is not None:
                 self._embedding_client.end_turn(embed_token)
         return message
@@ -477,6 +576,43 @@ class SessionLoop:
             for o in await self._disambiguation.list_options_for_turn(generation_id)
             if o.status is OptionStatus.OPEN
         ]
+
+    async def regenerate_last_answer(
+        self, session_id: UUID, *, on_delta: DeltaSink | None = None
+    ) -> tuple[int, str, int | None] | None:
+        """Rewrite the session's latest answer at the current knob levels.
+
+        Re-runs only FinalAnswer, with the exact inputs recorded for that
+        turn's original answer except the knob directive, through
+        `RegenerateAnswer` so it is its own node_calls row (invariant 2).
+        The original answer is untouched; the new text is appended to
+        `answer_versions`. Returns (turn_index, text, version), or None when
+        the latest turn has no answer to rewrite (e.g. it offered options).
+        """
+        await self._await_session_tail(session_id)
+        turns = await self._transcript.list_turns(session_id)
+        if not turns:
+            return None
+        turn_index = max(t.turn_index for t in turns)
+        original = await self._node_calls.get_call_for_turn(session_id, turn_index, "FinalAnswer")
+        if original is None or not isinstance(original.output_json, str):
+            return None
+
+        knobs = await self._transcript.get_knobs(session_id)
+        inputs = dict(original.input_json)
+        inputs["knob_directive"] = _render_knob_directive(knobs)
+
+        sink_token = delta_sink.set(self._guard_sink(on_delta)) if on_delta is not None else None
+        try:
+            text = await self._call_node(self.regenerate_answer, session_id, turn_index, **inputs)
+        finally:
+            if sink_token is not None:
+                delta_sink.reset(sink_token)
+
+        version = None
+        if self._answer_versions is not None:
+            version = await self._answer_versions.record(session_id, turn_index, text, knobs)
+        return turn_index, text, version
 
     @staticmethod
     def _guard_sink(sink: DeltaSink) -> DeltaSink:
@@ -720,6 +856,17 @@ class SessionLoop:
                     classifier_version=STATED_PREFERENCE_CLASSIFIER_VERSION,
                 )
             )
+            if (
+                result.has_preference
+                and result.label is not None
+                and result.stated_preference is not None
+                and self._claim_store is not None
+                and self._review_store is not None
+                and self._embedding_client is not None
+            ):
+                await self._apply_stated_preference_to_claims(
+                    interaction, session_id, turn_index, result.label, result.stated_preference,
+                )
         except Exception as exc:
             logger.warning(
                 "ClassifyStatedPreference background task failed for "
@@ -727,6 +874,40 @@ class SessionLoop:
                 interaction.id,
                 exc,
                 exc_info=True,
+            )
+
+    async def _apply_stated_preference_to_claims(
+        self, interaction: Interaction, session_id: UUID, turn_index: int, label, stated_preference: str,
+    ) -> None:
+        """The matching/judging step itself -- a SEPARATE try/except from
+        the stated-preference write above, so a failure here (an unmatched
+        claim mechanism, not the classifier itself) is logged independently
+        and never rolls back the StatedPreference row that already landed."""
+        async def run_match_node(candidates, statement):
+            return await self._call_node(
+                self.match_stated_preference_to_claim, session_id, turn_index,
+                candidates=candidates, stated_preference=statement,
+            )
+
+        try:
+            update = await apply_stated_preference_to_claims(
+                claim_store=self._claim_store,
+                review_store=self._review_store,
+                run_match_node=run_match_node,
+                embedding_client=self._embedding_client,
+                learner_id=interaction.learner_id,
+                session_id=session_id,
+                turn_index=turn_index,
+                interaction_id=interaction.id,
+                label=label,
+                stated_preference=stated_preference,
+            )
+            if update is not None and self._on_claim_update is not None:
+                self._on_claim_update(session_id, update)
+        except Exception as exc:
+            logger.warning(
+                "Sandbox-chat claim update failed for interaction %s: %s",
+                interaction.id, exc, exc_info=True,
             )
 
     async def _run_reference_binding_classification(
@@ -984,6 +1165,78 @@ class SessionLoop:
                 originating_question = await self._get_turn_text(
                     session_id, branch.turn_index
                 )
+
+                # IDEAS.md "ask for confirmation directly": a reason-
+                # confirmation click resolves completely differently
+                # from an ordinary branch-reading click -- the clicked
+                # branch's statement is never a reading of what the
+                # student meant, so it must never become branch_context.
+                disamb_turn = await self._disambiguation.get_turn(
+                    branch.disambiguation_turn_id
+                )
+                if (
+                    disamb_turn is not None
+                    and disamb_turn.kind is DisambiguationTurnKind.REASON_CONFIRMATION
+                ):
+                    # option.text, not branch.statement: these two
+                    # fixed, code-owned literals are the safe thing to
+                    # compare against (see REASON_CONFIRM_YES_TEXT's
+                    # own comment) -- branch.statement instead holds
+                    # the memory_context text to use on a "yes".
+                    confirmed = option.text == REASON_CONFIRM_YES_TEXT
+                    # declined_fact_ids_for_learner (the "don't re-offer
+                    # an already-declined reason" fix) reads
+                    # matched_fact_id off THIS turn's own diagnostics
+                    # row -- it must be threaded through here, not just
+                    # left on the original offering turn's row, or a
+                    # "no" is recorded with nothing to say no TO.
+                    offered_fact_id = None
+                    if self._diagnostics is not None:
+                        offer_diag = await self._diagnostics.get_for_turn(
+                            session_id, branch.turn_index
+                        )
+                        if offer_diag is not None:
+                            offered_fact_id = offer_diag.matched_fact_id
+                    message, teach_failed, history_source_ids, reference_binding_ids = (
+                        await self._finish_turn_with_fact(
+                            session_id, turn_index, turn_text, turn_id, learner_id,
+                            branch_context=None,
+                            memory_context=branch.statement if confirmed else None,
+                            recent_history=recent_history,
+                            fact_type=(
+                                LearnerFactType.REASON_CONFIRMED
+                                if confirmed
+                                else LearnerFactType.DIRECT_ANSWER
+                            ),
+                            branch_statements=None,
+                            node_call_counts=node_call_counts,
+                            warnings=warnings,
+                            question_author=QuestionAuthor.SYSTEM_OPTION,
+                            originating_question=originating_question,
+                        )
+                    )
+                    # Deliberately no _record_interaction/InteractionOption
+                    # here -- a reason confirmation has no kind/axis in
+                    # the existing subject/approach vocabulary, and
+                    # wiring it into the claims/interactions pipeline is
+                    # explicitly step 3 of IDEAS.md's "richer options"
+                    # entry, not started yet (its own circularity guard
+                    # isn't designed). turn_diagnostics.reason_confirmed_
+                    # by_student below is this turn's audit trail until
+                    # then.
+                    await self._tail(
+                        self._record_disambiguation_diagnostics,
+                        session_id, turn_index, node_call_counts, warnings,
+                        teach_failed, start, retry_count_start,
+                        duration_ms=self._tail_duration_ms(start),
+                        reason_confirmed_by_student=confirmed,
+                        matched_fact_id=offered_fact_id,
+                        memory_match_via="reason",
+                        history_source_ids=history_source_ids,
+                        reference_binding_ids=reference_binding_ids,
+                    )
+                    return message
+
                 message, teach_failed, history_source_ids, reference_binding_ids = (
                     await self._finish_turn_with_fact(
                         session_id, turn_index, turn_text, turn_id, learner_id,
@@ -1049,53 +1302,86 @@ class SessionLoop:
         # Semantic pre-check (memory.py steps 3-4): does a past fact for
         # THIS learner -- possibly from an earlier session -- already
         # resolve this exact message? Vector similarity alone never
-        # decides this; only a confirmed "yes" is allowed to skip
-        # AssessAndBranch entirely.
+        # decides this; only a confirmed "yes" is allowed to take over.
+        #
+        # IDEAS.md "show options first, remember second": the pre-check
+        # runs CONCURRENTLY with AssessAndBranch rather than before it, so
+        # an ambiguous message's options never wait on the embedding +
+        # search. What the memory outcome may then do depends on when it
+        # lands (see below): before the options exist, it takes over
+        # exactly as it used to; after they are already on screen, a
+        # confirmed match RETRACTS them ("oh wait, I remember...") and the
+        # answer streams in instead.
+        memory_task: asyncio.Task | None = None
+        if self._memory_enabled:
+            memory_task = asyncio.create_task(
+                self._memory_precheck(
+                    session_id, turn_index, learner_id, turn_text, node_call_counts, warnings
+                )
+            )
+            # Every normal path awaits it; if the turn fails before that, its
+            # error must not surface as "exception never retrieved".
+            memory_task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        outcome = _MemoryOutcome()
         memory_match_found = False
         memory_match_confirmed = False
         matched_fact_id: UUID | None = None
+        matched_via: str | None = None
         memory_context: str | None = None
-        if self._memory_enabled:
-            search_result = await self._call_node_or_warn(
-                self.embed_and_search_facts,
-                session_id,
-                turn_index,
-                "EmbedAndSearchFacts",
-                FactSearchResult(),
-                warnings,
-                learner_id=learner_id,
-                message=turn_text,
+
+        try:
+            thinking_style_hint = await self._build_thinking_style_hint(learner_id)
+            reference_binding_hint = await self._build_reference_binding_hint(learner_id, turn_text)
+        except BaseException:
+            if memory_task is not None:
+                memory_task.cancel()
+            raise
+        assessment = await self._call_node_or_warn(
+            self.assess_and_branch,
+            session_id,
+            turn_index,
+            "AssessAndBranch",
+            DisambiguationAssessment(needs_branches=False, branch_statements=[]),
+            warnings,
+            message=turn_text,
+            recent_history=recent_history,
+            typed_past_note=typed_past_note,
+            thinking_style_hint=thinking_style_hint,
+            reference_binding_hint=reference_binding_hint,
+            **_lesson_kwargs(1),
+        )
+        node_call_counts["AssessAndBranch"] = self.assess_and_branch.last_call_count
+
+        # An unambiguous message always waits for memory (a confirmed fact
+        # changes what the answer is built from, and memory is the fast
+        # half anyway). An ambiguous one only uses memory if it is already
+        # back; otherwise the options go ahead and memory gets its say
+        # after they are on screen (below, after create_options).
+        if memory_task is not None and (not assessment.needs_branches or memory_task.done()):
+            outcome = await memory_task
+            memory_task = None
+        memory_match_found = outcome.found
+        matched_fact_id = outcome.matched_fact_id
+        matched_via = outcome.matched_via
+        memory_context = outcome.memory_context
+        memory_match_confirmed = memory_context is not None
+
+        if outcome.reason_text is not None:
+            await self._record_preempted_assessment(session_id, turn_index, assessment)
+            return await self._offer_reason_confirmation(
+                session_id, turn_index, outcome.reason_text,
+                node_call_counts=node_call_counts, warnings=warnings,
+                start=start, retry_count_start=retry_count_start,
+                matched_fact_id=matched_fact_id, matched_via=matched_via,
             )
-            node_call_counts["EmbedAndSearchFacts"] = (
-                self.embed_and_search_facts.last_call_count
-            )
-            if search_result.matched_fact_id is not None:
-                memory_match_found = True
-                matched_fact_id = search_result.matched_fact_id
-                confirmation = await self._call_node_or_warn(
-                    self.confirm_fact_match,
-                    session_id,
-                    turn_index,
-                    "ConfirmFactMatch",
-                    FactMatchConfirmation(resolves=False),
-                    warnings,
-                    matched_situation=search_result.situation,
-                    matched_resolution=search_result.resolution,
-                    current_message=turn_text,
-                )
-                node_call_counts["ConfirmFactMatch"] = (
-                    self.confirm_fact_match.last_call_count
-                )
-                if confirmation.resolves:
-                    memory_match_confirmed = True
-                    memory_context = (
-                        f"{search_result.situation} -- {search_result.resolution}"
-                    )
 
         if memory_match_confirmed:
-            # AssessAndBranch never runs this turn -- no DisambiguationTurn
-            # row is created for it either (there is nothing it would
-            # record beyond what turn_diagnostics already makes visible).
+            # Memory already knew what this message means, so the
+            # assessment (which ran alongside) is recorded and superseded
+            # rather than acted on; and the stage gets its "oh wait, I
+            # remember!" beat before the answer starts.
+            await self._record_preempted_assessment(session_id, turn_index, assessment)
+            await _emit_turn_event({"type": "recalled", "retracted": False})
             message, teach_failed, history_source_ids, reference_binding_ids = (
                 await self._finish_turn_with_fact(
                     session_id, turn_index, turn_text, turn_id, learner_id,
@@ -1130,27 +1416,12 @@ class SessionLoop:
                 memory_match_confirmed_resolution=memory_match_confirmed,
                 branching_skipped_by_memory=True,
                 matched_fact_id=matched_fact_id,
+                memory_match_via=matched_via,
                 history_source_ids=history_source_ids,
                 reference_binding_ids=reference_binding_ids,
             )
             return message
 
-        thinking_style_hint = await self._build_thinking_style_hint(learner_id)
-        reference_binding_hint = await self._build_reference_binding_hint(learner_id, turn_text)
-        assessment = await self._call_node_or_warn(
-            self.assess_and_branch,
-            session_id,
-            turn_index,
-            "AssessAndBranch",
-            DisambiguationAssessment(needs_branches=False, branch_statements=[]),
-            warnings,
-            message=turn_text,
-            recent_history=recent_history,
-            typed_past_note=typed_past_note,
-            thinking_style_hint=thinking_style_hint,
-            reference_binding_hint=reference_binding_hint,
-        )
-        node_call_counts["AssessAndBranch"] = self.assess_and_branch.last_call_count
 
         if not assessment.needs_branches:
             # Persisted unconditionally -- a turn judged unambiguous is a
@@ -1190,6 +1461,7 @@ class SessionLoop:
                 duration_ms=self._tail_duration_ms(start),
                 memory_match_found=memory_match_found,
                 matched_fact_id=matched_fact_id,
+                memory_match_via=matched_via,
                 history_source_ids=history_source_ids,
                 reference_binding_ids=reference_binding_ids,
             )
@@ -1209,6 +1481,23 @@ class SessionLoop:
         ]
         await self._disambiguation.add_branches(branches)
 
+        # IDEAS.md "richer, context-aware options", step 1: the same
+        # three personalization blocks FinalAnswer's prompt gets,
+        # assembled here (turn_text, not an originating_question --
+        # this is the FIRST look at this message, before any branch or
+        # click exists yet, so there is no system-authored-copy
+        # substitution to make). This is a genuinely new lookup for
+        # this turn, not a duplicate: FinalAnswer never runs on a turn
+        # that ends in showing options, so nothing computed it already.
+        (
+            options_history_block,
+            options_history_source_ids,
+            options_structural_requirement,
+            options_claim_constraints_block,
+        ) = await self._assemble_personalization_blocks(
+            learner_id, session_id, turn_index, turn_text, warnings
+        )
+
         option_set = await self._call_node_or_warn(
             self.disambiguation_options,
             session_id,
@@ -1220,6 +1509,10 @@ class SessionLoop:
             message=turn_text,
             recent_history=recent_history,
             reference_binding_hint=reference_binding_hint,
+            thinking_style_hint=thinking_style_hint,
+            learner_history_block=options_history_block,
+            structural_requirement=options_structural_requirement,
+            claim_constraints_block=options_claim_constraints_block,
         )
         node_call_counts["DisambiguationOptions"] = (
             self.disambiguation_options.last_call_count
@@ -1238,6 +1531,25 @@ class SessionLoop:
                 disamb_turn.id, exclude_ids=used_branch_ids
             )
 
+        if not proposals and memory_task is not None:
+            # No options to show after all, so answer directly -- from
+            # memory if it knows, exactly as the memory-first path would.
+            outcome = await memory_task
+            memory_task = None
+            memory_match_found = outcome.found
+            matched_fact_id = outcome.matched_fact_id
+            matched_via = outcome.matched_via
+            memory_context = outcome.memory_context
+
+            if outcome.reason_text is not None:
+                await self._disambiguation.supersede_open_branches(disamb_turn.id)
+                return await self._offer_reason_confirmation(
+                    session_id, turn_index, outcome.reason_text,
+                    node_call_counts=node_call_counts, warnings=warnings,
+                    start=start, retry_count_start=retry_count_start,
+                    matched_fact_id=matched_fact_id, matched_via=matched_via,
+                )
+
         if not proposals:
             # DisambiguationOptions produced nothing usable -- graceful
             # degrade: answer directly rather than show broken/empty
@@ -1251,7 +1563,7 @@ class SessionLoop:
                 await self._finish_turn_with_fact(
                     session_id, turn_index, turn_text, turn_id, learner_id,
                     branch_context=None,
-                    memory_context=None,
+                    memory_context=memory_context,
                     recent_history=recent_history,
                     fact_type=LearnerFactType.DIRECT_ANSWER,
                     branch_statements=None,
@@ -1286,6 +1598,7 @@ class SessionLoop:
                 duration_ms=self._tail_duration_ms(start),
                 memory_match_found=memory_match_found,
                 matched_fact_id=matched_fact_id,
+                memory_match_via=matched_via,
                 history_source_ids=history_source_ids,
                 reference_binding_ids=reference_binding_ids,
             )
@@ -1313,6 +1626,60 @@ class SessionLoop:
         ]
         await self._disambiguation.create_options(new_options)
         self._prior_disambiguation_turn_ids[session_id] = disamb_turn.id
+
+        # Memory's late say (see the pre-check above). Still running: show
+        # the options NOW (the client doesn't have to wait for memory),
+        # then wait for it. A confirmed match then retracts them; if it had
+        # already finished while the options were being written, they are
+        # dropped before anyone saw them, with the same "I remember" beat.
+        if memory_task is not None:
+            shown_early = not memory_task.done()
+            if shown_early:
+                await _emit_turn_event({
+                    "type": "options",
+                    "message": "Which of these did you mean?",
+                    "options": [{"id": str(o.id), "text": o.text} for o in new_options],
+                })
+            outcome = await memory_task
+            memory_task = None
+            memory_match_found = outcome.found
+            matched_fact_id = outcome.matched_fact_id
+            matched_via = outcome.matched_via
+            if outcome.reason_text is not None and not shown_early:
+                # Memory beat the student to the options: same priority as
+                # when it beats AssessAndBranch -- the reason question wins,
+                # the unseen readings are superseded (invariants 8/9).
+                await self._disambiguation.supersede_open_options(disamb_turn.id)
+                await self._disambiguation.supersede_open_branches(disamb_turn.id)
+                self._prior_disambiguation_turn_ids.pop(session_id, None)
+                return await self._offer_reason_confirmation(
+                    session_id, turn_index, outcome.reason_text,
+                    node_call_counts=node_call_counts, warnings=warnings,
+                    start=start, retry_count_start=retry_count_start,
+                    matched_fact_id=matched_fact_id, matched_via=matched_via,
+                )
+            if outcome.reason_text is not None:
+                # Swapping one question for another already on screen would
+                # be worse than either -- the readings stay.
+                warnings.append(
+                    "reason_confirmation_skipped_options_first: a reason match "
+                    "arrived after the options were already shown -- not "
+                    "replacing them with a yes/no question"
+                )
+            if outcome.memory_context is not None:
+                return await self._retract_options_for_memory(
+                    session_id, turn_index, turn_text, turn_id, learner_id,
+                    disamb_turn_id=disamb_turn.id,
+                    shown_early=shown_early,
+                    memory_context=outcome.memory_context,
+                    recent_history=recent_history,
+                    node_call_counts=node_call_counts,
+                    warnings=warnings,
+                    start=start,
+                    retry_count_start=retry_count_start,
+                    matched_fact_id=matched_fact_id,
+                    matched_via=matched_via,
+                )
 
         # No FinalAnswer this turn -- options are shown INSTEAD of an
         # answer. Nothing was resolved yet, so no fact is written
@@ -1374,6 +1741,300 @@ class SessionLoop:
             duration_ms=self._tail_duration_ms(start),
             memory_match_found=memory_match_found,
             matched_fact_id=matched_fact_id,
+            memory_match_via=matched_via,
+            history_source_ids=options_history_source_ids,
+        )
+        return message
+
+    async def _offer_reason_confirmation(
+        self,
+        session_id: UUID,
+        turn_index: int,
+        reason_text: str,
+        *,
+        node_call_counts: dict[str, int],
+        warnings: list[str],
+        start: float,
+        retry_count_start: int,
+        matched_fact_id: UUID | None,
+        matched_via: str | None,
+    ) -> str:
+        """IDEAS.md "ask for confirmation directly": offer a REASON-based
+        memory match as a yes/no question, reusing the exact click-resolve
+        machinery an ordinary ambiguity turn uses (disambiguation_turns/
+        branches/options, CLAUDE.md invariant 9) -- two fixed Yes/No
+        branches, not LLM-generated readings, so no DisambiguationOptions
+        call and no extra LLM cost on top of being stronger evidence."""
+        disamb_turn = await self._disambiguation.create_turn(
+            session_id,
+            turn_index,
+            needs_branches=True,
+            turn_had_direct_answer=False,
+            kind=DisambiguationTurnKind.REASON_CONFIRMATION,
+        )
+        # The SAME reason_text both the message below
+        # shows AND -- on a "yes" -- becomes
+        # FinalAnswer's memory_context (not the
+        # situation/resolution pair the LLM-judged
+        # shortcut uses): once the student has directly
+        # confirmed a reason describes them, that
+        # confirmed reason IS the most useful context
+        # to answer with, and using one text for both
+        # purposes is also what keeps a resumed chat's
+        # reconstruction (session_history.py, which
+        # reads this same statement back) showing the
+        # identical question the student actually saw.
+        yes_branch = DisambiguationBranch(
+            disambiguation_turn_id=disamb_turn.id,
+            session_id=session_id,
+            turn_index=turn_index,
+            statement=reason_text,
+        )
+        no_branch = DisambiguationBranch(
+            disambiguation_turn_id=disamb_turn.id,
+            session_id=session_id,
+            turn_index=turn_index,
+            statement=REASON_REJECTED_STATEMENT,
+        )
+        await self._disambiguation.add_branches([yes_branch, no_branch])
+        yes_option = Option(
+            branch_id=yes_branch.id,
+            generation_id=disamb_turn.id,
+            session_id=session_id,
+            turn_index=turn_index,
+            text=REASON_CONFIRM_YES_TEXT,
+        )
+        no_option = Option(
+            branch_id=no_branch.id,
+            generation_id=disamb_turn.id,
+            session_id=session_id,
+            turn_index=turn_index,
+            text=REASON_CONFIRM_NO_TEXT,
+        )
+        await self._disambiguation.create_options([yes_option, no_option])
+        self._prior_disambiguation_turn_ids[session_id] = disamb_turn.id
+
+        message = render_reason_confirmation_message(reason_text)
+        await self._tail(
+            self._record_disambiguation_diagnostics,
+            session_id, turn_index, node_call_counts, warnings,
+            teach_failed=False, start=start, retry_count_start=retry_count_start,
+            duration_ms=self._tail_duration_ms(start),
+            memory_match_found=True,
+            matched_fact_id=matched_fact_id,
+            memory_match_via=matched_via,
+            reason_confirmation_offered=True,
+        )
+        return message
+
+    async def _memory_precheck(
+        self,
+        session_id: UUID,
+        turn_index: int,
+        learner_id: UUID,
+        turn_text: str,
+        node_call_counts: dict[str, int],
+        warnings: list[str],
+    ) -> _MemoryOutcome:
+        """The memory half of a turn (memory.py steps 3-4), run alongside
+        AssessAndBranch -- see `_handle_disambiguation_turn`. Decides only;
+        persists nothing but its own node calls. Returns what memory found
+        and, at most one of: a reason to confirm with the student, or a
+        confirmed past resolution to answer from."""
+        search_result = await self._call_node_or_warn(
+            self.embed_and_search_facts,
+            session_id,
+            turn_index,
+            "EmbedAndSearchFacts",
+            FactSearchResult(),
+            warnings,
+            learner_id=learner_id,
+            message=turn_text,
+        )
+        node_call_counts["EmbedAndSearchFacts"] = self.embed_and_search_facts.last_call_count
+        if search_result.matched_fact_id is None:
+            return _MemoryOutcome()
+        matched_fact_id = search_result.matched_fact_id
+        matched_via = search_result.matched_via
+
+        if matched_via == "reason":
+            # IDEAS.md "ask for confirmation directly": a REASON match is
+            # the less-proven, less-checked path (see memory.py's own
+            # docstring) -- it never goes through ConfirmFactMatch's silent
+            # LLM judgment; the student is asked directly instead (the
+            # persistence of that question lives in the caller).
+            # search_result.reason is expected to always be set here (see
+            # WriteLearnerFact); the situation/resolution fallback is
+            # defensive, not expected to trigger.
+            reason_text = search_result.reason or (
+                f"{search_result.situation} -- {search_result.resolution}"
+            )
+            # Two gates found necessary by a live run, both applied BEFORE
+            # the student ever sees the confirmation question -- see
+            # ConfirmReasonRelevance's own docstring and
+            # declined_fact_ids_for_learner's. Gate 1: don't re-ask a reason
+            # this exact learner already declined. Gate 2: don't ask at all
+            # when the CURRENT message has already, by itself, answered it.
+            offer_confirmation = True
+            if self._diagnostics is not None:
+                declined = await self._diagnostics.declined_fact_ids_for_learner(learner_id)
+                if matched_fact_id in declined:
+                    offer_confirmation = False
+                    warnings.append(
+                        "reason_confirmation_suppressed_declined: this "
+                        "learner already declined this exact reason "
+                        "before -- not asking again"
+                    )
+            if offer_confirmation and self.confirm_reason_relevance is not None:
+                relevance = await self._call_node_or_warn(
+                    self.confirm_reason_relevance,
+                    session_id,
+                    turn_index,
+                    "ConfirmReasonRelevance",
+                    ReasonRelevance(still_applies=True),
+                    warnings,
+                    reason=reason_text,
+                    current_message=turn_text,
+                )
+                node_call_counts["ConfirmReasonRelevance"] = (
+                    self.confirm_reason_relevance.last_call_count
+                )
+                if not relevance.still_applies:
+                    offer_confirmation = False
+                    warnings.append(
+                        "reason_confirmation_suppressed_contradicted: "
+                        "the current message already contradicts the "
+                        "matched reason -- not asking for confirmation"
+                    )
+            # A suppressed reason match is treated exactly as if nothing had
+            # matched -- NOT sent into ConfirmFactMatch (that call is for
+            # situation/resolution matches only), since a reason match's
+            # situation/resolution fields describe an unrelated past episode.
+            return _MemoryOutcome(
+                found=True,
+                matched_fact_id=matched_fact_id,
+                matched_via=matched_via,
+                reason_text=reason_text if offer_confirmation else None,
+            )
+
+        if matched_via == "situation_resolution":
+            confirmation = await self._call_node_or_warn(
+                self.confirm_fact_match,
+                session_id,
+                turn_index,
+                "ConfirmFactMatch",
+                FactMatchConfirmation(resolves=False),
+                warnings,
+                matched_situation=search_result.situation,
+                matched_resolution=search_result.resolution,
+                current_message=turn_text,
+            )
+            node_call_counts["ConfirmFactMatch"] = self.confirm_fact_match.last_call_count
+            if confirmation.resolves:
+                return _MemoryOutcome(
+                    found=True,
+                    matched_fact_id=matched_fact_id,
+                    matched_via=matched_via,
+                    memory_context=f"{search_result.situation} -- {search_result.resolution}",
+                )
+        return _MemoryOutcome(found=True, matched_fact_id=matched_fact_id, matched_via=matched_via)
+
+    async def _record_preempted_assessment(
+        self, session_id: UUID, turn_index: int, assessment: DisambiguationAssessment
+    ) -> None:
+        """AssessAndBranch ran (concurrently with memory) but memory's
+        outcome took the turn over. CLAUDE.md invariant 9: every
+        AssessAndBranch call still gets its `disambiguation_turns` row --
+        with its branches recorded and immediately superseded (never
+        offered), not silently dropped."""
+        disamb_turn = await self._disambiguation.create_turn(
+            session_id,
+            turn_index,
+            needs_branches=assessment.needs_branches,
+            turn_had_direct_answer=False,
+        )
+        if assessment.needs_branches and assessment.branch_statements:
+            await self._disambiguation.add_branches([
+                DisambiguationBranch(
+                    disambiguation_turn_id=disamb_turn.id,
+                    session_id=session_id,
+                    turn_index=turn_index,
+                    statement=statement,
+                )
+                for statement in assessment.branch_statements
+            ])
+            await self._disambiguation.supersede_open_branches(disamb_turn.id)
+
+    async def _retract_options_for_memory(
+        self,
+        session_id: UUID,
+        turn_index: int,
+        turn_text: str,
+        turn_id: UUID,
+        learner_id: UUID,
+        *,
+        disamb_turn_id: UUID,
+        shown_early: bool,
+        memory_context: str,
+        recent_history: str,
+        node_call_counts: dict[str, int],
+        warnings: list[str],
+        start: float,
+        retry_count_start: int,
+        matched_fact_id: UUID | None,
+        matched_via: str | None,
+    ) -> str:
+        """IDEAS.md "oh wait...": memory confirmed a past resolution AFTER
+        this turn's options were generated. The options (and their
+        branches) are superseded -- never deleted (invariants 8/9) -- the
+        client is told to take them down, and the direct answer is built
+        from the remembered resolution exactly like the memory-first path."""
+        await self._disambiguation.supersede_open_options(disamb_turn_id)
+        await self._disambiguation.supersede_open_branches(disamb_turn_id)
+        self._prior_disambiguation_turn_ids.pop(session_id, None)
+        warnings.append(
+            "options_retracted_by_memory: a confirmed past fact resolved this "
+            "message after its options were "
+            + ("already shown" if shown_early else "generated but before they were shown")
+            + " -- options superseded, answered from memory instead"
+        )
+        await _emit_turn_event({"type": "recalled", "retracted": shown_early})
+        message, teach_failed, history_source_ids, reference_binding_ids = (
+            await self._finish_turn_with_fact(
+                session_id, turn_index, turn_text, turn_id, learner_id,
+                branch_context=None,
+                memory_context=memory_context,
+                recent_history=recent_history,
+                fact_type=LearnerFactType.DIRECT_ANSWER,
+                branch_statements=None,
+                node_call_counts=node_call_counts,
+                warnings=warnings,
+            )
+        )
+        if self._interactions_enabled:
+            await self._tail(
+                self._record_interaction,
+                learner_id=learner_id,
+                session_id=session_id,
+                turn_index=turn_index,
+                turn_text=turn_text,
+                question_author=QuestionAuthor.LEARNER,
+                originating_question=None,
+                did_branch=True,
+                response_text=None if teach_failed else message,
+                recent_history=recent_history,
+            )
+        await self._tail(
+            self._record_disambiguation_diagnostics,
+            session_id, turn_index, node_call_counts, warnings,
+            teach_failed, start, retry_count_start,
+            duration_ms=self._tail_duration_ms(start),
+            memory_match_found=True,
+            memory_match_confirmed_resolution=True,
+            matched_fact_id=matched_fact_id,
+            memory_match_via=matched_via,
+            history_source_ids=history_source_ids,
+            reference_binding_ids=reference_binding_ids,
         )
         return message
 
@@ -1447,7 +2108,113 @@ class SessionLoop:
                 node_call_counts["WriteLearnerFact"] = self.write_learner_fact.last_call_count
 
             await self._tail(_write_fact)
+        if not teach_failed and self._lesson_hooks is not None and _LESSON_CONTEXT.get():
+            await self._tail(
+                self._lesson_hooks.after_answer, self, session_id, turn_index,
+                originating_question if question_author is QuestionAuthor.SYSTEM_OPTION else turn_text,
+                message,
+            )
         return message, teach_failed, history_source_ids, reference_binding_ids
+
+    async def _assemble_personalization_blocks(
+        self,
+        learner_id: UUID,
+        session_id: UUID,
+        turn_index: int,
+        embed_text: str,
+        warnings: list[str],
+    ) -> tuple[str, list[UUID], str, str]:
+        """The three learner-personalization blocks FinalAnswer's prompt
+        places (see disambiguate.FinalAnswer.run's own docstring for
+        why each is a distinct kind of context) -- extracted out of
+        `_run_final_answer` so `_handle_disambiguation_turn` can also
+        assemble them for the OPTIONS call (IDEAS.md's "richer,
+        context-aware options" entry, step 1): today `DisambiguationOptions`
+        only ever gets `branches, message, recent_history,
+        reference_binding_hint`, the least personalized node in the
+        turn, while FinalAnswer gets all three of these. Deliberately
+        NOT `reference_bindings_block` -- that already has its own,
+        differently-framed hint for the options call
+        (`_build_reference_binding_hint`), so threading this one too
+        would duplicate rather than add context.
+
+        Returns (learner_history_block, history_source_ids,
+        structural_requirement, claim_constraints_block); each block
+        degrades to "" (or [] for the ids) independently on its own
+        failure, unchanged from before this was extracted.
+        """
+        learner_history_block = ""
+        history_source_ids: list[UUID] = []
+        if (
+            self._interactions_enabled
+            and self._retrieval_pool is not None
+            and self._embedding_client is not None
+            and self._history_block_config.enabled
+        ):
+            try:
+                query_vec = await self._embedding_client.embed(
+                    embed_text, task_type=_embeddings.TASK_QUERY
+                )
+                learner_history_block, history_source_ids = (
+                    await _history_block.assemble_history_block(
+                        self._retrieval_pool, learner_id, session_id, query_vec,
+                        history_config=self._history_block_config,
+                        domain=self._domain_config.domain,
+                    )
+                )
+            except Exception as exc:
+                warnings.append(f"history block assembly failed: {exc}")
+                logger.warning(
+                    "History block assembly failed on turn %d for session %s: %s",
+                    turn_index,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+                learner_history_block, history_source_ids = "", []
+
+        structural_requirement = ""
+        if self._stated_preferences is not None:
+            try:
+                latest_pref = await self._stated_preferences.get_latest_for_learner(learner_id)
+                if latest_pref is not None and latest_pref.stated_preference:
+                    structural_requirement = render_structural_requirement(
+                        latest_pref.label, latest_pref.stated_preference
+                    )
+            except Exception as exc:
+                warnings.append(f"stated preference lookup failed: {exc}")
+                logger.warning(
+                    "Stated preference lookup failed on turn %d for session %s: %s",
+                    turn_index,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        claim_constraints_block = ""
+        if self._claim_store is not None:
+            try:
+                promoted = await self._claim_store.list_promoted_for_learner(learner_id)
+                if promoted:
+                    claim_constraints_block = "".join(
+                        _claims.render_claim_constraint(c) for c in promoted
+                    )
+            except Exception as exc:
+                warnings.append(f"claim constraint lookup failed: {exc}")
+                logger.warning(
+                    "Claim constraint lookup failed on turn %d for session %s: %s",
+                    turn_index,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+
+        return (
+            learner_history_block,
+            history_source_ids,
+            structural_requirement,
+            claim_constraints_block,
+        )
 
     async def _run_final_answer(
         self,
@@ -1491,35 +2258,14 @@ class SessionLoop:
             else turn_text
         )
 
-        learner_history_block = ""
-        history_source_ids: list[UUID] = []
-        if (
-            self._interactions_enabled
-            and self._retrieval_pool is not None
-            and self._embedding_client is not None
-            and self._history_block_config.enabled
-        ):
-            try:
-                query_vec = await self._embedding_client.embed(
-                    embed_text, task_type=_embeddings.TASK_QUERY
-                )
-                learner_history_block, history_source_ids = (
-                    await _history_block.assemble_history_block(
-                        self._retrieval_pool, learner_id, session_id, query_vec,
-                        history_config=self._history_block_config,
-                        domain=self._domain_config.domain,
-                    )
-                )
-            except Exception as exc:
-                warnings.append(f"history block assembly failed: {exc}")
-                logger.warning(
-                    "History block assembly failed on turn %d for session %s: %s",
-                    turn_index,
-                    session_id,
-                    exc,
-                    exc_info=True,
-                )
-                learner_history_block, history_source_ids = "", []
+        (
+            learner_history_block,
+            history_source_ids,
+            structural_requirement,
+            claim_constraints_block,
+        ) = await self._assemble_personalization_blocks(
+            learner_id, session_id, turn_index, embed_text, warnings
+        )
 
         # reference_bindings.py's read side: independent of the history
         # block's own config flag (a separate feature, gated on its own
@@ -1545,57 +2291,7 @@ class SessionLoop:
                 )
                 reference_bindings_block, reference_binding_ids = "", []
 
-        # Fix B's read side: the single most recent explicitly-stated
-        # preference for this learner, rendered as a requirement on the
-        # answer's shape, not folded into learner_history_block above
-        # -- see disambiguate.FinalAnswer's own docstring for why
-        # position and phrasing both matter here.
-        structural_requirement = ""
-        if self._stated_preferences is not None:
-            try:
-                latest_pref = await self._stated_preferences.get_latest_for_learner(learner_id)
-                if latest_pref is not None and latest_pref.stated_preference:
-                    structural_requirement = render_structural_requirement(
-                        latest_pref.label, latest_pref.stated_preference
-                    )
-            except Exception as exc:
-                warnings.append(f"stated preference lookup failed: {exc}")
-                logger.warning(
-                    "Stated preference lookup failed on turn %d for session %s: %s",
-                    turn_index,
-                    session_id,
-                    exc,
-                    exc_info=True,
-                )
-
-        # The claim layer's read side (claims.py): promoted claims only
-        # -- a candidate never renders (see render_claim_constraint's
-        # own docstring). Independent of stated_preferences' own
-        # mechanism above, which stays untouched; this is an additive,
-        # separately-gated read, same two-part discipline (a store
-        # to read plus its own failure isolation) as every other
-        # optional layer here. Under the current confidence clamp
-        # (claims.clamp_confidence_for_decisions) no claim can be
-        # promoted yet, so this reads as an empty list in practice --
-        # wired in now so nothing else has to change once calibration
-        # lifts that clamp.
-        claim_constraints_block = ""
-        if self._claim_store is not None:
-            try:
-                promoted = await self._claim_store.list_promoted_for_learner(learner_id)
-                if promoted:
-                    claim_constraints_block = "".join(
-                        _claims.render_claim_constraint(c) for c in promoted
-                    )
-            except Exception as exc:
-                warnings.append(f"claim constraint lookup failed: {exc}")
-                logger.warning(
-                    "Claim constraint lookup failed on turn %d for session %s: %s",
-                    turn_index,
-                    session_id,
-                    exc,
-                    exc_info=True,
-                )
+        knob_directive = _render_knob_directive(await self._transcript.get_knobs(session_id))
 
         try:
             message = await self._call_node(
@@ -1618,6 +2314,8 @@ class SessionLoop:
                 structural_requirement=structural_requirement,
                 reference_bindings_block=reference_bindings_block,
                 claim_constraints_block=claim_constraints_block,
+                knob_directive=knob_directive,
+                **_lesson_kwargs(0),
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
             return message, False, history_source_ids, reference_binding_ids
@@ -1826,6 +2524,11 @@ class SessionLoop:
             session_id, "FinalAnswer", turn_index, _HISTORY_TURNS
         )
         answers_by_turn = {c.turn_index: c.output_json for c in answer_calls}
+        if self._answer_versions is not None:
+            # The student saw the latest regeneration, not the original.
+            for idx, (_, text) in (await self._answer_versions.latest_by_turn(session_id)).items():
+                if idx in answers_by_turn:
+                    answers_by_turn[idx] = text
         lines: list[str] = []
         for t in turns:
             lines.append(f"turn {t.turn_index} student: {t.text}")
@@ -1847,6 +2550,9 @@ class SessionLoop:
         memory_match_confirmed_resolution: bool = False,
         branching_skipped_by_memory: bool = False,
         matched_fact_id: UUID | None = None,
+        memory_match_via: str | None = None,
+        reason_confirmation_offered: bool = False,
+        reason_confirmed_by_student: bool | None = None,
         history_source_ids: list[UUID] | None = None,
         reference_binding_ids: list[UUID] | None = None,
         duration_ms: float | None = None,
@@ -1888,6 +2594,9 @@ class SessionLoop:
                 memory_match_confirmed_resolution=memory_match_confirmed_resolution,
                 branching_skipped_by_memory=branching_skipped_by_memory,
                 matched_fact_id=matched_fact_id,
+                memory_match_via=memory_match_via,
+                reason_confirmation_offered=reason_confirmation_offered,
+                reason_confirmed_by_student=reason_confirmed_by_student,
                 history_block_used=bool(history_source_ids),
                 history_block_source_ids=[str(i) for i in history_source_ids],
                 history_block_template_version=(

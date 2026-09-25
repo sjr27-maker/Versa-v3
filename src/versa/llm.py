@@ -99,6 +99,25 @@ _DEFAULT_PATH_REQUIREMENT = json.dumps(
 
 
 _DEFAULT_RESPONSES: dict[str, str] = {
+    # StageDirector (stage.py): a tiny generic skit in the JSON Lines format,
+    # so `versa serve --stub` still shows the stage performing.
+    "STAGE:DIRECT": "\n".join(
+        json.dumps(a, ensure_ascii=False)
+        for a in [
+            {"do": "emote", "mood": "thinking"},
+            {"do": "spawn", "id": "idea", "kind": "emoji", "label": "💡", "x": 0.55, "y": 0.3},
+            {"do": "say", "text": "Ooh, a good one. Let me show you."},
+            {"do": "spawn", "id": "q", "kind": "text", "label": "?", "x": 0.75, "y": 0.2, "size": 1.6},
+            {"do": "approach", "target": "idea"},
+            {"do": "jump", "times": 1},
+            {"do": "effect", "kind": "sparks", "x": 0.55, "y": 0.3},
+            {"do": "relabel", "target": "q", "label": "!"},
+            {"do": "emote", "mood": "excited"},
+            {"do": "say", "text": "The chat has the details. I have the drama."},
+            {"do": "wait", "ms": 600},
+            {"do": "emote", "mood": "proud"},
+        ]
+    ),
     # Existing loop nodes. "[]" is a valid response under both the old
     # reweight-only contract and the current reweight-or-create one —
     # no test that doesn't opt in proposes anything either way.
@@ -161,6 +180,10 @@ _DEFAULT_RESPONSES: dict[str, str] = {
     # does NOT resolve the current message, so a test that doesn't opt
     # in never accidentally skips branching.
     "CONFIRM:FACT_MATCH": json.dumps({"resolves": False}),
+    # Conservative default: still applies, so a test that doesn't opt
+    # in keeps the existing reason-confirmation-offered behavior
+    # rather than silently suppressing it.
+    "CONFIRM:REASON_RELEVANT": json.dumps({"still_applies": True}),
     "WRITE:FACT": json.dumps(
         {"situation": "stub situation", "resolution": "stub resolution"}
     ),
@@ -179,6 +202,97 @@ _DEFAULT_RESPONSES: dict[str, str] = {
     # Keys are option ids decided per-call (same reasoning as
     # SCORE:INFO_UPDATE) -- a static schema can't name them in advance.
     "PREDICT:SELECTION": "{}",
+    # reviews.py's "why Versa thinks this" node -- plain text, not JSON.
+    "EXPLAIN:PATTERN": "stub explanation of the pattern, from the evidence given.",
+    # reviews.py's ask-about-it node. Conservative default: intent=none, so
+    # a test that doesn't opt in never accidentally applies an edit.
+    "ASK:PATTERN": json.dumps(
+        {"answer": "stub answer, from the evidence given.", "intent": "none", "new_statement": None}
+    ),
+    # reviews.MatchStatedPreferenceToClaim. Conservative default: no match,
+    # so a test that doesn't opt in never accidentally revises a claim.
+    "MATCH:STATED_PREFERENCE": json.dumps(
+        {"matched_index": None, "action": None, "new_statement": None}
+    ),
+    # topics.py (Learn a topic). Static but well-formed, so the whole flow
+    # -- explore, expand, build, learn -- runs end to end on the stub.
+    "TOPIC:BRANCHES": json.dumps(
+        {
+            "branches": [
+                {"title": "Core ideas", "summary": "The basic concepts everything else builds on."},
+                {"title": "How it works", "summary": "The mechanism behind it, step by step."},
+                {"title": "Worked examples", "summary": "Seeing the ideas applied to real problems."},
+                {"title": "Common mistakes", "summary": "Where learners usually go wrong, and why."},
+                {"title": "Real-world uses", "summary": "Where this shows up outside the classroom."},
+            ]
+        }
+    ),
+    "TOPIC:OUTLINE": json.dumps(
+        {
+            "title": "Stub resource topic",
+            "branches": [
+                {"title": "Introduction", "summary": "What the resource sets out to teach.",
+                 "children": [{"title": "Key terms", "summary": "The vocabulary used throughout."}]},
+                {"title": "Main section", "summary": "The central material of the resource.",
+                 "children": []},
+                {"title": "Summary", "summary": "How the pieces fit together.", "children": []},
+            ],
+        }
+    ),
+    "TOPIC:LESSONS": json.dumps(
+        {
+            "lessons": [
+                {
+                    "title": f"Stub lesson {i}",
+                    "objective": "Explain the idea in your own words and use it once.",
+                    "tasks": [
+                        {"kind": "learn", "description": "Understand the idea and explain it back."},
+                        {"kind": "practice", "description": "Solve one short practice question."},
+                        {"kind": "check", "description": "Answer 2 end-of-lesson questions."},
+                    ],
+                }
+                for i in (1, 2, 3)
+            ]
+        }
+    ),
+    # Conservative: never completes a task unless a test opts in.
+    "LESSON:JUDGE": json.dumps(
+        {"completed": False, "evidence": "", "drifted": False, "check_passed": None}
+    ),
+    # feed.GenerateFeed. The parser drops `related` for a learner with no
+    # history, so a static answer is right for both cases.
+    "FEED:RECOMMEND": json.dumps(
+        {
+            "related": [
+                {
+                    "title": "Going one step deeper",
+                    "hook": "Pick up where your last chat left off and push a little further.",
+                    "reason": "Because of your recent chats",
+                    "starter": "Can we go one step deeper on what we talked about last time?",
+                },
+            ],
+            "explore": [
+                {
+                    "title": "How bridges stay up",
+                    "hook": "Forces, arches and why some shapes carry far more weight.",
+                    "reason": "Everyday engineering, no maths needed",
+                    "starter": "How do bridges hold so much weight without falling down?",
+                },
+                {
+                    "title": "Why the sky is blue",
+                    "hook": "A question children ask that physicists love answering.",
+                    "reason": "A short, satisfying bit of physics",
+                    "starter": "Why is the sky blue and not violet?",
+                },
+                {
+                    "title": "The printing press",
+                    "hook": "How one machine changed who got to read and think.",
+                    "reason": "A turning point in history",
+                    "starter": "How did the printing press change the world?",
+                },
+            ],
+        }
+    ),
 }
 
 
@@ -522,16 +636,32 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
     # what the prompt itself asks for (see BASELINE:TEACH's own
     # comment for the live failure this was confirmed to cause).
     "FINAL:ANSWER": _FREE_TEXT,
+    # StageDirector (stage.py) streams JSON *Lines* -- one action per line so
+    # each can be forwarded as soon as it is complete. JSON mode would force
+    # a single JSON value, so this must be free text.
+    "STAGE:DIRECT": _FREE_TEXT,
     "CONFIRM:FACT_MATCH": {
         "type": "OBJECT",
         "properties": {"resolves": {"type": "BOOLEAN"}},
         "required": ["resolves"],
+    },
+    "CONFIRM:REASON_RELEVANT": {
+        "type": "OBJECT",
+        "properties": {"still_applies": {"type": "BOOLEAN"}},
+        "required": ["still_applies"],
     },
     "WRITE:FACT": {
         "type": "OBJECT",
         "properties": {
             "situation": {"type": "STRING"},
             "resolution": {"type": "STRING"},
+            # Nullable and NOT required, unlike situation/resolution --
+            # a reason is written only when this specific exchange
+            # actually suggests one, never invented to fill the field
+            # (see memory.py's _fact_prompt and IDEAS.md's "Store the
+            # reason" entry for why abstaining must be a valid,
+            # expected output here, not a parse failure).
+            "reason": {"type": "STRING", "nullable": True},
         },
         "required": ["situation", "resolution"],
     },
@@ -602,6 +732,117 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         "type": "OBJECT",
         "properties": {"statement": {"type": "STRING"}},
         "required": ["statement"],
+    },
+    # reviews.ExplainItem -- shown straight to the student, same reasoning
+    # as FINAL:ANSWER: no JSON mode.
+    "EXPLAIN:PATTERN": _FREE_TEXT,
+    "ASK:PATTERN": {
+        "type": "OBJECT",
+        "properties": {
+            "answer": {"type": "STRING"},
+            "intent": {"type": "STRING", "enum": ["none", "edit", "approve", "archive"]},
+            "new_statement": {"type": "STRING", "nullable": True},
+        },
+        "required": ["answer", "intent"],
+    },
+    "MATCH:STATED_PREFERENCE": {
+        "type": "OBJECT",
+        "properties": {
+            "matched_index": {"type": "INTEGER", "nullable": True},
+            "action": {"type": "STRING", "nullable": True, "enum": ["approve", "edit", "archive"]},
+            "new_statement": {"type": "STRING", "nullable": True},
+        },
+        "required": ["matched_index"],
+    },
+    "TOPIC:BRANCHES": {
+        "type": "OBJECT",
+        "properties": {"branches": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {"title": {"type": "STRING"}, "summary": {"type": "STRING"}},
+            "required": ["title", "summary"],
+        }}},
+        "required": ["branches"],
+    },
+    "TOPIC:OUTLINE": {
+        "type": "OBJECT",
+        "properties": {
+            "title": {"type": "STRING"},
+            "branches": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "summary": {"type": "STRING"},
+                        "children": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {"title": {"type": "STRING"}, "summary": {"type": "STRING"}},
+            "required": ["title", "summary"],
+        }},
+                    },
+                    "required": ["title", "summary"],
+                },
+            },
+        },
+        "required": ["title", "branches"],
+    },
+    "TOPIC:LESSONS": {
+        "type": "OBJECT",
+        "properties": {
+            "lessons": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "objective": {"type": "STRING"},
+                        "tasks": {
+                            "type": "ARRAY",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "kind": {"type": "STRING", "enum": ["learn", "practice", "apply", "check"]},
+                                    "description": {"type": "STRING"},
+                                },
+                                "required": ["kind", "description"],
+                            },
+                        },
+                    },
+                    "required": ["title", "objective", "tasks"],
+                },
+            },
+        },
+        "required": ["lessons"],
+    },
+    "LESSON:JUDGE": {
+        "type": "OBJECT",
+        "properties": {
+            "completed": {"type": "BOOLEAN"},
+            "evidence": {"type": "STRING"},
+            "drifted": {"type": "BOOLEAN"},
+            "check_passed": {"type": "BOOLEAN", "nullable": True},
+        },
+        "required": ["completed", "evidence", "drifted"],
+    },
+    "FEED:RECOMMEND": {
+        "type": "OBJECT",
+        "properties": {
+            section: {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "hook": {"type": "STRING"},
+                        "reason": {"type": "STRING"},
+                        "starter": {"type": "STRING"},
+                    },
+                    "required": ["title", "hook", "reason", "starter"],
+                },
+            }
+            for section in ("related", "explore")
+        },
+        "required": ["related", "explore"],
     },
 }
 

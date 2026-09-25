@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from versa.ablation import AblationConfig
 from versa.models import ChatSummary, NodeCall, SessionSummary, TurnRecord
+from versa.session_knobs import SessionKnobs
 
 
 def to_jsonable(value: Any) -> Any:
@@ -56,6 +57,7 @@ class TranscriptStore:
         session_id: UUID | None = None,
         ablation_config: AblationConfig | None = None,
         app_mode: str = "sandbox",
+        lesson_id: UUID | None = None,
     ) -> UUID:
         # ablation_config is fixed for the session's lifetime (see
         # set_ablation_config's raise-if-turns-exist guard below) — None
@@ -69,17 +71,88 @@ class TranscriptStore:
         # not the reasoning architecture ablation_config names. Defaults
         # to "sandbox" because every CLI-created session (`versa chat`)
         # predates app modes and is one, by construction.
+        #
+        # `lesson_id` (migration 074) ties a Learn-a-topic lesson chat to its
+        # lesson (topics.py); set once here, never changed.
         session_id = session_id or uuid4()
         async with self._pool.acquire() as conn:
             await conn.execute(
-                "INSERT INTO sessions (id, learner_id, ablation_config, app_mode) "
-                "VALUES ($1, $2, $3, $4)",
+                "INSERT INTO sessions (id, learner_id, ablation_config, app_mode, lesson_id) "
+                "VALUES ($1, $2, $3, $4, $5)",
                 session_id,
                 learner_id,
                 ablation_config.model_dump(mode="json") if ablation_config else None,
                 app_mode,
+                lesson_id,
             )
         return session_id
+
+    async def get_knobs(self, session_id: UUID) -> SessionKnobs:
+        """The session's style knobs (migration 063); defaults for a
+        session that never set any."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT answer_length_level, depth_level FROM sessions WHERE id = $1", session_id
+            )
+        if row is None:
+            raise KeyError(f"session {session_id} not found")
+        return SessionKnobs(answer_length=row["answer_length_level"], depth=row["depth_level"])
+
+    async def set_knobs(self, session_id: UUID, knobs: SessionKnobs) -> None:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE sessions SET answer_length_level = $2, depth_level = $3 WHERE id = $1",
+                session_id,
+                knobs.answer_length,
+                knobs.depth,
+            )
+        if result == "UPDATE 0":
+            raise KeyError(f"session {session_id} not found")
+
+    async def claim_for_consolidation(self, session_id: UUID) -> bool:
+        """Atomically mark a session consolidated (migration 064). True only
+        for the ONE caller that flipped NULL -> now(); every later or
+        concurrent call gets False, so a session is consolidated at most
+        once whatever races to do it. The marker is set BEFORE the work
+        runs (a failed consolidation is logged, not retried) — a retry could
+        only double-count evidence, which is worse than a missed session."""
+        async with self._pool.acquire() as conn:
+            claimed = await conn.fetchval(
+                "UPDATE sessions SET consolidated_at = NOW() "
+                "WHERE id = $1 AND consolidated_at IS NULL RETURNING id",
+                session_id,
+            )
+        return claimed is not None
+
+    async def get_turn_count(self, session_id: UUID) -> int:
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT count(*) FROM turns WHERE session_id = $1", session_id
+            )
+
+    async def list_unconsolidated_eligible(
+        self, learner_id: UUID, min_turns: int, exclude: UUID | None = None
+    ) -> list[UUID]:
+        """This learner's older sessions that were never consolidated and
+        are long enough to be worth it (`min_turns`), oldest first — the
+        sweep that catches a chat whose tab was closed without an explicit
+        end. `exclude` is the brand-new session that triggered the sweep."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id FROM sessions s
+                JOIN turns t ON t.session_id = s.id
+                WHERE s.learner_id = $1 AND s.consolidated_at IS NULL
+                  AND ($3::uuid IS NULL OR s.id <> $3)
+                GROUP BY s.id, s.created_at
+                HAVING count(t.id) >= $2
+                ORDER BY s.created_at
+                """,
+                learner_id,
+                min_turns,
+                exclude,
+            )
+        return [r["id"] for r in rows]
 
     async def get_ablation_config(self, session_id: UUID) -> AblationConfig:
         """The AblationConfig a session was created with — NULL (never
@@ -183,7 +256,7 @@ class TranscriptStore:
         ]
 
     async def list_session_summaries(
-        self, learner_id: UUID, app_mode: str
+        self, learner_id: UUID, app_mode: str | None
     ) -> list[ChatSummary]:
         """This learner's chats WITHIN one app_mode, most-recently-active
         first — the app's chat-history sidebar (server.py's
@@ -198,6 +271,8 @@ class TranscriptStore:
         break the GROUP BY or require picking one arbitrarily via
         DISTINCT ON; the subquery keeps the aggregate query simple and
         costs nothing extra a personal chat list wouldn't already pay).
+
+        `app_mode=None` lists every mode together (the History page).
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
@@ -205,6 +280,7 @@ class TranscriptStore:
                 SELECT
                     s.id AS session_id,
                     s.app_mode,
+                    s.lesson_id,
                     s.created_at,
                     count(t.id) AS turn_count,
                     COALESCE(max(t.created_at), s.created_at) AS last_activity_at,
@@ -215,7 +291,7 @@ class TranscriptStore:
                     ) AS preview
                 FROM sessions s
                 LEFT JOIN turns t ON t.session_id = s.id
-                WHERE s.learner_id = $1 AND s.app_mode = $2
+                WHERE s.learner_id = $1 AND ($2::text IS NULL OR s.app_mode = $2)
                 GROUP BY s.id, s.app_mode, s.created_at
                 ORDER BY last_activity_at DESC
                 """,
@@ -318,6 +394,21 @@ class NodeCallStore:
                 node_name,
             )
         return None if row is None else NodeCall(**dict(row))
+
+    async def list_calls_for_session(self, session_id: UUID, node_name: str) -> list[NodeCall]:
+        """Every call to `node_name` in one session, chronological -- for a
+        reader assembling evidence about what a background step (e.g.
+        SummarizeSessionPath, ConfirmThinkingStyleMatch) actually produced,
+        with no turn_index bound (unlike `get_recent_calls`, which serves a
+        live turn's own recent-history input)."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM node_calls WHERE session_id = $1 AND node_name = $2 "
+                "ORDER BY turn_index, seq",
+                session_id,
+                node_name,
+            )
+        return [NodeCall(**dict(row)) for row in rows]
 
     async def get_recent_calls(
         self, session_id: UUID, node_name: str, before_turn_index: int, limit: int

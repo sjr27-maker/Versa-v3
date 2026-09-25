@@ -17,6 +17,7 @@ class ChatHistoryRail extends StatelessWidget {
     required this.activeSessionId,
     required this.onSelect,
     required this.onNewChat,
+    required this.onCollapse,
   });
 
   final List<ChatSummary> chats;
@@ -24,6 +25,11 @@ class ChatHistoryRail extends StatelessWidget {
   final String? activeSessionId;
   final void Function(ChatSummary chat) onSelect;
   final VoidCallback onNewChat;
+
+  /// Minimizes this rail to a thin strip (see widgets/collapsed_rail.dart)
+  /// — independent of chat content, so it belongs on the widget itself
+  /// rather than something each caller has to remember to wire.
+  final VoidCallback onCollapse;
 
   @override
   Widget build(BuildContext context) {
@@ -49,6 +55,13 @@ class ChatHistoryRail extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                   onPressed: onNewChat,
                   icon: const Icon(Icons.add_rounded, size: 18, color: Paper.faint),
+                ),
+                IconButton(
+                  key: const ValueKey('history-collapse'),
+                  tooltip: 'Minimize chats',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onCollapse,
+                  icon: const Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
                 ),
               ],
             ),

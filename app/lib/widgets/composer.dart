@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../composer_draft.dart';
 import '../theme.dart';
 
 /// The message box. Enter sends; Shift+Enter starts a new line.
@@ -23,11 +24,25 @@ class _ComposerState extends State<Composer> {
   @override
   void initState() {
     super.initState();
+    _takeDraft();
     _controller.addListener(() => setState(() {}));
+    composerDraft.addListener(_takeDraft);
+  }
+
+  void _takeDraft() {
+    final draft = composerDraft.value;
+    if (draft == null) return;
+    composerDraft.value = null;
+    _controller.value = TextEditingValue(
+      text: draft,
+      selection: TextSelection.collapsed(offset: draft.length),
+    );
+    if (_focus.context != null) _focus.requestFocus(); // a fresh box autofocuses on its own
   }
 
   @override
   void dispose() {
+    composerDraft.removeListener(_takeDraft);
     _controller.dispose();
     _focus.dispose();
     super.dispose();

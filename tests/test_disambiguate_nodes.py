@@ -8,7 +8,11 @@ import json
 
 import pytest
 
-from versa.disambiguate import AssessAndBranch, DisambiguationOptions, FinalAnswer
+from versa.disambiguate import (
+    AssessAndBranch,
+    DisambiguationOptions,
+    FinalAnswer,
+)
 from versa.llm import StubLLMClient
 from versa.models import AmbiguityKind, ApproachAxis, DisambiguationBranch
 
@@ -165,6 +169,51 @@ async def test_one_option_per_branch():
     assert result.axis is None
     assert len(result.proposals) == 2
     assert {p.branch_id for p in result.proposals} == {branches[0].id, branches[1].id}
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_options_receive_the_same_personalization_context_as_final_answer():
+    """IDEAS.md "richer, context-aware options", step 1: DisambiguationOptions
+    was the least personalized node in the turn despite phrasing what the
+    student actually clicks. All four blocks must actually reach the
+    prompt when given, not just be accepted as parameters."""
+    branches = [_branch("reading a"), _branch("reading b")]
+
+    def _respond(_prompt: str) -> str:
+        return _subject_response(
+            [(branches[0], "Is it about reading a?"), (branches[1], "Is it about reading b?")]
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    await node.run(
+        branches,
+        thinking_style_hint="works through worked examples before theory",
+        learner_history_block="\nThis student previously struggled with limits.\n",
+        structural_requirement="\nKeep every answer under three sentences.\n",
+        claim_constraints_block="\nThis student prefers analogies over formalism.\n",
+    )
+    prompt = llm.prompts[-1]
+    assert "works through worked examples before theory" in prompt
+    assert "This student previously struggled with limits." in prompt
+    assert "Keep every answer under three sentences." in prompt
+    assert "This student prefers analogies over formalism." in prompt
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_options_without_personalization_context_omits_those_blocks():
+    branches = [_branch("reading a"), _branch("reading b")]
+
+    def _respond(_prompt: str) -> str:
+        return _subject_response(
+            [(branches[0], "Is it about reading a?"), (branches[1], "Is it about reading b?")]
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    node = DisambiguationOptions(llm)
+    await node.run(branches)
+    prompt = llm.prompts[-1]
+    assert "confirmed pattern(s)" not in prompt
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -393,6 +442,25 @@ async def test_final_answer_uses_branch_context_when_given():
     assert result == "the answer"
     assert "wants the power rule explained" in llm.prompts[-1]
     assert node.last_call_count == 1
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_branch_context_is_framed_as_settled_not_a_question_to_weigh():
+    """A live run found this concretely: a question-phrased branch_context
+    ("Should we focus on a rigorous mathematical treatment...?") got
+    answered as if it were a real question -- FinalAnswer's reply opened
+    with "No, we should not," arguing AGAINST what the student had just
+    clicked. The prompt must forbid that outright, not just present the
+    reading and hope."""
+    llm = StubLLMClient(canned={"FINAL:ANSWER": "the answer"})
+    node = FinalAnswer(llm)
+    await node.run(
+        "explain this", branch_context="Should we focus on a rigorous mathematical treatment?"
+    )
+    prompt = llm.prompts[-1]
+    assert "SETTLED FACT" in prompt
+    assert "not a question for you to weigh, answer, reconsider, or argue against" in prompt
+    assert "do not present the alternative" in prompt
 
 
 @pytest.mark.asyncio(loop_scope="session")

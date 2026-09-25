@@ -53,7 +53,7 @@ flowchart TD
     F --> I[Session end]
     I --> J[Consolidate: label the<br/>session's order-of-moves]
     J --> K[(thinking_style_candidates)]
-    K -.->|after many confirmed<br/>independent sessions| E
+    K -.->|after many confirmed independent sessions:<br/>shapes which options are offered| B
 ```
 
 A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`). At most three LLM calls fully resolve one exchange — an ambiguity assessment, one clickable option per interpretation, and a final answer once the student has resolved which reading they meant. A plain-LLM `BASELINE` mode also exists as the measurement control.
@@ -61,13 +61,14 @@ A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`)
 ### The layers, and what each is for
 
 - **Disambiguation flow** (`disambiguate.py`) — the live reasoning mode: assess ambiguity, offer 2–4 distinct readings as options, answer once one is chosen. Every assessment is persisted whether or not it decides to branch.
-- **Memory layer** (`memory.py`) — `learner_facts` (within-session recall that can skip branching entirely when a past fact resolves the current message) and `thinking_style_candidates` (a cross-session order-of-reasoning pattern, promoted into the live prompt only after enough independent confirmations).
+- **Memory layer** (`memory.py`) — `learner_facts` (within-session recall that can skip branching entirely when a past fact resolves the current message) and `thinking_style_candidates` (a cross-session order-of-reasoning pattern; once confirmed by enough independent sessions it is fed to `AssessAndBranch` and `DisambiguationOptions` — it shapes which options are offered, not the answer text itself). Session-end consolidation runs from the app too (`POST /api/sessions/{id}/end`, plus a sweep of older unconsolidated chats when a new one starts).
 - **Interaction / retrieval pipeline** (`interactions.py`, `retrieval.py`, `history_block.py`) — an append-only log of every exchange, with deterministic three-stage retrieval over a learner's own history and population-level patterns. Feeds the history block into the final-answer prompt; its LLM-based selection *predictions* are recorded but do not yet influence the student's response.
 - **Claim layer** (`claims.py`) — a durable, cross-session model of a learner's standing preferences, extracted **only** from episodes that were actually surprising (high prediction error), each claim carrying a falsifiable `test` and promoted only past an evidence/topic-spread gate.
 - **Parked: capability & instrument layers** (`archive/instrument_layer/`) — a separate capability-claim store plus purpose-built interactions (`locate`, `predict`) whose event streams were interpreted by hand-written deterministic contracts. Removed from the live architecture; nothing imports it and `pytest` never collects it. Restore steps are in that directory's README. Their migrations and tables remain in the schema, dormant.
 - **Population patterns** (`population_patterns.py`) — clusters interaction abstracts across many learners, surfacing only patterns backed by ≥20 distinct learners with no single learner dominating.
 - **Domain switch** (`domain_config.py`) — a prompts-only knob (`education` vs `general`) for testing whether the architecture is genuinely domain-independent.
 - **Reference bindings & stated preferences** (`reference_bindings.py`, in `interactions.py`) — exact-match memory of a learner's recurring phrases and explicitly stated preferences, threaded into the prompt.
+- **Learn a topic** (`topics.py`, `resources.py`) — the second live app mode. A keyword search, an uploaded PDF or a web link becomes a tree of branches the student can expand and tick; ticked branches become a course of chapters and lessons, each lesson a list of tasks ending in end-of-lesson questions. A lesson chat is an ordinary session run through the same loop, with the lesson's context added to the ambiguity check and the answer, and a background `JudgeLessonProgress` step that marks tasks done (progress is derived from those append-only events, never stored). What the system knows about the learner (thinking style, confirmed claims, stated preference, related past chats, sliders, other courses) shapes the branches, the lesson plans and the tutoring; what the student searches, expands, picks or skips, and how lessons go, is logged to `topic_signals` as episodic evidence. A plain course outline, not a learner model (invariant 4).
 
 Every entry point builds the loop through the single assembly point `session_builder.build_session_loop`, so no two entry points can silently diverge in which stores they wire in. `versa chat` and `versa serve` (the API the app talks to) both build their loop through it.
 
@@ -81,7 +82,7 @@ Every entry point builds the loop through the single assembly point `session_bui
 
 **App:** Flutter (Dart), one codebase for web, Windows, Android and iOS, in `app/`. Today: a working Sandbox chat plus labelled placeholders for everything else.
 
-**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 54 ordered SQL migrations in `src/versa/migrations/`, applied via `versa migrate` and tracked in a `schema_migrations` ledger.
+**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 73 ordered SQL migrations in `src/versa/migrations/`, applied via `versa migrate` and tracked in a `schema_migrations` ledger.
 
 **LLM / embeddings:** Google Gen AI SDK (`google-genai`), Gemini API. Every LLM-calling command accepts `--stub` to run against an in-memory stub client that needs no key and costs nothing.
 
@@ -269,7 +270,9 @@ src/versa/
   domain_config.py       # education/general prompts-only switch
   model_config.py        # Gemini tier→model mapping
   llm.py, embeddings.py  # Gemini + stub clients
-  migrations/*.sql        # 54 ordered schema migrations
+  topics.py              # Learn a topic: explore -> course -> lessons, progress
+  resources.py           # PDF / web-link reading (SSRF-guarded) for Learn a topic
+  migrations/*.sql        # 73 ordered schema migrations
 tests/                    # pytest suite (stub-backed, no external calls)
 app/                      # the Flutter app (web, Windows, Android, iOS)
 scripts/                  # start.ps1 (one-command launcher), measure_turn.py, eval_assess_thinking.py, bench_retrieval.py
