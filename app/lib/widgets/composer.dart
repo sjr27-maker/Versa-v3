@@ -6,12 +6,15 @@ import '../theme.dart';
 
 /// The message box. Enter sends; Shift+Enter starts a new line.
 class Composer extends StatefulWidget {
-  const Composer({super.key, required this.enabled, required this.onSend, this.hint});
+  const Composer({super.key, required this.enabled, required this.onSend, this.hint, this.onChanged});
 
   /// Whether sending is allowed right now (typing always is).
   final bool enabled;
   final void Function(String text) onSend;
   final String? hint;
+
+  /// Every edit to the text (a room uses it to say "typing…").
+  final VoidCallback? onChanged;
 
   @override
   State<Composer> createState() => _ComposerState();
@@ -88,6 +91,7 @@ class _ComposerState extends State<Composer> {
                 key: const ValueKey('composer-field'),
                 controller: _controller,
                 focusNode: _focus,
+                onChanged: widget.onChanged == null ? null : (_) => widget.onChanged!(),
                 autofocus: true,
                 minLines: 1,
                 maxLines: 6,

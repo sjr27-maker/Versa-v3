@@ -330,3 +330,32 @@ made to read like proof the system adapted to a student. The
 ("mechanism verified …", never "adapted to the student" for a staged
 row); that wording is the writer's responsibility, but the row it
 lives on must be immutable for the phrasing to mean anything later.
+
+### 12. Rooms are append-only (experimental, branch `experiment/rooms`)
+
+The rooms tables (`rooms`, `room_members`, `room_messages`, `room_tasks`,
+`room_task_events`, `room_option_sets`, `room_options`,
+`room_option_picks`, `room_node_calls` -- migration
+`rooms_001_rooms.sql`, code in `src/versa/rooms/`) must never delete or
+update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `RoomStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in the `rooms` package or its
+  migration.
+- State that changes is derived from rows that were only ever added: a
+  task is done if its latest `room_task_events` row says `completed`; an
+  option set is open for a person until they pick from it or a newer set
+  for the same audience arrives. Nothing is flagged in place.
+- Every model call a room makes is recorded to `room_node_calls` with its
+  full input (incl. the prompt) and output, or its error -- invariant 2's
+  payload in the rooms' own table, because a room is not a `sessions` row
+  (the same precedent as `feed_generations` / `topic_generations`).
+- Rooms are walled off from the personal memory layer: nothing in
+  `rooms/` reads or writes learner facts, claims, thinking styles or any
+  core table (same wall as invariants 6/8).
+- Verified by `tests/test_rooms_append_only.py`, the same AST-based check
+  used for invariants 1, 4, 6-11.
+
+Why: a room is a record of how a group learned together -- what Versa
+chose to say, to whom, privately or not, and why. Editing or pruning it
+would make that unreadable later, exactly as for every other store.

@@ -17,6 +17,8 @@ transport:
     Learn a topic (topics.py): /api/topic-explorations[/from-link|/from-pdf],
     /api/topic-nodes/{id}/expand, /api/topics, /api/learners/{id}/topics,
     /api/topics/{id}, /api/lessons/{id}[/start]
+    Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
+    /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
     WS   /api/sessions/{id}/chat           one chat, one turn at a time
 
 Chat protocol (JSON text frames).
@@ -126,6 +128,7 @@ from versa.reviews import (
     render_qna_history,
     thinking_style_fingerprint,
 )
+from versa.rooms import RoomHub, build_rooms_router
 from versa.session_builder import build_session_loop
 from versa.session_history import reconstruct_session_history
 from versa.session_knobs import SessionKnobs
@@ -1098,6 +1101,10 @@ def create_app(
     app.include_router(build_topics_router(
         pool, tiers.fast, loop._embedding_client, ablation_config=loop.ablation_config,
     ))
+    # Rooms (experimental, rooms/): group study chats with Versa as a member.
+    room_hub = RoomHub(pool, tiers.fast)
+    app.state.room_hub = room_hub
+    app.include_router(build_rooms_router(room_hub))
 
     # The built Flutter web app, if there is one, at "/" -- registered last so
     # it can never shadow /api. One command, one URL.

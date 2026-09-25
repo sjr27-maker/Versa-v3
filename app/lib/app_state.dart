@@ -13,6 +13,10 @@ class AppState extends ChangeNotifier {
   final VersaApi api;
   SharedPreferences? _prefs;
 
+  /// This device's saved settings (null until [load]); rooms keep the list of
+  /// rooms joined here in it (room/room_api.dart RoomMemberships).
+  SharedPreferences? get prefs => _prefs;
+
   static const _kLabel = 'learner_label';
   static const _kTiming = 'show_timing';
   static const _kStagePanel = 'show_stage_panel';
@@ -161,6 +165,7 @@ class ShellState extends ChangeNotifier {
     tab = tabModes;
     inSandbox = true;
     inTopics = false;
+    inRooms = false;
     if (sandbox == null) {
       sandbox = _chatFactory(app)..start();
       _wireSandbox(sandbox!);
@@ -242,6 +247,7 @@ class ShellState extends ChangeNotifier {
     tab = tabModes;
     inSandbox = false;
     inTopics = true;
+    inRooms = false;
     notifyListeners();
   }
 
@@ -261,6 +267,24 @@ class ShellState extends ChangeNotifier {
     return id;
   }
 
+  // ---------------------------------------------- Study with others
+
+  /// The rooms screens (room/, experimental) are showing in the Modes tab.
+  bool inRooms = false;
+
+  void openRooms() {
+    tab = tabModes;
+    inSandbox = false;
+    inTopics = false;
+    inRooms = true;
+    notifyListeners();
+  }
+
+  void closeRooms() {
+    inRooms = false;
+    notifyListeners();
+  }
+
   /// A chat controller built the same way the Sandbox one is (so tests'
   /// scripted connections apply to lesson chats too). The caller owns it.
   ChatController makeChat({String? resumeSessionId}) =>
@@ -272,6 +296,7 @@ class ShellState extends ChangeNotifier {
     sandbox = null;
     inSandbox = false;
     inTopics = false;
+    inRooms = false;
     pendingLessonId = null;
     tab = tabHome;
     sandboxHistory.clear();

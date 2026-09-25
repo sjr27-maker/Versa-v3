@@ -50,6 +50,9 @@ async def pool():
         # comprehensive (includes the tables migration 032 retires) so
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
+        for table in ("room_node_calls", "room_option_picks", "room_options", "room_option_sets",
+                      "room_task_events", "room_tasks", "room_messages", "room_members", "rooms"):
+            await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS lesson_task_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS topic_signals CASCADE")
         await conn.execute("DROP TABLE IF EXISTS lesson_tasks CASCADE")
@@ -152,6 +155,8 @@ async def clean_pool(pool):
             "lesson_task_events, topic_signals, lesson_tasks, topic_lessons, "
             "topic_chapters, topics, topic_nodes, topic_generations, topic_explorations, "
             "topic_resources, "
+            "room_node_calls, room_option_picks, room_options, room_option_sets, "
+            "room_task_events, room_tasks, room_messages, room_members, rooms, "
             "claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
             "turn_outcomes, "
             "interaction_abstracts, "

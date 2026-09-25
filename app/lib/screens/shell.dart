@@ -10,6 +10,7 @@ import 'modes_screen.dart';
 import 'sandbox_screen.dart';
 import 'settings_screen.dart';
 import 'thinking_style_screen.dart';
+import '../room/rooms_root.dart';
 import '../topic/topics_root.dart';
 
 class _Destination {
@@ -44,7 +45,9 @@ class Shell extends StatelessWidget {
         const HomeScreen(),
         shell.inSandbox
             ? const SandboxScreen()
-            : (shell.inTopics ? const TopicsRoot() : const ModesScreen()),
+            : shell.inTopics
+                ? const TopicsRoot()
+                : (shell.inRooms ? const RoomsRoot() : const ModesScreen()),
         const HistoryScreen(),
         const ThinkingStyleScreen(),
         const SettingsScreen(),

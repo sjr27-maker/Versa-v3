@@ -98,7 +98,37 @@ _DEFAULT_PATH_REQUIREMENT = json.dumps(
 )
 
 
-_DEFAULT_RESPONSES: dict[str, str] = {
+def _stub_room_director(prompt: str) -> str:
+    """rooms.RoomDirector on the stub: welcome and give a task to whoever
+    created or joined the room, answer whoever talks to Versa or clicks an
+    option, and otherwise stay quiet -- so `versa serve --stub` shows a room
+    behaving roughly like the real thing (see rooms/nodes.py for the events)."""
+    actions: list[dict] = []
+    for line in prompt.splitlines():
+        if not line.startswith("EVENT: "):
+            continue
+        event = line[len("EVENT: "):]
+        name = event.split(" ", 1)[0]
+        if " just created this room" in event or " just joined the room" in event:
+            actions.append({"type": "say", "to": "all", "kind": "chat",
+                            "text": f"Welcome, {name}! (stub) Let's learn this together."})
+            actions.append({"type": "task", "to": name, "task_kind": "learn",
+                            "description": "Say in your own words what you already know about the topic."})
+        elif " clicked the option " in event:
+            actions.append({"type": "say", "to": name, "kind": "chat",
+                            "text": f"Good pick, {name}. (stub)"})
+        elif "talking to YOU directly" in event:
+            actions.append({"type": "say", "to": "all", "kind": "content",
+                            "text": f"(stub) Here's a short explanation for {name}. A real model "
+                                    "would teach the topic here."})
+            actions.append({"type": "options", "to": name, "prompt": "Where next?",
+                            "options": ["An example", "A quick quiz", "The next part"]})
+    return json.dumps({"reason": "stub", "actions": actions[:3]})
+
+
+_DEFAULT_RESPONSES: dict[str, CannedResponse] = {
+    # rooms.RoomDirector: reacts to the events in the prompt (see above).
+    "ROOM:DIRECT": _stub_room_director,
     # StageDirector (stage.py): a tiny generic skit in the JSON Lines format,
     # so `versa serve --stub` still shows the stage performing.
     "STAGE:DIRECT": "\n".join(
@@ -321,7 +351,7 @@ class StubLLMClient:
                 return response(prompt) if callable(response) else response
         for prefix, response in _DEFAULT_RESPONSES.items():
             if prompt.startswith(prefix):
-                return response
+                return response(prompt) if callable(response) else response
         return "[stub llm response]"
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
@@ -640,6 +670,38 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
     # each can be forwarded as soon as it is complete. JSON mode would force
     # a single JSON value, so this must be free text.
     "STAGE:DIRECT": _FREE_TEXT,
+    # rooms.RoomDirector. One flat action shape: which fields matter depends
+    # on `type` (rooms/nodes.py parse_actions validates each).
+    "ROOM:DIRECT": {
+        "type": "OBJECT",
+        "properties": {
+            "reason": {"type": "STRING"},
+            "actions": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "type": {"type": "STRING", "enum": ["say", "options", "task", "complete_task"]},
+                        "to": {"type": "STRING"},
+                        "private": {"type": "BOOLEAN", "nullable": True},
+                        "kind": {"type": "STRING", "enum": ["chat", "content", "question"], "nullable": True},
+                        "text": {"type": "STRING", "nullable": True},
+                        "prompt": {"type": "STRING", "nullable": True},
+                        "options": {"type": "ARRAY", "items": {"type": "STRING"}, "nullable": True},
+                        "task_kind": {
+                            "type": "STRING",
+                            "enum": ["learn", "practice", "apply", "check", "discuss"],
+                            "nullable": True,
+                        },
+                        "description": {"type": "STRING", "nullable": True},
+                        "evidence": {"type": "STRING", "nullable": True},
+                    },
+                    "required": ["type", "to"],
+                },
+            },
+        },
+        "required": ["reason", "actions"],
+    },
     "CONFIRM:FACT_MATCH": {
         "type": "OBJECT",
         "properties": {"resolves": {"type": "BOOLEAN"}},

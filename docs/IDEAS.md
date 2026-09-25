@@ -200,7 +200,7 @@ Design is placeholder, not a spec.
 |---|---|
 | **Learn a topic** (upload syllabus, search & select, completion %) | `done` 2026-09-25 — see the decisions log (backend `topics.py`/`resources.py`, app `app/lib/topic/`). A plain course outline with progress derived from task events; no learner model on top (invariant 4). |
 | **Exam preparation** (plan, quizzes, mock tests, weakness map, readiness) | Quiz/flashcard generation, spaced repetition, grading; a notion of exam date and syllabus. Nothing exists yet. |
-| **Study with others** | Multi-user rooms, matching, moderation, voice/text. Backend has no users/auth today, only a learner label. |
+| **Study with others** | `experimental` 2026-09-25 on branch `experiment/rooms` -- see the decisions log (backend `src/versa/rooms/`, app `app/lib/room/`, export `scripts/export_rooms.py`). Still parked: matching, moderation, voice, logins, media. |
 | **Animations beside the chat** | `in progress` 2026-09-24: the character engine is built (see decisions log). Still missing: the LLM step that writes a script for whatever the chat is about. |
 | **Home feed / recommendations** | **Built 2026-09-24** (see decisions log): one LLM call over the learner's own chats and facts, cached 6 h. No topic model needed. |
 | **Thinking-style page** | `done` 2026-09-24 (see decisions log). Was: can be built on `claims.py` / `thinking_style_candidates`, but only shows what the system can actually support. Under the current confidence clamp no claim reaches "promoted". Mock-up findings (retention, time-of-day, …) are **not** measured by anything. |
@@ -337,6 +337,64 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-09-25** — Study with others, EXPERIMENTAL, on its own branch
+  (`experiment/rooms`) so it can be exported as the start of a separate
+  project. Your design: a WhatsApp-style group chat with, above it, a
+  shared box for animations/tasks/questions and a per-person box for
+  clickable options and tasks; Versa is one more member who watches
+  everything and talks to everyone or to one person as the context calls
+  for; one person creates the room with a topic and a room code and
+  invites the others; a name + a room code is enough (no logins).
+  - *Backend* (`src/versa/rooms/`, migration `rooms_001_rooms.sql`, named
+    outside the core numbering so it never collides with main): rooms,
+    members (a name inside one room -- not a `learners` row), messages
+    (per-room `seq`; `to_member_id` + `private` for talking to one person),
+    tasks + task events (done = latest event), option sets + picks (open =
+    newest set per audience that the person hasn't picked from), and
+    `room_node_calls`. All insert-only -- CLAUDE.md invariant 12.
+  - *Versa's turn*: one `RoomDirector` call (`ROOM:DIRECT`, fast tier) per
+    burst of activity; messages that arrive while it runs are batched into
+    the next call. It returns 0-3 actions: say (chat / content / question,
+    to all or one, optionally private), options, task, complete_task.
+    Staying quiet is the default while people talk to each other; it must
+    reply when addressed (`@Versa`, "versa, ...") or when someone clicks
+    one of its options, and on create/join it welcomes and gives a task.
+    Every person should have exactly one open task; tasks are a queue.
+    Teaching "content" is acted out on everyone's stage (StageDirector).
+  - *Topic*: a search runs `GenerateBranches`, a PDF/link runs
+    `OutlineResource` (both reused from topics.py); the resource's first
+    12k characters are kept and 5k go into every director prompt.
+  - *Walled off*: rooms never read or write learner facts, claims,
+    thinking styles or any core table. Nothing about a person's
+    personalization leaks into a room, or back.
+  - *Live protocol* (`hub.py`): `state` on every connect (so reconnects
+    resync), `message`, `board` (members/online, everyone's tasks, this
+    person's open options), `typing`, `stage_*`. Private messages are only
+    sent to, and only returned in history for, their recipient.
+  - *App* (`app/lib/room/`): Modes -> Study with others (now LIVE) -> the
+    rooms list (last message, unread badge; memberships remembered per
+    device in SharedPreferences) -> create (name, code, topic by search /
+    PDF / link) or join (name + code) -> the room: header (title, members,
+    "X is typing…", invite code), the two top boxes (Stage · tasks ·
+    questions | For you), the group chat (names in their own colours, task
+    cards, private "Only you can see this", day separators) and the
+    composer. On a phone the top boxes become tabs.
+  - *Other devices*: `versa serve --host 0.0.0.0` (it now prints the LAN
+    address) with the web build; others open that address. Unauthenticated
+    -- trusted networks only.
+  - *Export*: `uv run python scripts/export_rooms.py <new-dir> --package
+    <name>` writes a standalone starter (rooms backend + the core slice it
+    uses + generated server/CLI, the Flutter room screens + stage + small
+    shell stand-ins). Checked: the export installs, its tests pass, it
+    migrates and serves a room end to end on the stub, and its app builds
+    for web.
+  - *Parked for later*: logins/identity (anyone who knows a name + code
+    can speak as that name), matching strangers, moderation, voice, images
+    and files in chat, reply-to/quote, read receipts, Versa DMs as a
+    separate thread, a per-room model-cost cap, leaving a room / member
+    removal (needs tombstone semantics under invariant 12), and evaluating
+    how often Versa speaks against real group sessions.
 
 - **2026-09-25** — Built "show options first, remember second (oh
   wait…)", with the stage slime as its comic beat. The memory pre-check

@@ -5,8 +5,8 @@ import '../app_state.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
-/// The four ways to use Versa. Sandbox and Learn a topic are live; the others
-/// are visible placeholders that say so.
+/// The four ways to use Versa. Sandbox, Learn a topic and Study with others
+/// (experimental) are live; Exam preparation is a placeholder that says so.
 class ModesScreen extends StatelessWidget {
   const ModesScreen({super.key});
 
@@ -70,9 +70,10 @@ class ModesScreen extends StatelessWidget {
                       cardKey: 'mode-study',
                       icon: Icons.groups_outlined,
                       title: 'Study with others',
-                      blurb: 'Learn together with friends or matched peers.',
-                      live: false,
-                      onTap: () => notBuilt('Study with others'),
+                      blurb: 'A group chat for a topic: invite people with a room code, and Versa '
+                          'joins as one more member -- a task for each of you, help when it counts.',
+                      live: true,
+                      onTap: shell.openRooms,
                     ),
                   ],
                 );

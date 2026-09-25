@@ -364,6 +364,19 @@ async def _compare_portraits(question: str | None, use_stub: bool) -> None:
         await pool.close()
 
 
+def _lan_address() -> str | None:
+    """This machine's address on its local network (the interface outbound
+    traffic would use; nothing is sent), for `serve --host 0.0.0.0`."""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            return s.getsockname()[0]
+    except OSError:
+        return None
+
+
 async def _serve(host: str, port: int, use_stub: bool, web_dir: str | None) -> None:
     """`versa serve` -- the HTTP/WebSocket API the Versa app talks to (server.py),
     plus the built Flutter web app at "/" if `app/build/web` exists."""
@@ -396,6 +409,10 @@ async def _serve(host: str, port: int, use_stub: bool, web_dir: str | None) -> N
               f"({'stub LLM' if use_stub else 'live Gemini'})")
         if resolved_web.is_dir():
             print(f"versa: web app  http://{shown_host}:{port}/   (serving {resolved_web})")
+            lan = _lan_address() if host == "0.0.0.0" else None
+            if lan:
+                # Study rooms (rooms/): other devices on this network join here.
+                print(f"versa: on your network  http://{lan}:{port}/   (no auth -- trusted networks only)")
         else:
             print(f"versa: no web build at {resolved_web} -- build it with "
                   "`cd app && flutter build web`, or run the app with `flutter run -d edge`")
@@ -429,7 +446,8 @@ def main() -> None:
         "built web app at / if app/build/web exists)",
     )
     serve_parser.add_argument("--host", default="127.0.0.1",
-                              help="bind address (default 127.0.0.1 -- local only, no auth)")
+                              help="bind address (default 127.0.0.1 -- local only, no auth; "
+                              "0.0.0.0 lets other devices on your network in, e.g. for study rooms)")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument("--stub", action="store_true",
                               help="StubLLMClient/StubEmbeddingClient: no key, no cost")
