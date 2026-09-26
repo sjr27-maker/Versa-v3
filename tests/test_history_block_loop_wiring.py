@@ -74,7 +74,7 @@ async def test_a_later_turn_gets_a_nonempty_history_block_from_an_earlier_one(
     block = call1.input_json["learner_history_block"]
     assert block != ""
     assert "what is a derivative?" in block
-    assert "Never mention or reference it directly" in block
+    assert "Never bring it up unprompted" in block
 
     diag = await diagnostics_store.get_for_turn(session_id, 1)
     assert diag.history_block_used is True

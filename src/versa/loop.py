@@ -1526,6 +1526,14 @@ class SessionLoop:
             # not left dangling: an un-offered branch would otherwise
             # sit in 'open' status forever, since only a click can move
             # it to matched/superseded and it was never shown to click.
+            # Recorded, not silent: a live run lost the one reading the
+            # student had picked in an earlier chat this way, and only
+            # node_calls showed it.
+            warnings.append(
+                f"options_dropped_readings: {len(branches) - len(proposals)} of "
+                f"{len(branches)} readings not offered "
+                f"(kind={getattr(option_set.kind, 'value', option_set.kind)})"
+            )
             used_branch_ids = [p.branch_id for p in proposals]
             await self._disambiguation.supersede_open_branches(
                 disamb_turn.id, exclude_ids=used_branch_ids

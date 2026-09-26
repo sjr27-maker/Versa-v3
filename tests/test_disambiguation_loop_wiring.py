@@ -344,3 +344,44 @@ async def test_typed_past_options_supersedes_them_and_threads_context_into_next_
 
     diag = await diagnostics_store.get_for_turn(session_id, 1)
     assert any("disambiguation_typed_past" in w for w in diag.warnings)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_options_dropping_a_reading_is_recorded_as_a_warning(
+    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
+    diagnostics_store,
+):
+    """A reading AssessAndBranch produced but DisambiguationOptions didn't
+    offer used to vanish silently (superseded, visible only in node_calls).
+    It must show up in the turn's diagnostics."""
+    session_id = await transcript.create_session(learner_id)
+    three = json.dumps({"needs_branches": True, "branches": [
+        {"statement": "wants a refresher on calculus derivative rules"},
+        {"statement": "wants help with one specific calculus problem"},
+        {"statement": "means financial derivatives like options and futures"},
+    ]})
+
+    class _DropsOne(StubLLMClient):
+        async def complete(self, prompt: str) -> str:
+            if prompt.startswith("DISAMBIGUATE:OPTIONS"):
+                self.prompts.append(prompt)
+                latest = await disambiguation_store.get_latest_turn(session_id)
+                b = await disambiguation_store.list_branches_for_turn(latest.id)
+                return json.dumps({"kind": "approach", "axis": "concrete_general", "options": [
+                    {"branch_id": str(b[1].id), "text": "Work one specific problem?", "side": "first"},
+                    {"branch_id": str(b[0].id), "text": "Review the general rules?", "side": "second"},
+                ]})
+            return await super().complete(prompt)
+
+    loop = _make_loop(
+        transcript, node_calls, disambiguation_store,
+        llm=_DropsOne(canned={"ASSESS:BRANCH": three}), diagnostics_store=diagnostics_store,
+    )
+    await loop.handle_turn(session_id, 0, "can you help me with derivatives again?")
+
+    diag = await diagnostics_store.get_for_turn(session_id, 0)
+    dropped = [w for w in diag.warnings if w.startswith("options_dropped_readings")]
+    assert dropped == ["options_dropped_readings: 1 of 3 readings not offered (kind=approach)"]
+    turn = await disambiguation_store.get_latest_turn(session_id)
+    statuses = {b.statement: b.status for b in await disambiguation_store.list_branches_for_turn(turn.id)}
+    assert statuses["means financial derivatives like options and futures"] is BranchStatus.SUPERSEDED

@@ -401,6 +401,20 @@ def _options_prompt(
             "student would find genuinely ambiguous, not to assume "
             "anything about the current subject matter itself.\n"
         )
+    past_block = ""
+    if learner_history_block:
+        # Wrapped, not placed raw: the block's own header is written for
+        # FinalAnswer. Here the danger is different -- a live run
+        # (docs/verification-runs/cross_session_20260926.md) had a PAST
+        # chat "settle" today's topic, so an approach-kind set silently
+        # dropped the very reading the student had picked last time.
+        past_block = (
+            f"\nThe {d.actor_noun}'s PAST, from earlier chats -- use it only "
+            "to phrase options in terms they will recognise. It does NOT "
+            "settle what the current message is about: a topic chosen in "
+            "an earlier chat may or may not be the one meant now.\n"
+            f"{learner_history_block}\n"
+        )
     correction = ""
     if rejected_reason:
         correction = f"\nYour previous attempt was rejected: {rejected_reason}.\n"
@@ -410,23 +424,26 @@ def _options_prompt(
         f"{claim_constraints_block}"
         f"{context_block}"
         f"{thinking_style_block}"
-        f"{learner_history_block}"
+        f"{past_block}"
         f"\n{d.actor_noun.capitalize()}'s message: {message}\n\n"
         f"These are the candidate distinct readings of that message:\n{listing}\n\n"
-        "FIRST, decide which kind of ambiguity is actually live here:\n"
+        "FIRST, decide which kind of ambiguity is actually live here. "
+        "Only the recent conversation and known references above can "
+        "settle a topic -- the past chats cannot:\n"
         '- "subject": the readings genuinely disagree about WHAT TOPIC '
         "or subject the message concerns, and that has not already been "
-        "settled by the context above.\n"
-        '- "approach": the topic is already clear -- from the context '
-        "above, or because the readings don't actually name different "
-        "topics -- and the real choice is about HOW to address it, not "
-        "what it's about.\n\n"
+        "settled by the recent conversation or known references.\n"
+        '- "approach": the topic is already clear -- from the recent '
+        "conversation or known references, or because the readings don't "
+        "actually name different topics -- and the real choice is about "
+        "HOW to address it, not what it's about.\n\n"
         'IF "subject": produce one clickable option per reading that is '
         "genuinely about a different topic -- between "
         f"{_MIN_BRANCHES} and {hi} options total, each mapped to exactly "
         f"ONE of the branch ids above, phrased as {d.options_style_phrase}. "
-        "Leave out any reading for a topic the context above has already "
-        "ruled out, even if it's in the candidate list.\n\n"
+        "Leave out any reading for a topic the recent conversation or "
+        "known references have already ruled out, even if it's in the "
+        "candidate list.\n\n"
         'IF "approach": discard every reading that names a different '
         "topic than the one already established, even if it's in the "
         "candidate list above -- do not build an option from it. From "
@@ -866,6 +883,16 @@ class FinalAnswer:
             "partition the response into steps or add headers/numbered "
             "lists unless the content genuinely requires that "
             "structure.\n"
+            # A live run had a learner with no history ask "last time we
+            # talked about X -- which did we pick?" and get a confident,
+            # invented account of a conversation that never happened.
+            f"If the {d.actor_noun} asks what was said or decided in an "
+            "earlier conversation, answer only from what is shown above. If "
+            "it isn't shown, you have no record of it: say so plainly, then "
+            "offer to work it out now -- never invent what was said or "
+            "decided, never write what \"we\" chose, even when a reading "
+            "they clicked names the topic. Don't bring this up when they "
+            "aren't asking about the past.\n"
             f"{d.final_answer_closing_line}"
             "Respond with plain prose only -- never wrap your answer in "
             "JSON or any other structured/markup format."

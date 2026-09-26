@@ -149,7 +149,9 @@ def test_block_carries_the_do_not_narrate_instruction():
         given_excerpt="an excerpt.",
     )
     block = render_history_block([item])
-    assert "Never mention or reference it directly" in block
+    assert "Never bring it up unprompted" in block
+    # ...but a student who asks about an earlier chat gets an answer from it
+    assert "if they ask about an earlier conversation themselves" in block
 
 
 def test_block_truncates_to_config_cap():

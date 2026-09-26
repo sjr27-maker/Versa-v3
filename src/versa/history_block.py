@@ -61,7 +61,7 @@ from versa.domain_config import Domain
 from versa.retrieval import RetrievalContext, retrieve
 from versa.retrieval_config import RetrievalConfig
 
-TEMPLATE_VERSION = "history-block-v1"
+TEMPLATE_VERSION = "history-block-v2"
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -211,10 +211,11 @@ def render_history_block(
         "and a broader pattern across other learners. Use it only to set "
         "assumed prior knowledge, vocabulary, depth, and what can be "
         "skipped rather than re-explained -- it is background, not content "
-        "to answer from. Never mention or reference it directly (no "
-        "\"last time you asked about...\", no \"as you may recall\"): a "
-        "tutor who remembers shows it in what gets skipped and assumed, "
-        "not by announcing it.\n\n"
+        "to answer from. Never bring it up unprompted (no \"last time you "
+        "asked about...\", no \"as you may recall\"): a tutor who "
+        "remembers shows it in what gets skipped and assumed, not by "
+        "announcing it. The one exception: if they ask about an earlier "
+        "conversation themselves, answer from what is here.\n\n"
         f"{body}\n"
     )
     if len(block) > cfg.max_block_chars:

@@ -494,3 +494,39 @@ async def test_final_answer_with_no_recent_history_omits_the_history_block():
     node = FinalAnswer(llm)
     await node.run("what's the derivative of x^2?", recent_history="")
     assert "Recent conversation" not in llm.prompts[-1]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_options_past_history_is_framed_as_not_settling_the_topic():
+    """Live run (docs/verification-runs/cross_session_20260926.md): a PAST
+    chat settled today's topic, so an approach-kind set dropped the reading
+    the student had picked last time. The past must be framed as phrasing
+    context only, and settling must be limited to the live conversation."""
+    branches = [_branch("calculus derivatives"), _branch("financial derivatives")]
+
+    def _respond(_prompt: str) -> str:
+        return _subject_response(
+            [(branches[0], "Calculus derivatives?"), (branches[1], "Financial derivatives?")]
+        )
+
+    llm = StubLLMClient(canned={"DISAMBIGUATE:OPTIONS": _respond})
+    await DisambiguationOptions(llm).run(
+        branches, message="derivatives again?",
+        learner_history_block="\nEarlier today they asked about calculus.\n",
+    )
+    prompt = llm.prompts[-1]
+    assert "It does NOT settle what the current message is about" in prompt
+    assert prompt.index("does NOT settle") < prompt.index("Earlier today they asked")
+    assert "Only the recent conversation and known references above can settle" in prompt
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_final_answer_is_told_not_to_invent_past_conversations():
+    """Live run: a learner with no history asked "last time ... which did
+    we pick?" and got an invented account of a conversation that never
+    happened."""
+    llm = StubLLMClient(canned={"FINAL:ANSWER": "answer"})
+    await FinalAnswer(llm).run("Last time we talked about orders - which did we pick?")
+    prompt = llm.prompts[-1]
+    assert "you have no record of it: say so plainly" in prompt
+    assert "never invent what was said or decided" in prompt
