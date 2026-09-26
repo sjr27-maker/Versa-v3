@@ -68,6 +68,7 @@ A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`)
 - **Population patterns** (`population_patterns.py`) — clusters interaction abstracts across many learners, surfacing only patterns backed by ≥20 distinct learners with no single learner dominating.
 - **Domain switch** (`domain_config.py`) — a prompts-only knob (`education` vs `general`) for testing whether the architecture is genuinely domain-independent.
 - **Reference bindings & stated preferences** (`reference_bindings.py`, in `interactions.py`) — exact-match memory of a learner's recurring phrases and explicitly stated preferences, threaded into the prompt.
+- **Exam preparation** (`exams.py`) — the third live app mode. An exam is a title, an optional date and syllabus units, built from a search, a PDF or link, or one of the learner's courses. The student takes a 5-question quiz per unit (retakes ask new questions) and timed mock tests across every unit; multiple choice is marked exactly and short answers by one grading call. Scores are derived from stored answers, never stored themselves, and exam prep is walled off from the personal learner model (invariant 13).
 - **Learn a topic** (`topics.py`, `resources.py`) — the second live app mode. A keyword search, an uploaded PDF or a web link becomes a tree of branches the student can expand and tick; ticked branches become a course of chapters and lessons, each lesson a list of tasks ending in end-of-lesson questions. A lesson chat is an ordinary session run through the same loop, with the lesson's context added to the ambiguity check and the answer, and a background `JudgeLessonProgress` step that marks tasks done (progress is derived from those append-only events, never stored). What the system knows about the learner (thinking style, confirmed claims, stated preference, related past chats, sliders, other courses) shapes the branches, the lesson plans and the tutoring; what the student searches, expands, picks or skips, and how lessons go, is logged to `topic_signals` as episodic evidence. A plain course outline, not a learner model (invariant 4).
 
 Every entry point builds the loop through the single assembly point `session_builder.build_session_loop`, so no two entry points can silently diverge in which stores they wire in. `versa chat` and `versa serve` (the API the app talks to) both build their loop through it.
@@ -271,6 +272,7 @@ src/versa/
   model_config.py        # Gemini tier→model mapping
   llm.py, embeddings.py  # Gemini + stub clients
   topics.py              # Learn a topic: explore -> course -> lessons, progress
+  exams.py               # Exam prep: syllabus units, unit quizzes, timed mocks
   resources.py           # PDF / web-link reading (SSRF-guarded) for Learn a topic
   migrations/*.sql        # 73 ordered schema migrations
 tests/                    # pytest suite (stub-backed, no external calls)

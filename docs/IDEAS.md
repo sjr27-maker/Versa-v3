@@ -199,7 +199,7 @@ Design is placeholder, not a spec.
 | Surface | What it would need (backend) |
 |---|---|
 | **Learn a topic** (upload syllabus, search & select, completion %) | `done` 2026-09-25 — see the decisions log (backend `topics.py`/`resources.py`, app `app/lib/topic/`). A plain course outline with progress derived from task events; no learner model on top (invariant 4). |
-| **Exam preparation** (plan, quizzes, mock tests, weakness map, readiness) | Quiz/flashcard generation, spaced repetition, grading; a notion of exam date and syllabus. Nothing exists yet. |
+| **Exam preparation** (plan, quizzes, mock tests, weakness map, readiness) | `done` 2026-09-26 (first version) -- see the decisions log. Built: setup from a search / PDF / link / existing course, a quiz per unit, timed mock tests. Study plan added the same day. Not built: weakness map, readiness %. |
 | **Study with others** | `experimental` 2026-09-25 on branch `experiment/rooms` -- see the decisions log (backend `src/versa/rooms/`, app `app/lib/room/`, export `scripts/export_rooms.py`). Still parked: matching, moderation, voice, logins, media. |
 | **Animations beside the chat** | `in progress` 2026-09-24: the character engine is built (see decisions log). Still missing: the LLM step that writes a script for whatever the chat is about. |
 | **Home feed / recommendations** | **Built 2026-09-24** (see decisions log): one LLM call over the learner's own chats and facts, cached 6 h. No topic model needed. |
@@ -337,6 +337,81 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-09-26** — Exam prep: study plan (migration 076, `exams.py`,
+  app `exam/plan_widgets.dart`). Your words: "add a study plan feature under
+  it".
+  - *Schedule (no model call, deterministic):* from today to the day before
+    the exam. The first ~70% of days cover the units in order, each with
+    "revise" + "quiz"; learning days with no new unit get "quiz your weakest
+    unit" (spaced practice). The rest is review: a mock the day before the
+    exam and one every 7 days back from it, "weakest unit" otherwise. Fewer
+    than 4 days: everything compressed, mock on the last day.
+  - *Done is derived, never stored:* a handed-in unit quiz ticks that unit's
+    earliest open quiz item (else the earliest "weakest" item); a mock ticks
+    the earliest mock item; early work counts. "Revise" is ticked by hand.
+    Hand ticks are events, latest wins. Re-planning writes a new plan.
+  - *"Weakest unit" is decided on the day:* from the scores at that point,
+    among units the plan has already covered by then (untested first, then
+    lowest last score). Found live: resolving it for every future day at
+    once showed the same unit everywhere, including before it was revised.
+  - *App:* a Study plan card on the exam page (today, catch-up, Start quiz /
+    Start mock, re-plan with a confirm) and a full day-by-day plan. An exam
+    with no date asks for one first.
+
+- **2026-09-26** — Exam preparation, first version (`exams.py`, migration
+  075, app `app/lib/exam/`; CLAUDE.md invariant 13). Your choices: set up
+  from a search, PDF or link *or* an existing course; quizzes per unit and
+  mock tests; results walled off from the learner model.
+  - *Setup:* an exam is a title, an optional date and 4-10 syllabus units.
+    Search/PDF/link -> one `ExamSyllabus` call (the resource is stored in
+    `topic_resources`, like Learn a topic). A course -> its chapters become
+    the units, their lessons feed question writing; no model call.
+  - *Sittings:* a unit quiz is 5 fresh questions (`WriteQuestions`, mostly
+    multiple choice, ~1 in 4 short answer, told what was already asked on
+    that unit so retakes differ). A mock takes 2 per unit (max 20), written
+    in parallel, timed at 75 s per choice + 150 s per short question. A
+    quiz is one sitting; a retake is a new quiz. Answers never reach the
+    client before hand-in.
+  - *Marking:* choice exactly; short answers in one `GradeAnswers` call
+    ("essential point, any wording"; the student's text is never followed
+    as instructions -- checked live with an injection attempt). If grading
+    fails, those answers are "couldn't be graded" and left out of the
+    score, never marked wrong. Over time = handed in > 20 s past the limit.
+  - *Clock:* the server says how many seconds are left; the app counts down
+    against the wall clock (browsers throttle timers in background tabs)
+    and hands in by itself at 0.
+  - *Walled off:* nothing reads or writes learner facts, claims or
+    thinking styles. Every model call is in `exam_generations`.
+  - *Verified live (real Gemini):* 7 units for "GCSE chemistry: atomic
+    structure and bonding" in 3.5 s; a 5-question quiz in 6 s with the
+    right option in varying positions; grading in 2 s; a 14-question mock
+    across all 7 units in 3.6 s.
+  - *Not built yet:* study plan to the date, weakness map, readiness %,
+    exams in History.
+
+- **2026-09-26** — First real-model cross-session check
+  (`scripts/cross_session_check.py`; reports in `docs/verification-runs/
+  cross_session_20260926*.md`). Dev DB wiped first (backup:
+  `../Versa-v3-backups/versa_dev_before_wipe_20260926.dump`). Stated
+  preference, history block and "what did we pick last time" all carry
+  into a new chat. Two bugs found and fixed:
+  (1) *Options dropped the reading the student picked last time.* The
+  options prompt let the learner's PAST chats "settle" today's topic, so
+  an approach-kind set discarded the financial-derivatives reading. The
+  past is now wrapped as phrasing-only context; only the recent
+  conversation and known references can settle a topic. A dropped reading
+  now also leaves an `options_dropped_readings` warning in
+  `turn_diagnostics` instead of vanishing silently.
+  (2) *FinalAnswer invented past conversations* ("We chose PostgreSQL…"
+  for a learner with no history). New rule: answer questions about the
+  past only from what the prompt shows, otherwise say there's no record.
+  The history block's "never mention it" line now allows answering when
+  the student asks (`history-block-v2`). Replayed live 3× per case: no
+  invention, no stray disclaimers, the real memory case still answers.
+  Still open from the same run: "derivatives again" missed memory at 0.70
+  similarity (threshold 0.72); "short *and* analogies" was stored as
+  brevity only; "my project" doesn't match the "the bakery app" binding.
 
 - **2026-09-25** — Study with others, EXPERIMENTAL, on its own branch
   (`experiment/rooms`) so it can be exported as the start of a separate

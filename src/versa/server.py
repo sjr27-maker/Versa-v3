@@ -17,6 +17,10 @@ transport:
     Learn a topic (topics.py): /api/topic-explorations[/from-link|/from-pdf],
     /api/topic-nodes/{id}/expand, /api/topics, /api/learners/{id}/topics,
     /api/topics/{id}, /api/lessons/{id}[/start]
+    Exam prep (exams.py): /api/exams[/from-link|/from-pdf|/from-course],
+    /api/learners/{id}/exams, /api/exams/{id}, /api/exams/{id}/mock,
+    /api/exam-units/{id}/quiz, /api/exam-quizzes/{id}[/submit],
+    /api/exams/{id}/plan (GET, POST), /api/exam-plan-items/{id}/done
     Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
     /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
     WS   /api/sessions/{id}/chat           one chat, one turn at a time
@@ -101,6 +105,7 @@ from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient
 from versa.feed import build_feed_router
+from versa.exams import build_exams_router
 from versa.topics import build_topics_router
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients
@@ -1101,6 +1106,10 @@ def create_app(
     app.include_router(build_topics_router(
         pool, tiers.fast, loop._embedding_client, ablation_config=loop.ablation_config,
     ))
+    # Exam preparation (exams.py): syllabus units, unit quizzes, mock tests.
+    exams_router = build_exams_router(pool, tiers.fast)
+    app.state.exam_service = exams_router.exam_service
+    app.include_router(exams_router)
     # Rooms (experimental, rooms/): group study chats with Versa as a member.
     room_hub = RoomHub(pool, tiers.fast)
     app.state.room_hub = room_hub

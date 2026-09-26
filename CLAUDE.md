@@ -359,3 +359,36 @@ update rows. Concretely:
 Why: a room is a record of how a group learned together -- what Versa
 chose to say, to whom, privately or not, and why. Editing or pruning it
 would make that unreadable later, exactly as for every other store.
+
+### 13. Exam preparation is append-only
+
+The exam tables (`exams`, `exam_units`, `exam_generations`,
+`exam_quizzes`, `exam_questions`, `exam_submissions`, `exam_answers`,
+`exam_plans`, `exam_plan_items`, `exam_plan_item_events` -- migrations
+`075_exams.sql` and `076_exam_plans.sql`, code in `src/versa/exams.py`) must never
+delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `ExamStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `exams.py` or its migration.
+- A quiz is one sitting: a retake is a new quiz, never an edit of an old
+  one, and a quiz is handed in at most once (`exam_submissions.quiz_id`
+  is UNIQUE). Scores are never stored -- they are derived from
+  `exam_answers`.
+- Re-planning writes a new study plan (the latest is the plan). Whether a
+  plan item is done is never stored: quizzes/mocks are matched to
+  handed-in sittings, and ticks are `exam_plan_item_events`, latest wins.
+- Every model call (syllabus, questions, grading) is recorded to
+  `exam_generations` with its full input (incl. the prompt) and output or
+  error -- invariant 2's payload in exam prep's own table, since there is
+  no `sessions` row (same precedent as `topic_generations`).
+- Walled off from the personal learner model (decided 2026-09-26):
+  nothing in `exams.py` reads or writes learner facts, claims or thinking
+  styles. Results are episodic evidence only, until the claims layer has a
+  guard against counting its own nudges as evidence.
+- Verified by `tests/test_exams_append_only.py`, the same AST-based check
+  used for invariants 1, 4, 6-12.
+
+Why: a student's exam history -- what they were asked, what they
+answered, what was marked right -- is the record a later weakness map or
+readiness estimate would be derived from. If an attempt could be edited
+or pruned, any number computed from it later stops meaning anything.

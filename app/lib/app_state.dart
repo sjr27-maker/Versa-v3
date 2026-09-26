@@ -166,6 +166,7 @@ class ShellState extends ChangeNotifier {
     inSandbox = true;
     inTopics = false;
     inRooms = false;
+    inExams = false;
     if (sandbox == null) {
       sandbox = _chatFactory(app)..start();
       _wireSandbox(sandbox!);
@@ -248,6 +249,7 @@ class ShellState extends ChangeNotifier {
     inSandbox = false;
     inTopics = true;
     inRooms = false;
+    inExams = false;
     notifyListeners();
   }
 
@@ -277,11 +279,31 @@ class ShellState extends ChangeNotifier {
     inSandbox = false;
     inTopics = false;
     inRooms = true;
+    inExams = false;
     notifyListeners();
   }
 
   void closeRooms() {
     inRooms = false;
+    notifyListeners();
+  }
+
+  // ------------------------------------------------ Exam preparation
+
+  /// The exam screens (exam/) are showing in the Modes tab.
+  bool inExams = false;
+
+  void openExams() {
+    tab = tabModes;
+    inSandbox = false;
+    inTopics = false;
+    inRooms = false;
+    inExams = true;
+    notifyListeners();
+  }
+
+  void closeExams() {
+    inExams = false;
     notifyListeners();
   }
 
@@ -297,6 +319,7 @@ class ShellState extends ChangeNotifier {
     inSandbox = false;
     inTopics = false;
     inRooms = false;
+    inExams = false;
     pendingLessonId = null;
     tab = tabHome;
     sandboxHistory.clear();

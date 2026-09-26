@@ -285,6 +285,38 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
             ]
         }
     ),
+    # exams.py (Exam preparation). Well-formed, so set up -> quiz -> mock ->
+    # hand in runs end to end on the stub. The first choice is always right.
+    "EXAM:SYLLABUS": json.dumps(
+        {
+            "units": [
+                {"title": "Foundations", "summary": "The core definitions an exam will expect you to know."},
+                {"title": "Key mechanisms", "summary": "How the main processes work, step by step."},
+                {"title": "Applications", "summary": "Using the ideas on unfamiliar problems."},
+                {"title": "Common pitfalls", "summary": "The mistakes examiners look for."},
+            ]
+        }
+    ),
+    "EXAM:QUESTIONS": json.dumps(
+        {
+            "questions": [
+                *(
+                    {"kind": "choice", "prompt": f"Stub question {i}: which statement is correct?",
+                     "choices": ["The right one", "A wrong one", "Another wrong one", "Not this"],
+                     "correct_index": 0, "explanation": "Because the first statement is the right one."}
+                    for i in (1, 2, 3, 4)
+                ),
+                {"kind": "short", "prompt": "Stub question 5: explain the idea in one sentence.",
+                 "answer": "The idea, stated in one sentence.",
+                 "explanation": "A good answer states the idea itself."},
+            ]
+        }
+    ),
+    # Grades every short answer correct (the stub can't read them).
+    "EXAM:GRADE": lambda prompt: json.dumps(
+        {"grades": [{"index": i, "correct": True, "feedback": "Stub: looks right."}
+                    for i in range(prompt.count("Student's answer:"))]}
+    ),
     # Conservative: never completes a task unless a test opts in.
     "LESSON:JUDGE": json.dumps(
         {"completed": False, "evidence": "", "drifted": False, "check_passed": None}
@@ -875,6 +907,44 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
             },
         },
         "required": ["lessons"],
+    },
+    "EXAM:SYLLABUS": {
+        "type": "OBJECT",
+        "properties": {"units": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {"title": {"type": "STRING"}, "summary": {"type": "STRING"}},
+            "required": ["title", "summary"],
+        }}},
+        "required": ["units"],
+    },
+    "EXAM:QUESTIONS": {
+        "type": "OBJECT",
+        "properties": {"questions": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "kind": {"type": "STRING", "enum": ["choice", "short"]},
+                "prompt": {"type": "STRING"},
+                "choices": {"type": "ARRAY", "items": {"type": "STRING"}},
+                "correct_index": {"type": "INTEGER", "nullable": True},
+                "answer": {"type": "STRING", "nullable": True},
+                "explanation": {"type": "STRING"},
+            },
+            "required": ["kind", "prompt", "explanation"],
+        }}},
+        "required": ["questions"],
+    },
+    "EXAM:GRADE": {
+        "type": "OBJECT",
+        "properties": {"grades": {"type": "ARRAY", "items": {
+            "type": "OBJECT",
+            "properties": {
+                "index": {"type": "INTEGER"},
+                "correct": {"type": "BOOLEAN"},
+                "feedback": {"type": "STRING"},
+            },
+            "required": ["index", "correct", "feedback"],
+        }}},
+        "required": ["grades"],
     },
     "LESSON:JUDGE": {
         "type": "OBJECT",

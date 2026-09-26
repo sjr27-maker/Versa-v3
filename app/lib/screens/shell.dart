@@ -10,6 +10,7 @@ import 'modes_screen.dart';
 import 'sandbox_screen.dart';
 import 'settings_screen.dart';
 import 'thinking_style_screen.dart';
+import '../exam/exams_root.dart';
 import '../room/rooms_root.dart';
 import '../topic/topics_root.dart';
 
@@ -47,7 +48,9 @@ class Shell extends StatelessWidget {
             ? const SandboxScreen()
             : shell.inTopics
                 ? const TopicsRoot()
-                : (shell.inRooms ? const RoomsRoot() : const ModesScreen()),
+                : shell.inRooms
+                    ? const RoomsRoot()
+                    : (shell.inExams ? const ExamsRoot() : const ModesScreen()),
         const HistoryScreen(),
         const ThinkingStyleScreen(),
         const SettingsScreen(),

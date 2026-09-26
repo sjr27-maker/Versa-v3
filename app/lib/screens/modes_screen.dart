@@ -5,17 +5,14 @@ import '../app_state.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
-/// The four ways to use Versa. Sandbox, Learn a topic and Study with others
-/// (experimental) are live; Exam preparation is a placeholder that says so.
+/// The four ways to use Versa: Sandbox, Learn a topic, Exam preparation and
+/// Study with others (experimental). All four are live.
 class ModesScreen extends StatelessWidget {
   const ModesScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final shell = context.read<ShellState>();
-    void notBuilt(String name) => ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('$name isn\'t built yet. Sandbox is live.')));
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(40, 36, 40, 60),
       child: Align(
@@ -61,9 +58,10 @@ class ModesScreen extends StatelessWidget {
                       cardKey: 'mode-exam',
                       icon: Icons.fact_check_outlined,
                       title: 'Exam preparation',
-                      blurb: 'A syllabus and a date; quizzes and mock tests to prepare.',
-                      live: false,
-                      onTap: () => notBuilt('Exam preparation'),
+                      blurb: 'Search a subject, bring a PDF or link, or use one of your courses; '
+                          'take a quiz per unit and timed mock tests.',
+                      live: true,
+                      onTap: shell.openExams,
                     ),
                     _ModeCard(
                       width: width,

@@ -120,18 +120,14 @@ void main() {
       expect(find.byKey(const ValueKey('nav-Home')), findsNothing);
     });
 
-    testWidgets('Modes: Sandbox, Learn a topic and Study with others are live, Exam prep says it is coming',
-        (tester) async {
+    testWidgets('Modes: all four are live', (tester) async {
       _size(tester, 1400, 900);
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
       await tester.tap(find.byKey(const ValueKey('nav-Modes')));
       await tester.pumpAndSettle();
 
-      expect(find.text('LIVE'), findsNWidgets(3));
-      expect(find.text('COMING SOON'), findsNWidgets(1));
-      await tester.tap(find.byKey(const ValueKey('mode-exam')));
-      await tester.pump();
-      expect(find.textContaining("isn't built yet"), findsOneWidget);
+      expect(find.text('LIVE'), findsNWidgets(4));
+      expect(find.text('COMING SOON'), findsNothing);
     });
 
     testWidgets('History shows past chats and an empty state when there are none', (tester) async {
