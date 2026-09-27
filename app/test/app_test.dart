@@ -220,7 +220,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('option-o1')));
       await tester.pump(const Duration(milliseconds: 20));
-      expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1'});
+      expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1', 'directions': 'fork'});
       expect(find.text('Calculus derivatives'), findsOneWidget,
           reason: 'the chosen reading stays on its chip -- no echoed user bubble');
 
@@ -518,6 +518,104 @@ void main() {
       expect(find.byKey(const ValueKey('rewriting')), findsNothing);
     });
 
+    testWidgets('the depth x breadth pad moves both levels at once and rewrites with new directions',
+        (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'the original answer', firstOutputMs: 1, totalMs: 2));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('knob-depth')), findsNothing);
+      expect(find.byKey(const ValueKey('knob-breadth')), findsNothing);
+      final pad = find.byKey(const ValueKey('knob-pad'));
+      expect(pad, findsOneWidget);
+      Text value() => tester.widget(find.byKey(const ValueKey("[<'knob-pad'>]-value"))) as Text;
+      expect(value().data, '50 · 50');
+
+      // up-left: more rigorous, more focused
+      final rect = tester.getRect(pad);
+      await tester.tapAt(Offset(rect.left + rect.width * 0.25, rect.top + rect.height * 0.2));
+      await tester.pump();
+      expect(value().data, '80 · 25');
+      expect(backend.patchedKnobs, isEmpty, reason: 'saved only once it rests');
+
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      expect(backend.patchedKnobs.single, {'answer_length': 50, 'depth': 80, 'breadth': 25});
+      expect(transport.sent.last, {'type': 'regenerate', 'request_id': transport.sent.last['request_id'],
+          'directions': 'fork'});
+    });
+
+    testWidgets('the answer ends with a fork, and taking a link continues the same answer', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      expect(transport.sent.last['directions'], 'fork');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'Show me with a speedometer'),
+        DirectionCard(id: 'd2', text: 'Work one out: x^3'),
+      ]));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('directions-fork')), findsOneWidget);
+      expect(find.text('Continue with \u2192'), findsOneWidget);
+      expect(find.text('WHERE THIS COULD GO'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('direction-d1')));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(transport.sent.last,
+          {'type': 'direction', 'card_id': 'd1', 'directions': 'fork', 'continue': 'true'});
+      expect(find.byKey(const ValueKey('directions-fork')), findsNothing);
+      expect(find.text('\u2192 Show me with a speedometer'), findsOneWidget); // heads the continuation
+      expect(find.text('Show me with a speedometer'), findsNothing, reason: 'no bubble of their own');
+
+      transport.emit(const Delta('Think of the needle on a speedometer...'));
+      transport.emit(const Done(
+          turnIndex: 1, kind: 'answer', text: 'Think of the needle on a speedometer...', firstOutputMs: 1, totalMs: 2));
+      await tester.pumpAndSettle();
+      expect(find.text('Think of the needle on a speedometer...'), findsOneWidget);
+    });
+
+    testWidgets('switched to cards, the directions sit below the answer and a tap asks anew', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cards'));
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      expect(transport.sent.last['directions'], 'strip');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'Show me with a speedometer'),
+        DirectionCard(id: 'd2', text: 'Work one out: x^3'),
+      ]));
+      await tester.pumpAndSettle();
+
+      expect(find.text('WHERE THIS COULD GO'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('direction-d2')));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(transport.sent.last, {'type': 'direction', 'card_id': 'd2', 'directions': 'strip'});
+      expect(find.text('WHERE THIS COULD GO'), findsNothing);
+      expect(find.text('Work one out: x^3'), findsOneWidget); // now the learner's own bubble
+    });
+
     testWidgets('the mouse wheel over a slider nudges it', (tester) async {
       _size(tester, 1400, 900);
       final backend = FakeBackend();
@@ -525,11 +623,11 @@ void main() {
       await _openSandbox(tester);
       await tester.pumpAndSettle();
 
-      final depth = find.byKey(const ValueKey('knob-depth'));
-      Text value() => tester.widget(find.byKey(const ValueKey("[<'knob-depth'>]-value"))) as Text;
+      final length = find.byKey(const ValueKey('knob-length'));
+      Text value() => tester.widget(find.byKey(const ValueKey("[<'knob-length'>]-value"))) as Text;
       expect(value().data, '50');
 
-      final center = tester.getCenter(depth);
+      final center = tester.getCenter(length);
       final pointer = TestPointer(1, PointerDeviceKind.mouse);
       await tester.sendEventToBinding(pointer.hover(center));
       await tester.sendEventToBinding(pointer.scroll(const Offset(0, 40)));
@@ -544,7 +642,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 700));
       await tester.pump();
       expect(backend.patchedKnobs, [
-        {'answer_length': 50, 'depth': 55},
+        {'answer_length': 55, 'depth': 50, 'breadth': 50},
       ]);
     });
   });

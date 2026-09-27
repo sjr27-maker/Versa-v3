@@ -23,15 +23,30 @@ class FakeTransport implements ChatTransport {
   Future<void> drop() => _controller.close();
 
   @override
-  void sendMessage(String text, {bool stage = false}) =>
-      sent.add({'type': 'message', 'text': text, if (stage) 'stage': 'true'});
+  void sendMessage(String text, {bool stage = false, String? directions}) =>
+      sent.add({'type': 'message', 'text': text, if (stage) 'stage': 'true', 'directions': ?directions});
 
   @override
-  void selectOption(String optionId, {bool stage = false}) =>
-      sent.add({'type': 'select_option', 'option_id': optionId, if (stage) 'stage': 'true'});
+  void selectOption(String optionId, {bool stage = false, String? directions}) => sent.add({
+        'type': 'select_option',
+        'option_id': optionId,
+        if (stage) 'stage': 'true',
+        'directions': ?directions,
+      });
 
   @override
-  void regenerate(int requestId) => sent.add({'type': 'regenerate', 'request_id': '$requestId'});
+  void pickDirection(String cardId, {bool stage = false, String? directions, bool continueAnswer = false}) =>
+      sent.add({
+        'type': 'direction',
+        'card_id': cardId,
+        if (stage) 'stage': 'true',
+        'directions': ?directions,
+        if (continueAnswer) 'continue': 'true',
+      });
+
+  @override
+  void regenerate(int requestId, {String? directions}) =>
+      sent.add({'type': 'regenerate', 'request_id': '$requestId', 'directions': ?directions});
 
   @override
   Future<void> close() async {
@@ -92,7 +107,7 @@ class FakeBackend {
   bool failKnobPatches = false;
 
   Map<String, int> _knobs(String id) =>
-      knobsBySession.putIfAbsent(id, () => {'answer_length': 50, 'depth': 50});
+      knobsBySession.putIfAbsent(id, () => {'answer_length': 50, 'depth': 50, 'breadth': 50});
 
   /// `upsertLearner`'s deterministic id for a given label — lets a test seed
   /// a chat for a learner before that learner has actually signed in.

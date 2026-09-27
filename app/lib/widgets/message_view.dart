@@ -15,7 +15,15 @@ class MessageView extends StatelessWidget {
     required this.onPickOption,
     this.onUndoClaimUpdate,
     this.onViewClaimUpdate,
+    this.onPickDirection,
+    this.directionsStyle = 'fork',
   });
+
+  /// 'fork': the directions are links the answer ends with; 'strip': cards.
+  final String directionsStyle;
+
+  /// Takes a "where this could go" card; null hides the strip.
+  final void Function(DirectionCard card)? onPickDirection;
 
   final ChatMessage message;
   final bool showTiming;
@@ -58,16 +66,22 @@ class MessageView extends StatelessWidget {
 
   Widget _tutorReply() {
     final failed = message.isError;
+    final continuation = message.continuationOf;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Container(
-          width: 30,
-          height: 30,
-          alignment: Alignment.center,
-          decoration: const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
-          child: Text('V', style: sans(13, color: Colors.white, weight: FontWeight.w700)),
-        ),
+        // A continuation (a fork link taken) reads as the same explanation
+        // carrying on: no avatar of its own, same indent.
+        if (continuation != null)
+          const SizedBox(width: 30)
+        else
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
+            child: Text('V', style: sans(13, color: Colors.white, weight: FontWeight.w700)),
+          ),
         const SizedBox(width: 12),
         Expanded(
           child: ConstrainedBox(
@@ -76,6 +90,12 @@ class MessageView extends StatelessWidget {
               key: ValueKey('msg-${message.id}'),
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (continuation != null) ...[
+                  Text('→ $continuation',
+                      key: ValueKey('continuation-${message.id}'),
+                      style: sans(12.5, color: Paper.accentDark, weight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                ],
                 if (message.recalled) ...[
                   Text('Oh wait, I remember what you meant.',
                       key: const ValueKey('recalled'),
@@ -128,6 +148,15 @@ class MessageView extends StatelessWidget {
                         ),
                     ],
                   ),
+                ],
+                if (message.directions.isNotEmpty && onPickDirection != null) ...[
+                  if (directionsStyle == 'fork') ...[
+                    const SizedBox(height: 10),
+                    _DirectionsFork(cards: message.directions, enabled: canPickOption, onPick: onPickDirection!),
+                  ] else ...[
+                    const SizedBox(height: 14),
+                    _DirectionsStrip(cards: message.directions, enabled: canPickOption, onPick: onPickDirection!),
+                  ],
                 ],
                 if (showTiming && message.timing != null) ...[
                   const SizedBox(height: 8),
@@ -249,6 +278,86 @@ class _OptionChipState extends State<_OptionChip> {
           child: Text(widget.option.text, style: sans(13.5, color: ink, height: 1.4)),
         ),
       ),
+    );
+  }
+}
+
+/// "Where this could go": the directions the learner could take next, one
+/// tap each, shown in the order the server shuffled them into. Quiet on
+/// purpose -- easy to ignore, never in the way of the answer.
+class _DirectionsStrip extends StatelessWidget {
+  const _DirectionsStrip({required this.cards, required this.enabled, required this.onPick});
+  final List<DirectionCard> cards;
+  final bool enabled;
+  final void Function(DirectionCard card) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const ValueKey('directions'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('WHERE THIS COULD GO', style: mono(9.5)),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final c in cards)
+              ActionChip(
+                key: ValueKey('direction-${c.id}'),
+                label: Text(c.text, style: sans(13, color: Paper.ink)),
+                avatar: const Icon(Icons.north_east_rounded, size: 14, color: Paper.accent),
+                onPressed: enabled ? () => onPick(c) : null,
+                backgroundColor: Paper.card,
+                side: const BorderSide(color: Paper.border),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// The fork: the answer ends with "Continue with ->" and the directions as
+/// inline links; taking one carries the same explanation on.
+class _DirectionsFork extends StatelessWidget {
+  const _DirectionsFork({required this.cards, required this.enabled, required this.onPick});
+  final List<DirectionCard> cards;
+  final bool enabled;
+  final void Function(DirectionCard card) onPick;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      key: const ValueKey('directions-fork'),
+      crossAxisAlignment: WrapCrossAlignment.center,
+      runSpacing: 4,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: Text('Continue with \u2192', style: sans(13.5, color: Paper.muted, weight: FontWeight.w600)),
+        ),
+        for (final (i, c) in cards.indexed) ...[
+          if (i > 0) Text('  \u00b7  ', style: sans(13.5, color: Paper.faint)),
+          MouseRegion(
+            cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+            child: GestureDetector(
+              key: ValueKey('direction-${c.id}'),
+              onTap: enabled ? () => onPick(c) : null,
+              child: Text(
+                c.text,
+                style: sans(13.5, color: enabled ? Paper.accentDark : Paper.faint, weight: FontWeight.w500).copyWith(
+                  decoration: TextDecoration.underline,
+                  decorationColor: Paper.accentLine,
+                  decorationThickness: 2,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

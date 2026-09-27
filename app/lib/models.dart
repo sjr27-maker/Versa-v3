@@ -12,30 +12,38 @@ class ChatOption {
   final String text;
 }
 
-/// A chat's style controls (server: session_knobs.py): answer length and
-/// depth as 0-100 slider levels. 50/50 is the untouched default.
+/// A chat's style controls (server: session_knobs.py): answer length, depth
+/// and breadth as 0-100 slider levels. All at 50 is the untouched default.
 class SessionKnobs {
-  const SessionKnobs({this.answerLength = 50, this.depth = 50});
+  const SessionKnobs({this.answerLength = 50, this.depth = 50, this.breadth = 50});
 
   final int answerLength;
   final int depth;
 
+  /// Focused (0) to wide (100): how far an answer reaches beyond the question.
+  final int breadth;
+
   factory SessionKnobs.fromJson(Map<String, dynamic> j) => SessionKnobs(
         answerLength: (j['answer_length'] as num?)?.toInt() ?? 50,
         depth: (j['depth'] as num?)?.toInt() ?? 50,
+        breadth: (j['breadth'] as num?)?.toInt() ?? 50,
       );
 
-  SessionKnobs copyWith({int? answerLength, int? depth}) => SessionKnobs(
+  SessionKnobs copyWith({int? answerLength, int? depth, int? breadth}) => SessionKnobs(
         answerLength: answerLength ?? this.answerLength,
         depth: depth ?? this.depth,
+        breadth: breadth ?? this.breadth,
       );
 
   @override
   bool operator ==(Object other) =>
-      other is SessionKnobs && other.answerLength == answerLength && other.depth == depth;
+      other is SessionKnobs &&
+      other.answerLength == answerLength &&
+      other.depth == depth &&
+      other.breadth == breadth;
 
   @override
-  int get hashCode => Object.hash(answerLength, depth);
+  int get hashCode => Object.hash(answerLength, depth, breadth);
 }
 
 /// A claim update the sandbox-chat background flow made (or is offering to
@@ -132,6 +140,19 @@ class ChatMessage {
   bool optionsOpen;
   Timing? timing;
 
+  /// The server's turn index, once the turn is done (matches a directions
+  /// set to the answer it follows).
+  int? turnIndex;
+
+  /// "Where this could go" (server: directions.py): the standard set of
+  /// directions offered under this answer, in the order they are SHOWN.
+  /// Cleared once the learner moves on (picks one or asks their own).
+  List<DirectionCard> directions = const [];
+
+  /// This reply continues the one before it: the learner took the fork
+  /// link with this text (shown as a small "->" heading, no user bubble).
+  String? continuationOf;
+
   /// Memory already knew what the student meant (server "recalled" frame,
   /// IDEAS.md "oh wait..."): the turn answered from it, taking back any
   /// options it had already shown.
@@ -139,6 +160,13 @@ class ChatMessage {
 
   bool get hasOptions => options.isNotEmpty;
   bool get optionsResolved => chosenOptionId != null;
+}
+
+/// One card of a "where this could go" strip.
+class DirectionCard {
+  const DirectionCard({required this.id, required this.text});
+  final String id;
+  final String text;
 }
 
 // --------------------------------------------------------- server events
@@ -246,6 +274,13 @@ class StageEnd extends ServerEvent {
 /// A lesson task was judged complete (lesson chats only; server `progress`
 /// frame, may arrive after `done`). Not chat content: it goes to
 /// ChatController.progressEvents.
+/// The directions offered under an answered turn (after its `done`).
+class DirectionsEvent extends ServerEvent {
+  const DirectionsEvent(this.turnIndex, this.cards);
+  final int turnIndex;
+  final List<DirectionCard> cards;
+}
+
 class ProgressEvent extends ServerEvent {
   const ProgressEvent({
     required this.lessonId,
@@ -310,6 +345,14 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
       return RecalledEvent(retracted: json['retracted'] == true);
     case 'stage_end':
       return StageEnd((json['turn_index'] as num?)?.toInt() ?? -1);
+    case 'directions':
+      return DirectionsEvent(
+        (json['turn_index'] as num?)?.toInt() ?? -1,
+        [
+          for (final c in (json['cards'] as List? ?? const []))
+            DirectionCard(id: c['id'] as String, text: c['text'] as String),
+        ],
+      );
     case 'progress':
       return ProgressEvent(
         lessonId: json['lesson_id'] as String? ?? '',

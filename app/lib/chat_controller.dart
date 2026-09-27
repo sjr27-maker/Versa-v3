@@ -60,7 +60,7 @@ class ChatController extends ChangeNotifier {
   ChatStatus status = ChatStatus.connecting;
   String? sessionId;
 
-  /// This chat's length / depth sliders; loaded when a chat is resumed,
+  /// This chat's length / depth / breadth sliders; loaded when a chat is resumed,
   /// moved with [setKnobs].
   SessionKnobs knobs = const SessionKnobs();
 
@@ -138,8 +138,8 @@ class ChatController extends ChangeNotifier {
   /// Move a slider. The value shows at once; once the sliders have rested
   /// for [knobDebounce] the change is saved and the latest answer is
   /// rewritten at the new levels, streaming in place of the old text.
-  void setKnobs({int? answerLength, int? depth}) {
-    final next = knobs.copyWith(answerLength: answerLength, depth: depth);
+  void setKnobs({int? answerLength, int? depth, int? breadth}) {
+    final next = knobs.copyWith(answerLength: answerLength, depth: depth, breadth: breadth);
     if (next == knobs) return;
     knobs = next;
     _notify();
@@ -152,7 +152,8 @@ class ChatController extends ChangeNotifier {
     if (id == null || _disposed) return;
     final wanted = knobs;
     try {
-      knobs = await api.patchKnobs(id, answerLength: wanted.answerLength, depth: wanted.depth);
+      knobs = await api.patchKnobs(id,
+          answerLength: wanted.answerLength, depth: wanted.depth, breadth: wanted.breadth);
     } catch (_) {
       // keep the slider where the person put it; the next move retries
       return;
@@ -185,7 +186,10 @@ class ChatController extends ChangeNotifier {
     _textBeforeRewrite ??= target.text;
     _rewriteStarted = false;
     target.rewriting = true;
-    transport.regenerate(requestId);
+    // the old directions were pitched for the old window; new ones follow
+    // the rewrite
+    target.directions = const [];
+    transport.regenerate(requestId, directions: directionsStyle);
     _notify();
   }
 
@@ -245,10 +249,38 @@ class ChatController extends ChangeNotifier {
     final trimmed = text.trim();
     if (!canSend || trimmed.isEmpty) return;
     _invalidateStaleOptions();
+    _closeDirections(); // asking their own question passes the strip
     messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed));
     _beginTurn();
-    _transport!.sendMessage(trimmed, stage: stageEnabled);
+    _transport!.sendMessage(trimmed, stage: stageEnabled, directions: directionsStyle);
     _notify();
+  }
+
+  /// How this chat shows "where this could go": 'fork' (links the answer
+  /// ends with) or 'strip' (cards below it). Set by the screen from
+  /// AppState.directionsStyle.
+  String directionsStyle = 'fork';
+
+  /// Take one of the directions under the latest answer. A fork link carries
+  /// the same answer on (no bubble of their own, the reply is headed with
+  /// the link); a card reads as the learner's own next message (the cards
+  /// are written in their voice).
+  void pickDirection(ChatMessage message, DirectionCard card) {
+    if (!canSend || messages.isEmpty || !identical(messages.last, message)) return;
+    if (!message.directions.any((c) => c.id == card.id)) return;
+    final fork = directionsStyle == 'fork';
+    _closeDirections();
+    if (!fork) messages.add(ChatMessage(id: _nextId++, role: Role.user, text: card.text));
+    _beginTurn();
+    if (fork) _current!.continuationOf = card.text;
+    _transport!.pickDirection(card.id, stage: stageEnabled, directions: directionsStyle, continueAnswer: fork);
+    _notify();
+  }
+
+  void _closeDirections() {
+    for (final m in messages) {
+      if (m.directions.isNotEmpty) m.directions = const [];
+    }
   }
 
   /// Typing a fresh message instead of clicking supersedes whatever options
@@ -275,7 +307,7 @@ class ChatController extends ChangeNotifier {
     // option's own question-phrased copy back as if the person had said
     // it themselves.
     _beginTurn();
-    _transport!.selectOption(option.id, stage: stageEnabled);
+    _transport!.selectOption(option.id, stage: stageEnabled, directions: directionsStyle);
     _notify();
   }
 
@@ -346,6 +378,7 @@ class ChatController extends ChangeNotifier {
         m.pending = false;
         m.streaming = false;
         m.text = event.text;
+        m.turnIndex = event.turnIndex;
         m.timing = Timing(
           firstOutputMs: _firstOutputMs ?? total,
           totalMs: total,
@@ -371,6 +404,13 @@ class ChatController extends ChangeNotifier {
       case RegenEnded(:final requestId):
         if (requestId != _activeRegenId) return;
         _endRewrite(restore: true);
+      case DirectionsEvent(:final turnIndex, :final cards):
+        // Only under the answer it follows, and only while that answer is
+        // still the latest thing in the chat.
+        if (messages.isEmpty) return;
+        final last = messages.last;
+        if (last.role != Role.tutor || last.turnIndex != turnIndex || last.hasOptions) return;
+        last.directions = cards;
       case ClaimUpdateEvent(:final update):
         // Fired from a background step, any time after `done` -- attach to
         // the last tutor turn regardless of whether `_current` is still

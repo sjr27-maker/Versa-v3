@@ -392,3 +392,32 @@ Why: a student's exam history -- what they were asked, what they
 answered, what was marked right -- is the record a later weakness map or
 readiness estimate would be derived from. If an attempt could be edited
 or pruned, any number computed from it later stops meaning anything.
+
+### 14. Directions ("where this could go") are append-only
+
+`DirectionStore` (`direction_sets`, `direction_cards`, `direction_events`
+-- migration `078_directions.sql`, code in `src/versa/directions.py`) must
+never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `DirectionStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `directions.py` or its migration.
+- A set is written once with its cards, including the position each card
+  was SHOWN at (shuffled per set). What happened to it is one
+  `direction_events` row -- picked (which card, how many ms after it was
+  offered) or passed (the learner asked their own question) -- the first
+  thing they did settles it (`set_id` is UNIQUE there).
+- The set is generated from a fixed skeleton of slots and is given no
+  thinking style, claims or learner history -- only the message, the
+  answer and the learner's own depth/breadth sliders. That is what makes a
+  pick clean evidence rather than an echo of what the system already
+  believed (the circularity risk in IDEAS.md). Do not personalise the
+  skeleton or the generator's inputs without a guard for that.
+- The model call goes through `SessionLoop._call_node` (invariant 2).
+- Verified by `tests/test_directions_append_only.py`, the same AST-based
+  check used for invariants 1, 4, 6-13.
+
+Why: a learner's order of approach -- which direction they take, in what
+order, and what they pass over -- is the thinking-style evidence this
+feature exists to collect, and session-end consolidation reads it back.
+If a pick could be edited or a set pruned, that order would stop being a
+record of what the learner actually did.

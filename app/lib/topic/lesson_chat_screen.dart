@@ -9,6 +9,7 @@ import '../models.dart';
 import '../theme.dart';
 import '../widgets/collapsed_rail.dart';
 import '../widgets/composer.dart';
+import '../widgets/depth_breadth_pad.dart';
 import '../widgets/level_slider.dart';
 import '../widgets/message_view.dart';
 import '../widgets/stage_panel.dart';
@@ -18,7 +19,7 @@ import 'topic_widgets.dart';
 
 /// A lesson: a chat whose tutor works through this lesson's tasks, with the
 /// task checklist and progress beside it (filled in live as the server judges
-/// each task done), the length/depth sliders, and the stage when it's on.
+/// each task done), the length/depth/breadth sliders, and the stage when it's on.
 class LessonChatScreen extends StatefulWidget {
   const LessonChatScreen({super.key, required this.lessonId});
   final String lessonId;
@@ -240,8 +241,10 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
 
   @override
   Widget build(BuildContext context) {
-    final showTiming = context.watch<AppState>().showTiming;
+    final app = context.watch<AppState>();
+    final showTiming = app.showTiming;
     final chat = widget.chat;
+    chat.directionsStyle = app.directionsStyle;
     final lesson = widget.lesson;
     return ListenableBuilder(
       listenable: chat,
@@ -287,6 +290,8 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
                             showTiming: showTiming,
                             canPickOption: chat.canSend,
                             onPickOption: (o) => chat.pickOption(m, o),
+                            onPickDirection: (c) => chat.pickDirection(m, c),
+                            directionsStyle: app.directionsStyle,
                           );
                         },
                       ),
@@ -496,13 +501,11 @@ class _TaskPanel extends StatelessWidget {
                 value: chat.knobs.answerLength,
                 onChanged: (v) => chat.setKnobs(answerLength: v),
               ),
-              LevelSlider(
-                sliderKey: const ValueKey('lesson-knob-depth'),
-                label: 'Depth',
-                lowLabel: 'gist',
-                highLabel: 'rigorous',
-                value: chat.knobs.depth,
-                onChanged: (v) => chat.setKnobs(depth: v),
+              DepthBreadthPad(
+                padKey: const ValueKey('lesson-knob-pad'),
+                depth: chat.knobs.depth,
+                breadth: chat.knobs.breadth,
+                onChanged: (d, b) => chat.setKnobs(depth: d, breadth: b),
               ),
             ],
           ),

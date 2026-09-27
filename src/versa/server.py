@@ -21,6 +21,13 @@ transport:
     /api/learners/{id}/exams, /api/exams/{id}, /api/exams/{id}/mock,
     /api/exam-units/{id}/quiz, /api/exam-quizzes/{id}[/submit],
     /api/exams/{id}/plan (GET, POST), /api/exam-plan-items/{id}/done
+    Directions (directions.py): a message, pick or regenerate may add
+    "directions": "fork" (links the answer ends with) or true (cards) --
+    the client shows them. A fork pick adds "continue": true, so the answer
+    carries on instead of starting over. Then, after an answer, the server sends
+    {"type": "directions", "turn_index", "set_id", "cards": [{"id", "text"}]}
+    (display order); the client sends {"type": "direction", "card_id"} to
+    take one, which runs as the next turn.
     Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
     /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
     WS   /api/sessions/{id}/chat           one chat, one turn at a time
@@ -105,6 +112,7 @@ from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient
 from versa.feed import build_feed_router
+from versa import directions as _directions
 from versa.exams import build_exams_router
 from versa.topics import build_topics_router
 from versa.learner import LearnerStore
@@ -164,6 +172,7 @@ class SessionIn(BaseModel):
 class SessionKnobsPatch(BaseModel):
     answer_length: int | None = Field(None, ge=0, le=100)
     depth: int | None = Field(None, ge=0, le=100)
+    breadth: int | None = Field(None, ge=0, le=100)
 
 
 class SessionOut(BaseModel):
@@ -354,6 +363,13 @@ def create_app(
     # Performances run alongside (and may outlive) their turn; hold a
     # reference so a running one isn't garbage-collected.
     stage_tasks: set[asyncio.Task] = set()
+    # "Where this could go" (directions.py): offered after every answer.
+    direction_store = _directions.DirectionStore(pool)
+    direction_tasks: set[asyncio.Task] = set()
+    # session -> the turn most recently started here. Held in memory because
+    # a turn's own row is written in its deferred tail, so reading turns back
+    # can lag behind what the learner has actually done.
+    latest_turn: dict[UUID, int] = {}
     session_locks: dict[UUID, asyncio.Lock] = {}
 
     app = FastAPI(title="Versa", docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -458,7 +474,7 @@ def create_app(
 
     @api.patch("/sessions/{session_id}/knobs", response_model=SessionKnobs)
     async def patch_knobs(session_id: UUID, body: SessionKnobsPatch) -> SessionKnobs:
-        """Change the length and/or depth level (0-100) mid-chat; unset
+        """Change the length, depth and/or breadth level (0-100) mid-chat; unset
         fields are kept. Out-of-range values are rejected (422)."""
         try:
             current = await transcript.get_knobs(session_id)
@@ -899,7 +915,8 @@ def create_app(
                         await send({"type": "error", "message": "a turn is already running"})
                         continue
                     regen_task = asyncio.create_task(
-                        _locked_regenerate(lock, session_id, data.get("request_id"), send)
+                        _locked_regenerate(lock, session_id, data.get("request_id"), send,
+                                           _presentation(data))
                     )
                     continue
                 if lock.locked():
@@ -913,11 +930,13 @@ def create_app(
             if active_sends.get(session_id) is send:
                 active_sends.pop(session_id, None)
 
-    async def _locked_regenerate(lock: asyncio.Lock, session_id: UUID, request_id, send) -> None:
+    async def _locked_regenerate(
+        lock: asyncio.Lock, session_id: UUID, request_id, send, presentation: str | None = None,
+    ) -> None:
         async with lock:
-            await _run_regenerate(session_id, request_id, send)
+            await _run_regenerate(session_id, request_id, send, presentation)
 
-    async def _run_regenerate(session_id: UUID, request_id, send) -> None:
+    async def _run_regenerate(session_id: UUID, request_id, send, presentation: str | None = None) -> None:
         """Rewrite the latest answer at the session's current knob levels,
         streaming it as `regen_delta` events tagged with the client's
         request_id so a client can drop pieces of a superseded rewrite."""
@@ -955,6 +974,19 @@ def create_app(
                 "total_ms": round(total_ms),
             },
         })
+        if presentation:
+            # The window moved (the pad or a slider): the directions under
+            # this answer are re-pitched for it. The rewritten turn is the
+            # latest one by definition (a resumed chat may not have it noted).
+            latest_turn.setdefault(session_id, turn_index)
+            question = next(
+                (t.text for t in await transcript.list_turns(session_id) if t.turn_index == turn_index), text,
+            )
+            task = asyncio.create_task(
+                _offer_directions(session_id, turn_index, question, text, send, presentation)
+            )
+            direction_tasks.add(task)
+            task.add_done_callback(direction_tasks.discard)
 
     class _Performance:
         """One turn's stage performance, generated from the moment the
@@ -1013,10 +1045,49 @@ def create_app(
         finally:
             await perf.finish()
 
+    def _presentation(data: dict) -> str | None:
+        """What a client says it shows under answers: "fork" (links the
+        answer ends with), any other truthy value = cards ("strip"), or
+        nothing -- then no set is made at all."""
+        wanted = data.get("directions")
+        return "fork" if wanted == "fork" else ("strip" if wanted else None)
+
+    async def _offer_directions(
+        session_id: UUID, turn_index: int, message: str, answer: str, send, presentation: str = "strip",
+    ) -> None:
+        """After an answer: the standard set of directions (directions.py),
+        pitched inside the session's depth/breadth window, in a fresh shuffled
+        order. Best effort -- a failure costs the strip, never the answer. A
+        set that arrives after the learner already moved on is not stored:
+        it was never shown, so it can't be evidence of anything."""
+        try:
+            knobs = await transcript.get_knobs(session_id)
+            cards = await loop._call_node(
+                loop.suggest_directions, session_id, turn_index,
+                message=message, answer=answer, depth=knobs.depth, breadth=knobs.breadth,
+            )
+            if not cards or latest_turn.get(session_id) != turn_index:
+                return  # the learner already moved on: this set was never shown
+            direction_set = await direction_store.add_set(
+                session_id=session_id, turn_index=turn_index, knobs=knobs,
+                cards=cards, positions=_directions.shuffled_positions(), presentation=presentation,
+            )
+            await send({
+                "type": "directions",
+                "turn_index": turn_index,
+                "set_id": str(direction_set.id),
+                "presentation": presentation,
+                "cards": [{"id": str(c.id), "text": c.text} for c in direction_set.cards],
+            })
+        except Exception:
+            logger.warning("directions failed on turn %d for session %s", turn_index, session_id,
+                           exc_info=True)
+
     async def _run_turn(session_id: UUID, data: dict, send) -> None:
         started = time.monotonic()
         kind = data.get("type")
         selected_option_id: UUID | None = None
+        continues: str | None = None
         if kind == "message":
             text = str(data.get("text", "")).strip()
             if not text:
@@ -1035,11 +1106,45 @@ def create_app(
                 await send({"type": "error", "message": "that option is no longer available"})
                 return
             text, selected_option_id = option.text, option.id
+        elif kind == "direction":
+            try:
+                found = await direction_store.open_set_for_card(UUID(str(data.get("card_id"))))
+            except ValueError:
+                found = None
+            if found is None or found[0].session_id != session_id:
+                await send({"type": "error", "message": "unknown suggestion"})
+                return
+            direction_set, card = found
+            latest = await direction_store.latest_set(session_id)
+            if latest is None or latest.id != direction_set.id or await direction_store.is_settled(direction_set.id):
+                await send({"type": "error", "message": "that suggestion is no longer available"})
+                return
+            text = card.text
+            # a fork link continues the answer it ended; a card starts a new one
+            continues = card.text if data.get("continue") else None
         else:
             await send({"type": "error", "message": f"unknown message type {kind!r}"})
             return
 
         turn_index = await next_turn_index(session_id)
+        # What the learner did with the directions under the last answer:
+        # took one, or passed them by asking their own question.
+        try:
+            if kind == "direction":
+                await direction_store.record_event(
+                    set_id=direction_set.id, kind="picked", card_id=card.id, next_turn_index=turn_index,
+                )
+            elif kind == "message":
+                latest = await direction_store.latest_set(session_id)
+                if latest is not None and not await direction_store.is_settled(latest.id):
+                    await direction_store.record_event(
+                        set_id=latest.id, kind="passed", next_turn_index=turn_index,
+                    )
+        except _directions.AlreadySettled:
+            if kind == "direction":
+                await send({"type": "error", "message": "that suggestion is no longer available"})
+                return
+        latest_turn[session_id] = turn_index
         await send({"type": "turn_start", "turn_index": turn_index})
         first_output_ms: float | None = None
         perf: _Performance | None = None
@@ -1075,7 +1180,7 @@ def create_app(
         try:
             message = await loop.handle_turn(
                 session_id, turn_index, text, selected_option_id,
-                on_delta=on_delta, on_event=on_event, defer_tail=True,
+                on_delta=on_delta, on_event=on_event, defer_tail=True, continues=continues,
             )
             options = await loop.pending_options(session_id)
         except Exception as exc:
@@ -1100,6 +1205,16 @@ def create_app(
                 "total_ms": round(total_ms),
             },
         })
+        presentation = _presentation(data)
+        if not options and presentation:
+            # Only for a client that shows the strip (it asks, like "stage"):
+            # a set is evidence only if it was actually seen. Started after
+            # `done`, so the strip always follows its answer.
+            task = asyncio.create_task(
+                _offer_directions(session_id, turn_index, text, message, send, presentation)
+            )
+            direction_tasks.add(task)
+            task.add_done_callback(direction_tasks.discard)
 
     app.include_router(api)
     app.include_router(build_feed_router(pool, tiers.fast))
@@ -1109,6 +1224,7 @@ def create_app(
     # Exam preparation (exams.py): syllabus units, unit quizzes, mock tests.
     exams_router = build_exams_router(pool, tiers.fast)
     app.state.exam_service = exams_router.exam_service
+    app.state.direction_tasks = direction_tasks  # tests wait on these
     app.include_router(exams_router)
     # Rooms (experimental, rooms/): group study chats with Versa as a member.
     room_hub = RoomHub(pool, tiers.fast)

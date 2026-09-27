@@ -35,6 +35,7 @@ from versa.audit import NodeCallStore, TranscriptStore
 from versa.claims import ClaimStore
 from versa.reviews import ReviewStore
 from versa.diagnostics import TurnDiagnosticsStore
+from versa.directions import DirectionStore
 from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient, TurnCachedEmbeddings
@@ -127,6 +128,7 @@ def build_session_loop(
         review_store=ReviewStore(pool),
         on_claim_update=on_claim_update,
         answer_version_store=AnswerVersionStore(pool),
+        direction_store=DirectionStore(pool),
         # Learn-a-topic lesson chats; inert for every non-lesson session.
         lesson_hooks=LessonHooks(pool, tiers.fast, on_progress=on_lesson_progress),
         **build_interaction_pipeline_stores(pool, embedding_client),

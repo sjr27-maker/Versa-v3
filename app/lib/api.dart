@@ -63,14 +63,15 @@ class VersaApi {
     return SessionKnobs.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
   }
 
-  /// Change the length and/or depth level (0-100).
-  Future<SessionKnobs> patchKnobs(String sessionId, {int? answerLength, int? depth}) async {
+  /// Change the length, depth and/or breadth level (0-100).
+  Future<SessionKnobs> patchKnobs(String sessionId, {int? answerLength, int? depth, int? breadth}) async {
     final r = await _http
         .patch(_uri('/api/sessions/$sessionId/knobs'),
             headers: {'content-type': 'application/json'},
             body: jsonEncode({
               'answer_length': ?answerLength,
               'depth': ?depth,
+              'breadth': ?breadth,
             }))
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not change the chat controls'));

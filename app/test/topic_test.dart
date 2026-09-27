@@ -374,6 +374,7 @@ void main() {
     expect(find.byKey(const ValueKey('task-open-t2')), findsOneWidget);
     expect(find.text('END-OF-LESSON QUESTIONS'), findsOneWidget);
     expect(find.byKey(const ValueKey('lesson-knob-length')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lesson-knob-pad')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('start-lesson')));
     await tester.pump();

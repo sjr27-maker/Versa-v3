@@ -12,6 +12,52 @@ enough to build) · `done` (moved to the log at the bottom).
 
 ## 1. Ideas
 
+### A space of possibilities, not a guess at intent — `in progress` (first version built 2026-09-27)
+*Raised by you, 2026-09-27.* Your words: "whatever means a learner or even
+a experienced engineer cannot express himself properly ... he himself will
+not know what he really wants, no clear expectations, he just takes what's
+presented to him ... There can be a space of what he probably wants, a space
+of possibilities, atleast try and match what he wants or atleast spark it,
+through the power of generation."
+
+**Reading (discussed, not yet confirmed as a design):** text, voice and
+attached context are all lossy expressions of an intent that often isn't
+formed yet. Instead of asking what they want (recall), generate a space of
+directions the answer could go and let them recognise or be sparked by one.
+How they move through that space (what they pick, skip, return to) is the
+thinking-style evidence -- shown, not stated.
+
+- **Decided so far:**
+  - The starting space is *standard for a background*: for a student, their
+    Indian state and syllabus (board, presumably class); otherwise their
+    profession. Everyone in a cohort sees the same skeleton, so picks are
+    comparable, and thinking style becomes "how you differ from your
+    cohort's default". Keeping a standard core also gives clean evidence
+    that the system didn't steer (the circularity risk under "Richer,
+    context-aware options").
+  - The sidebar sliders set the space's lower and upper limits: depth (gist
+    -> rigorous) and a new third slider, **breadth** (focused -> wide),
+    built 2026-09-27 (see decisions log). Slider moves are learner-initiated,
+    so they are clean evidence too.
+  - Presented as a "where this could go" strip under every answer (option
+    A of three discussed; a map of the space and the slime offering them
+    were the others). Built 2026-09-27 -- see the decisions log. Your
+    words: "make sure we need to be perfectly take inputs for the thinking
+    style, also the order must be a factor too, the order of approach."
+  - Presentation moved on the same day to **the fork** (the answer ends
+    with "Continue with ->" links; a pick continues the same answer) and
+    **a depth x breadth pad** instead of two sliders -- your call, from six
+    options discussed (doors inside the answer, the fork, the pad, swipe to
+    decide, your trail, the slime at a crossroads). The cards stay behind a
+    Fork/Cards switch. Not built yet: doors, swipe, the trail view.
+- **Open:** how fine a cohort is;
+  who defines a cohort's standard space (hand-written, generated once and
+  frozen, or generated each time); onboarding for state/syllabus/profession
+  (a learner is only a name today); privacy for minors vs. the append-only
+  invariants.
+
+---
+
 ### Convert each query to options ("Guess Mode") — `removed` 2026-09-24 (see decisions log; text below is history)
 *Raised by you, 2026-09-23.* Your words: "what we have to do now is convert
 each query from the student to options and go down in guessing only if
@@ -337,6 +383,62 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-09-27** — The fork and the depth x breadth pad (migration 079,
+  `FinalAnswer(continues=...)`, app `widgets/depth_breadth_pad.dart`).
+  Your words: "build the fork and the 2D pad".
+  - *Fork (the default):* the answer ends with "Continue with ->" and the
+    six directions as inline links. Taking one CONTINUES the same answer:
+    no bubble of their own, the reply is headed "-> <link>" with no avatar,
+    and FinalAnswer is told to write the next part of the same explanation
+    (only when set -- every other prompt is byte-identical). Verified live:
+    "Picture it like taking a snapshot" carried on with "That snapshot is
+    the perfect way to visualize it...", and the next fork built on it.
+  - *Cards* stay behind a Fork/Cards switch in the knobs rail (per device).
+    Every set records its `presentation`, so the two can be compared.
+  - *Pad:* depth up the side, breadth along the bottom; drag, tap or arrow
+    keys. When it rests, both levels save, the answer rewrites, and a fresh
+    set of directions arrives pitched for the new spot (the old set's
+    links stop working). Length stays a slider. Same in lesson chats.
+  - *Not yet:* a resumed chat shows a fork continuation as an ordinary
+    user-message + answer pair, and doesn't re-show the last directions.
+
+- **2026-09-27** — "Where this could go" (directions.py, migration 078,
+  CLAUDE.md invariant 14; app strip in `widgets/message_view.dart`).
+  - *What:* after every answer, six cards, one per slot of a fixed
+    skeleton: see it simply, work an example, why it works, where it's
+    used, go deeper, what comes next. One fast call writes the card text
+    for this question. Tapping one sends it as the next message.
+  - *Clean evidence:* the generator gets only the message, the answer and
+    the learner's own depth/breadth sliders -- no thinking style, claims or
+    history -- so a pick isn't an echo of what we already believed. The
+    sliders are hard limits: a live check showed soft wording barely moved
+    the cards, so each end now spells out what it means (low breadth keeps
+    "used"/"next" inside the subject; high depth reaches formal proofs).
+  - *Perfect inputs:* every set, card, the position each card was SHOWN
+    at (shuffled per set, so a preference isn't just "tapped the first"),
+    and what happened: picked (which, ms after it was offered) or passed
+    (they asked their own). A set is only generated and recorded when the
+    client says it shows the strip (`"directions": true`), and a set that
+    arrives after the learner moved on is dropped -- unseen, so no evidence.
+  - *Order of approach:* the session's ordered picks and passes go to
+    session-end consolidation (SummarizeSessionPath) next to the facts, as
+    "the directions they chose, in order". Its prompt is byte-identical for
+    a session with no picks.
+  - *Not yet:* a resumed chat doesn't re-show the last strip; the cohort
+    skeleton (state/syllabus/profession) isn't collected yet -- the slots
+    are the same for everyone for now.
+
+- **2026-09-27** — Breadth, a third session slider (migration 077,
+  `session_knobs.py`, app Sandbox rail + lesson chat). Your words: "add
+  breadth as a third slider". Focused (0) -> wide (100), under Length and
+  Depth, same behaviour: 0-100, drag or mouse wheel, saved when it rests,
+  rewrites the latest answer live. Today it shapes the answer: from "answer
+  exactly what was asked" to "range widely into related topics, other
+  subjects and uses"; 50 renders nothing, so untouched prompts are
+  unchanged. It is also recorded on every rewrite (`answer_versions`) and
+  in the learner profile line. Meant to become the outer limit of the
+  "space of possibilities" (section 1) once that exists.
 
 - **2026-09-26** — Exam prep: study plan (migration 076, `exams.py`,
   app `exam/plan_widgets.dart`). Your words: "add a study plan feature under

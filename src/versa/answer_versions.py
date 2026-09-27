@@ -47,8 +47,9 @@ class AnswerVersionStore:
             return await conn.fetchval(
                 """
                 INSERT INTO answer_versions
-                    (id, session_id, turn_index, version, text, answer_length_level, depth_level)
-                SELECT $1, $2, $3, COALESCE(MAX(version), 0) + 1, $4, $5, $6
+                    (id, session_id, turn_index, version, text, answer_length_level, depth_level,
+                     breadth_level)
+                SELECT $1, $2, $3, COALESCE(MAX(version), 0) + 1, $4, $5, $6, $7
                 FROM answer_versions WHERE session_id = $2 AND turn_index = $3
                 RETURNING version
                 """,
@@ -58,6 +59,7 @@ class AnswerVersionStore:
                 text,
                 knobs.answer_length,
                 knobs.depth,
+                knobs.breadth,
             )
 
     async def latest_by_turn(self, session_id: UUID) -> dict[int, tuple[int, str]]:

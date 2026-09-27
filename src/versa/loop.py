@@ -37,6 +37,7 @@ from uuid import UUID
 import asyncpg
 
 from versa import claims as _claims
+from versa import directions as _directions
 from versa import embeddings as _embeddings
 from versa import history_block as _history_block
 from versa import reference_bindings as _reference_bindings
@@ -52,6 +53,7 @@ from versa.claims import (
     ExtractionConfig,
 )
 from versa.diagnostics import TurnDiagnosticsStore
+from versa.directions import DirectionStore, SuggestDirections
 from versa.disambiguate import (
     REASON_CONFIRM_NO_TEXT,
     REASON_CONFIRM_YES_TEXT,
@@ -193,6 +195,19 @@ _LESSON_CONTEXT: contextvars.ContextVar[tuple[str, str] | None] = contextvars.Co
 )
 
 
+# directions.py's fork: this turn continues the previous answer in the
+# direction the learner tapped (the link's text), or None. Read only by the
+# FinalAnswer call site, which passes it only when set.
+_CONTINUATION: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "versa_turn_continuation", default=None
+)
+
+
+def _continuation_kwargs() -> dict:
+    text = _CONTINUATION.get()
+    return {"continues": text} if text else {}
+
+
 def _lesson_kwargs(which: int) -> dict:
     """`lesson_context=...` for a node call on a lesson turn (0 = FinalAnswer's
     context, 1 = AssessAndBranch's), else nothing at all."""
@@ -252,6 +267,7 @@ class SessionLoop:
         on_claim_update: Callable[[UUID, dict], None] | None = None,
         answer_version_store: AnswerVersionStore | None = None,
         lesson_hooks=None,
+        direction_store: DirectionStore | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -288,6 +304,11 @@ class SessionLoop:
         self.final_answer = FinalAnswer(tiers.best, domain_config=self._domain_config)
         self.regenerate_answer = RegenerateAnswer(self.final_answer)
         self._answer_versions = answer_version_store
+        # "Where this could go" (directions.py): the standard set offered
+        # after an answer. The server runs it; consolidation reads the
+        # learner's order of approach back from the store.
+        self._directions = direction_store
+        self.suggest_directions = SuggestDirections(tiers.fast)
         # The most recent AssessAndBranch-generating turn's id, if its
         # branches are still unresolved. None whenever the last turn was
         # a click resolution, a direct answer, or has already been
@@ -494,6 +515,7 @@ class SessionLoop:
         on_delta: DeltaSink | None = None,
         on_event: TurnEventSink | None = None,
         defer_tail: bool = False,
+        continues: str | None = None,
     ) -> str:
         """Run one turn and return the message to show.
 
@@ -534,6 +556,7 @@ class SessionLoop:
         event_token = turn_events.set(on_event) if on_event is not None else None
         steps: list | None = [] if defer_tail else None
         tail_token = _TAIL_STEPS.set(steps) if defer_tail else None
+        continuation_token = _CONTINUATION.set(continues) if continues else None
         lesson_token = (
             _LESSON_CONTEXT.set(await self._lesson_hooks.contexts_for(session_id))
             if self._lesson_hooks is not None else None
@@ -547,6 +570,8 @@ class SessionLoop:
         finally:
             if lesson_token is not None:
                 _LESSON_CONTEXT.reset(lesson_token)
+            if continuation_token is not None:
+                _CONTINUATION.reset(continuation_token)
             if tail_token is not None:
                 _TAIL_STEPS.reset(tail_token)
             if sink_token is not None:
@@ -2324,6 +2349,7 @@ class SessionLoop:
                 claim_constraints_block=claim_constraints_block,
                 knob_directive=knob_directive,
                 **_lesson_kwargs(0),
+                **_continuation_kwargs(),
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
             return message, False, history_source_ids, reference_binding_ids
@@ -2476,8 +2502,16 @@ class SessionLoop:
         turns = await self._transcript.list_turns(session_id)
         last_turn_index = max((t.turn_index for t in turns), default=0)
 
+        # The order they chose to explore in (directions.py), when they
+        # picked any direction at all -- passed only then, so a session
+        # without picks runs exactly the prompt it always did.
+        path_kwargs = {}
+        if self._directions is not None:
+            order = _directions.render_path(await self._directions.session_path(session_id))
+            if order:
+                path_kwargs["direction_path"] = order
         path_summary = await self._call_node(
-            self.summarize_session_path, session_id, last_turn_index, facts=facts,
+            self.summarize_session_path, session_id, last_turn_index, facts=facts, **path_kwargs,
         )
         # Symmetric compare: this session's path summary against other
         # sessions' path summaries — same kind of text on both sides, so

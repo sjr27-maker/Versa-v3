@@ -92,19 +92,25 @@ class TranscriptStore:
         session that never set any."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT answer_length_level, depth_level FROM sessions WHERE id = $1", session_id
+                "SELECT answer_length_level, depth_level, breadth_level FROM sessions WHERE id = $1",
+                session_id,
             )
         if row is None:
             raise KeyError(f"session {session_id} not found")
-        return SessionKnobs(answer_length=row["answer_length_level"], depth=row["depth_level"])
+        return SessionKnobs(
+            answer_length=row["answer_length_level"], depth=row["depth_level"],
+            breadth=row["breadth_level"],
+        )
 
     async def set_knobs(self, session_id: UUID, knobs: SessionKnobs) -> None:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                "UPDATE sessions SET answer_length_level = $2, depth_level = $3 WHERE id = $1",
+                "UPDATE sessions SET answer_length_level = $2, depth_level = $3, breadth_level = $4 "
+                "WHERE id = $1",
                 session_id,
                 knobs.answer_length,
                 knobs.depth,
+                knobs.breadth,
             )
         if result == "UPDATE 0":
             raise KeyError(f"session {session_id} not found")

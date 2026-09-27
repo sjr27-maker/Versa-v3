@@ -837,16 +837,20 @@ async def build_learner_profile(
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT answer_length_level, depth_level FROM sessions WHERE learner_id = $1 "
+                "SELECT answer_length_level, depth_level, breadth_level FROM sessions WHERE learner_id = $1 "
                 "ORDER BY created_at DESC LIMIT 1",
                 learner_id,
             )
         if row is not None:
-            knobs = SessionKnobs(answer_length=row["answer_length_level"], depth=row["depth_level"])
+            knobs = SessionKnobs(
+                answer_length=row["answer_length_level"], depth=row["depth_level"],
+                breadth=row["breadth_level"],
+            )
             if knobs != SessionKnobs():
                 lines.append(
                     f"Their latest style sliders: length {knobs.answer_length}/100, "
-                    f"depth {knobs.depth}/100 (0 = short/gist, 100 = long/rigorous)"
+                    f"depth {knobs.depth}/100, breadth {knobs.breadth}/100 "
+                    "(0 = short/gist/focused, 100 = long/rigorous/wide)"
                 )
                 used["knobs"] = knobs.model_dump()
     except Exception as exc:  # noqa: BLE001

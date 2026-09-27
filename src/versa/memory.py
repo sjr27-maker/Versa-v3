@@ -545,15 +545,26 @@ class WriteLearnerFact:
         return extracted
 
 
-def _summarize_path_prompt(facts: list[LearnerFact]) -> str:
+def _summarize_path_prompt(facts: list[LearnerFact], direction_path: str = "") -> str:
     listing = "\n".join(
         f"{i + 1}. situation: {f.situation}\n   resolution: {f.resolution}"
         for i, f in enumerate(facts)
     )
+    # directions.py: the order they chose to explore in, picked from the
+    # same standard set everyone sees, shown in shuffled order -- the most
+    # direct evidence of their order of approach there is.
+    order = (
+        "\nAfter answers they were also offered the same standard set of "
+        "directions everyone gets (see it simply, a worked example, why it "
+        "works, where it is used, go deeper, what comes next), in shuffled "
+        "order. The directions they chose, in order:\n"
+        f"{direction_path}\n"
+        if direction_path else ""
+    )
     return (
         "SUMMARIZE:PATH\n"
         "Below is one student's resolutions this session, in the exact "
-        f"order they occurred:\n{listing}\n\n"
+        f"order they occurred:\n{listing}\n{order}\n"
         "Label the STRUCTURE of this order — the abstract shape of how "
         "this student moved through material, not the specific topic "
         "or content (e.g. \"concrete example requested before abstract "
@@ -585,9 +596,9 @@ class SummarizeSessionPath:
         self._llm = llm
         self.last_call_count: int = 0
 
-    async def run(self, facts: list[LearnerFact]) -> PathSummary:
+    async def run(self, facts: list[LearnerFact], direction_path: str = "") -> PathSummary:
         self.last_call_count = 0
-        raw = await self._llm.complete(_summarize_path_prompt(facts))
+        raw = await self._llm.complete(_summarize_path_prompt(facts, direction_path))
         self.last_call_count += 1
         return _parse_path_summary(raw)
 

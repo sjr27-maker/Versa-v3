@@ -34,7 +34,7 @@ void main() {
     chat.send('  what is a derivative?  ');
 
     expect(transport.sent, [
-      {'type': 'message', 'text': 'what is a derivative?'}
+      {'type': 'message', 'text': 'what is a derivative?', 'directions': 'fork'}
     ]);
     expect(chat.messages.map((m) => m.role), [Role.user, Role.tutor]);
     expect(chat.messages.last.pending, isTrue);
@@ -121,7 +121,7 @@ void main() {
 
     final messageCountBeforePick = chat.messages.length;
     chat.pickOption(question, question.options[0]);
-    expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1'});
+    expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1', 'directions': 'fork'});
     expect(chat.messages.length, messageCountBeforePick + 1,
         reason: 'no echoed user bubble -- only the tutor\'s next turn is added');
     expect(chat.messages.last.role, Role.tutor);
@@ -251,7 +251,7 @@ void main() {
       expect(question.optionsResolved, isFalse);
 
       chat.pickOption(question, question.options[0]);
-      expect(transport.sent.single, {'type': 'select_option', 'option_id': 'o1'});
+      expect(transport.sent.single, {'type': 'select_option', 'option_id': 'o1', 'directions': 'fork'});
     });
 
     test('a resolved options turn resumes with the pick shown and buttons disabled', () async {
@@ -422,9 +422,9 @@ void main() {
 
       await settle();
       expect(backend.patchedKnobs, [
-        {'answer_length': 70, 'depth': 20},
+        {'answer_length': 70, 'depth': 20, 'breadth': 50},
       ]);
-      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '1'});
+      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '1', 'directions': 'fork'});
     });
 
     test('the rewrite streams in place of the old answer', () async {
@@ -461,7 +461,7 @@ void main() {
 
       chat.setKnobs(answerLength: 95);
       await settle();
-      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '2'});
+      expect(transport.sent.last, {'type': 'regenerate', 'request_id': '2', 'directions': 'fork'});
       transport.emit(const RegenDelta(1, 'stale piece'));
       transport.emit(const RegenDone(1, 'stale answer'));
       transport.emit(const RegenDelta(2, 'A long one'));
@@ -503,7 +503,7 @@ void main() {
       chat.setKnobs(answerLength: 20);
       await settle();
       expect(backend.patchedKnobs, [
-        {'answer_length': 20, 'depth': 50},
+        {'answer_length': 20, 'depth': 50, 'breadth': 50},
       ]);
       expect(transport.sent.where((m) => m['type'] == 'regenerate'), isEmpty);
     });
@@ -511,7 +511,7 @@ void main() {
     test('resuming a chat loads the levels it was left with', () async {
       final backend = FakeBackend();
       final id = backend.seedSession(learnerId: 'l1');
-      backend.knobsBySession[id] = {'answer_length': 80, 'depth': 15};
+      backend.knobsBySession[id] = {'answer_length': 80, 'depth': 15, 'breadth': 90};
       final chat = ChatController(
         api: backend.api,
         learner: _learner,
@@ -519,7 +519,78 @@ void main() {
         transportFactory: (_) async => FakeTransport(),
       );
       await chat.start();
-      expect(chat.knobs, const SessionKnobs(answerLength: 80, depth: 15));
+      expect(chat.knobs, const SessionKnobs(answerLength: 80, depth: 15, breadth: 90));
+    });
+  });
+
+  group('where this could go', () {
+    const cards = [
+      DirectionCard(id: 'd1', text: 'Show me with a speedometer'),
+      DirectionCard(id: 'd2', text: 'Work one out: x^3'),
+      DirectionCard(id: 'd3', text: 'Why the power rule works'),
+    ];
+
+    Future<(ChatController, FakeTransport)> answered() async {
+      final (chat, transport, _) = await _started();
+      chat.send('what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      await _tick();
+      return (chat, transport);
+    }
+
+    test('the strip attaches to the answer it follows, in the order sent', () async {
+      final (chat, transport) = await answered();
+      transport.emit(const DirectionsEvent(0, cards));
+      await _tick();
+      expect(chat.messages.last.directions.map((c) => c.id), ['d1', 'd2', 'd3']);
+    });
+
+    test('a strip for an older turn is ignored', () async {
+      final (chat, transport) = await answered();
+      transport.emit(const DirectionsEvent(7, cards));
+      await _tick();
+      expect(chat.messages.last.directions, isEmpty);
+    });
+
+    test('a fork link continues the same answer: no bubble, the reply is headed with it', () async {
+      final (chat, transport) = await answered();
+      transport.emit(const DirectionsEvent(0, cards));
+      await _tick();
+      final answer = chat.messages.last;
+      final before = chat.messages.length;
+      chat.pickDirection(answer, cards[0]);
+      expect(transport.sent.last,
+          {'type': 'direction', 'card_id': 'd1', 'directions': 'fork', 'continue': 'true'});
+      expect(chat.messages.length, before + 1, reason: 'only the continuing reply, no user bubble');
+      expect(chat.messages.last.continuationOf, 'Show me with a speedometer');
+      expect(answer.directions, isEmpty);
+    });
+
+    test("as cards, picking one reads as the learner's next message and closes the strip", () async {
+      final (chat, transport) = await answered();
+      chat.directionsStyle = 'strip';
+      transport.emit(const DirectionsEvent(0, cards));
+      await _tick();
+      final answer = chat.messages.last;
+      chat.pickDirection(answer, cards[1]);
+      expect(transport.sent.last, {'type': 'direction', 'card_id': 'd2', 'directions': 'strip'});
+      expect(answer.directions, isEmpty);
+      final bubbles = chat.messages.where((m) => m.role == Role.user).map((m) => m.text);
+      expect(bubbles.last, 'Work one out: x^3');
+      expect(chat.messages.last.pending, isTrue);
+
+      chat.pickDirection(answer, cards[0]); // gone: nothing more is sent
+      expect(transport.sent.where((f) => f['type'] == 'direction'), hasLength(1));
+    });
+
+    test('asking your own question passes the strip', () async {
+      final (chat, transport) = await answered();
+      transport.emit(const DirectionsEvent(0, cards));
+      await _tick();
+      final answer = chat.messages.last;
+      chat.send('and integrals?');
+      expect(answer.directions, isEmpty);
+      expect(transport.sent.last['type'], 'message');
     });
   });
 }

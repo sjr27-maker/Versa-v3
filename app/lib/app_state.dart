@@ -20,6 +20,7 @@ class AppState extends ChangeNotifier {
   static const _kLabel = 'learner_label';
   static const _kTiming = 'show_timing';
   static const _kStagePanel = 'show_stage_panel';
+  static const _kDirections = 'directions_style';
 
   Learner? learner;
   bool loaded = false;
@@ -37,10 +38,17 @@ class AppState extends ChangeNotifier {
   /// layout it will live in, so there is nothing session-specific to store.
   bool showStagePanel = false;
 
+  /// How "where this could go" shows under answers (server: directions.py):
+  /// 'fork' -- links the answer ends with, a tap continues the same answer --
+  /// or 'strip' -- cards below it, a tap asks as a new message. This device's
+  /// choice; every set records which one was actually shown.
+  String directionsStyle = 'fork';
+
   Future<void> load() async {
     _prefs ??= await SharedPreferences.getInstance();
     showTiming = _prefs!.getBool(_kTiming) ?? true;
     showStagePanel = _prefs!.getBool(_kStagePanel) ?? false;
+    directionsStyle = _prefs!.getString(_kDirections) == 'strip' ? 'strip' : 'fork';
     final label = _prefs!.getString(_kLabel);
     if (label != null && label.isNotEmpty) {
       try {
@@ -77,6 +85,12 @@ class AppState extends ChangeNotifier {
   void setShowStagePanel(bool value) {
     showStagePanel = value;
     _prefs?.setBool(_kStagePanel, value);
+    notifyListeners();
+  }
+
+  void setDirectionsStyle(String value) {
+    directionsStyle = value == 'strip' ? 'strip' : 'fork';
+    _prefs?.setString(_kDirections, directionsStyle);
     notifyListeners();
   }
 }

@@ -35,7 +35,7 @@ from tests.test_server import (  # noqa: F401  (fixtures)
 
 def test_the_default_levels_render_to_the_empty_string():
     assert render_knob_directive(SessionKnobs()) == ""
-    assert render_knob_directive(SessionKnobs(answer_length=50, depth=50)) == ""
+    assert render_knob_directive(SessionKnobs(answer_length=50, depth=50, breadth=50)) == ""
 
 
 def test_each_moved_slider_adds_its_own_line():
@@ -45,6 +45,11 @@ def test_each_moved_slider_adds_its_own_line():
     assert "Depth: 90/100" in only_depth and "rigorous" in only_depth and "Length" not in only_depth
     both = render_knob_directive(SessionKnobs(answer_length=0, depth=0))
     assert both.count("\n- ") == 2
+    only_breadth = render_knob_directive(SessionKnobs(breadth=95))
+    assert "Breadth: 95/100" in only_breadth and "range widely" in only_breadth
+    assert "Depth" not in only_breadth and "Length" not in only_breadth
+    assert "exactly what was asked" in render_knob_directive(SessionKnobs(breadth=5))
+    assert render_knob_directive(SessionKnobs(answer_length=0, depth=0, breadth=0)).count("\n- ") == 3
 
 
 def test_length_grows_with_the_level_and_neighbours_differ():
@@ -59,6 +64,8 @@ def test_levels_outside_0_to_100_are_rejected():
         SessionKnobs(answer_length=101)
     with pytest.raises(ValueError):
         SessionKnobs(depth=-1)
+    with pytest.raises(ValueError):
+        SessionKnobs(breadth=101)
 
 
 # ----------------------------------------------------------------- the store
@@ -68,8 +75,8 @@ def test_levels_outside_0_to_100_are_rejected():
 async def test_knobs_round_trip_and_default_for_new_sessions(transcript, clean_pool, learner_id):
     session_id = await transcript.create_session(learner_id)
     assert await transcript.get_knobs(session_id) == SessionKnobs()
-    await transcript.set_knobs(session_id, SessionKnobs(answer_length=12, depth=88))
-    assert await transcript.get_knobs(session_id) == SessionKnobs(answer_length=12, depth=88)
+    await transcript.set_knobs(session_id, SessionKnobs(answer_length=12, depth=88, breadth=30))
+    assert await transcript.get_knobs(session_id) == SessionKnobs(answer_length=12, depth=88, breadth=30)
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -114,10 +121,12 @@ async def test_patch_updates_only_the_given_level_and_tone_is_gone(live, new_cha
     async with httpx.AsyncClient(base_url=live.http) as client:
         first = await client.patch(f"/api/sessions/{sid}/knobs", json={"depth": 20})
         second = await client.patch(f"/api/sessions/{sid}/knobs", json={"answer_length": 80})
+        third = await client.patch(f"/api/sessions/{sid}/knobs", json={"breadth": 85})
         fetched = await client.get(f"/api/sessions/{sid}/knobs")
-    assert first.json() == {"answer_length": 50, "depth": 20}
-    assert second.json() == {"answer_length": 80, "depth": 20}
-    assert fetched.json() == second.json()
+    assert first.json() == {"answer_length": 50, "depth": 20, "breadth": 50}
+    assert second.json() == {"answer_length": 80, "depth": 20, "breadth": 50}
+    assert third.json() == {"answer_length": 80, "depth": 20, "breadth": 85}
+    assert fetched.json() == third.json()
     assert "tone" not in fetched.json()
 
 

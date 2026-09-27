@@ -8,6 +8,7 @@ import '../theme.dart';
 import '../widgets/chat_history_rail.dart';
 import '../widgets/collapsed_rail.dart';
 import '../widgets/composer.dart';
+import '../widgets/depth_breadth_pad.dart';
 import '../widgets/level_slider.dart';
 import '../widgets/message_view.dart';
 import '../widgets/stage_panel.dart';
@@ -177,8 +178,10 @@ class _ChatColumnState extends State<_ChatColumn> {
 
   @override
   Widget build(BuildContext context) {
-    final showTiming = context.watch<AppState>().showTiming;
+    final app = context.watch<AppState>();
+    final showTiming = app.showTiming;
     final chat = widget.chat;
+    chat.directionsStyle = app.directionsStyle;
     return ListenableBuilder(
       listenable: chat,
       builder: (context, _) {
@@ -213,6 +216,8 @@ class _ChatColumnState extends State<_ChatColumn> {
                               showTiming: showTiming,
                               canPickOption: chat.canSend,
                               onPickOption: (o) => chat.pickOption(m, o),
+                              onPickDirection: (c) => chat.pickDirection(m, c),
+                              directionsStyle: app.directionsStyle,
                               onViewClaimUpdate: (u) => showItemDetail(
                                 context, kind: 'claim', id: u.claimId, onChanged: () {},
                               ),
@@ -474,7 +479,7 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-/// Session controls from the design. Length and depth are per-chat 0-100
+/// Session controls from the design. Length, depth and breadth are per-chat 0-100
 /// sliders; moving one rewrites the latest answer live (ChatController). "Animations" is
 /// an app-wide switch: the animation itself isn't built, but the panel it
 /// will live in (widgets/stage_panel.dart) is.
@@ -531,16 +536,33 @@ class _KnobsRail extends StatelessWidget {
                     value: chat.knobs.answerLength,
                     onChanged: (v) => chat.setKnobs(answerLength: v),
                   ),
-                  LevelSlider(
-                    sliderKey: const ValueKey('knob-depth'),
-                    label: 'Depth',
-                    lowLabel: 'gist',
-                    highLabel: 'rigorous',
-                    value: chat.knobs.depth,
-                    onChanged: (v) => chat.setKnobs(depth: v),
+                  DepthBreadthPad(
+                    padKey: const ValueKey('knob-pad'),
+                    depth: chat.knobs.depth,
+                    breadth: chat.knobs.breadth,
+                    onChanged: (d, b) => chat.setKnobs(depth: d, breadth: b),
                   ),
+                  Text('WHERE NEXT', style: mono(10)),
+                  const SizedBox(height: 6),
+                  SegmentedButton<String>(
+                    key: const ValueKey('directions-style'),
+                    showSelectedIcon: false,
+                    style: SegmentedButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      textStyle: sans(12),
+                      selectedBackgroundColor: Paper.accentSoft,
+                      selectedForegroundColor: Paper.accentDark,
+                    ),
+                    segments: const [
+                      ButtonSegment(value: 'fork', label: Text('Fork'), tooltip: 'Links the answer ends with'),
+                      ButtonSegment(value: 'strip', label: Text('Cards'), tooltip: 'Cards below the answer'),
+                    ],
+                    selected: {app.directionsStyle},
+                    onSelectionChanged: (v) => app.setDirectionsStyle(v.first),
+                  ),
+                  const SizedBox(height: 14),
                   Text(
-                    'Moving a slider rewrites the latest answer.',
+                    'Moving a slider or the pad rewrites the latest answer.',
                     style: sans(11, color: Paper.faint, height: 1.4),
                   ),
                 ],

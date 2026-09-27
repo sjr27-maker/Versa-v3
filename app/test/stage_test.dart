@@ -312,7 +312,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('stage-choice-o1')));
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1', 'stage': 'true'});
+      expect(transport.sent.last, {'type': 'select_option', 'option_id': 'o1', 'stage': 'true', 'directions': 'fork'});
       expect(find.byKey(const ValueKey('stage-choices')), findsNothing);
       chat.dispose();
     });

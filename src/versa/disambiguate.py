@@ -802,6 +802,7 @@ class FinalAnswer:
         claim_constraints_block: str = "",
         knob_directive: str = "",
         lesson_context: str = "",
+        continues: str = "",
     ) -> str:
         """`knob_directive` (session_knobs.render_knob_directive) is the
         person's per-session length/depth/tone controls, pre-rendered;
@@ -849,6 +850,18 @@ class FinalAnswer:
                 "if they had stated this directly themselves, and only "
                 "this -- do not re-ask which they meant.\n"
             )
+        # directions.py's fork: the learner tapped one of the links the last
+        # answer ended with, so this turn is the NEXT PART of that answer.
+        # Only passed when set, so every other prompt is unchanged.
+        continuation_block = ""
+        if continues:
+            continuation_block = (
+                f"\nThis turn CONTINUES your previous answer: the {d.actor_noun} tapped "
+                f"{continues!r} to take it further in that direction. Write the next part "
+                "of the same explanation, picking up right where your last answer ended "
+                "(it is in the recent conversation below). Do not greet, do not restate or "
+                "summarise what you already said, and do not re-introduce the topic.\n"
+            )
         memory_block = ""
         if memory_context:
             memory_block = (
@@ -873,6 +886,7 @@ class FinalAnswer:
             f"{knob_directive}"
             f"{lesson_context}"
             f"{context_block}"
+            f"{continuation_block}"
             f"{memory_block}"
             f"{reference_bindings_block}"
             f"{learner_history_block}"

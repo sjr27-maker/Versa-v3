@@ -103,6 +103,9 @@ async def _stop(live: _Live) -> None:
     # let deferred post-response writes land before the next test wipes the DB
     while live.loop._background_tasks:
         await live.loop.wait_for_background_tasks()
+    # ...and the "where this could go" sets offered after answers
+    while live.app.state.direction_tasks:
+        await asyncio.gather(*list(live.app.state.direction_tasks), return_exceptions=True)
     live.server.should_exit = True
     await live.task
 

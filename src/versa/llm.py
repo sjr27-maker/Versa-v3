@@ -317,6 +317,19 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
         {"grades": [{"index": i, "correct": True, "feedback": "Stub: looks right."}
                     for i in range(prompt.count("Student's answer:"))]}
     ),
+    # directions.py: one card per slot of the standard skeleton.
+    "DIRECTIONS:SUGGEST": json.dumps(
+        {
+            "cards": {
+                "intuition": "Show me with an everyday picture",
+                "example": "Work one example through with me",
+                "why": "Why does it work like that",
+                "use": "Where is this used for real",
+                "deeper": "Take it one level deeper",
+                "next": "What should I learn after this",
+            }
+        }
+    ),
     # Conservative: never completes a task unless a test opts in.
     "LESSON:JUDGE": json.dumps(
         {"completed": False, "evidence": "", "drifted": False, "check_passed": None}
@@ -907,6 +920,16 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
             },
         },
         "required": ["lessons"],
+    },
+    "DIRECTIONS:SUGGEST": {
+        "type": "OBJECT",
+        "properties": {"cards": {
+            "type": "OBJECT",
+            "properties": {slot: {"type": "STRING"} for slot in
+                           ("intuition", "example", "why", "use", "deeper", "next")},
+            "required": ["intuition", "example", "why", "use", "deeper", "next"],
+        }},
+        "required": ["cards"],
     },
     "EXAM:SYLLABUS": {
         "type": "OBJECT",
