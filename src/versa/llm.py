@@ -925,6 +925,7 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         "type": "OBJECT",
         "properties": {"cards": {
             "type": "OBJECT",
+            "nullable": True,
             "properties": {slot: {"type": "STRING"} for slot in
                            ("intuition", "example", "why", "use", "deeper", "next")},
             "required": ["intuition", "example", "why", "use", "deeper", "next"],
@@ -1281,6 +1282,9 @@ class ModelTierClients(NamedTuple):
     fast: LLMClient
     capable: LLMClient
     best: LLMClient
+    # The fast model with its own (lighter) thinking, for the stage director;
+    # None = use `fast` (stubs and tests).
+    stage: LLMClient | None = None
 
 
 def build_tier_clients(
@@ -1337,4 +1341,5 @@ def build_tier_clients(
         fast=_tier_client(cfg.fast, cfg.fast_thinking),
         capable=_tier_client(cfg.capable, cfg.capable_thinking),
         best=_tier_client(cfg.best, cfg.best_thinking),
+        stage=_tier_client(cfg.fast, cfg.stage_thinking),
     )

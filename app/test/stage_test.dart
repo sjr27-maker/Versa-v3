@@ -70,9 +70,77 @@ void main() {
     });
   });
 
+  group('never stuck', () {
+    test('a wrong pick is shown the right answer, kept, and the stage settles', () async {
+      final e = StageEngine()..speed = 1;
+      final checked = <String>[];
+      e.onChecked = (q, choices, picked, answer) => checked.add('$q|$picked|$answer');
+      e.play(parseScript([
+        {'do': 'spawn', 'id': 'sheep', 'kind': 'emoji', 'label': 'S', 'x': 0.6},
+        {
+          'do': 'ask', 'question': 'Slope of x^2 at 3?', 'answer': 'a',
+          'choices': [{'id': 'a', 'text': '6'}, {'id': 'b', 'text': '9'}],
+          'then': {'b': [{'do': 'emote', 'mood': 'confused'}, {'do': 'say', 'text': 'Not quite!'}]},
+        },
+      ]));
+      await _run(e, 1.0);
+      expect(e.asking, isTrue);
+      e.answer('b');
+      await _run(e, 0.3);
+      expect(checked, ['Slope of x^2 at 3?|b|a']);
+      expect(e.bubbleText, 'It’s “6”!'.replaceAll('’', "'"), reason: 'the right answer, first');
+      await _run(e, 6);
+      expect(e.running, isFalse);
+      expect(e.mood, isNot(Mood.confused), reason: 'never left frozen mid-reaction');
+      await _run(e, StageEngine.settleAfter + 1);
+      expect(e.props, isEmpty, reason: 'the props fade once it is over');
+    });
+
+    test('a right pick goes straight to the reaction', () async {
+      final e = StageEngine()..speed = 1;
+      e.play(parseScript([
+        {
+          'do': 'ask', 'question': 'q?', 'answer': 'a',
+          'choices': [{'id': 'a', 'text': '6'}, {'id': 'b', 'text': '9'}],
+          'then': {'a': [{'do': 'say', 'text': 'Yes!'}]},
+        },
+      ]));
+      await _run(e, 0.6);
+      e.answer('a');
+      await _run(e, 0.3);
+      expect(e.bubbleText, 'Yes!');
+    });
+  });
+
+  group('pace and notes', () {
+    test('it plays slower by default, and a speech bubble stays long enough to read', () async {
+      final e = StageEngine();
+      expect(e.speed, lessThan(1));
+      e.play(parseScript([
+        {'do': 'say', 'text': 'A derivative is how fast something changes right now', 'ms': 300},
+      ]));
+      await _run(e, 3);
+      expect(e.bubbleText, isNotNull, reason: '9 words need more than the 0.3 s the script asked for');
+      await _run(e, 4);
+      expect(e.bubbleText, isNull);
+    });
+
+    test('a note is handed out to be pinned', () async {
+      final e = StageEngine()..speed = 1;
+      final notes = <String>[];
+      e.onNote = notes.add;
+      e.play(parseScript([
+        {'do': 'note', 'text': 'A derivative is a rate of change.'},
+        {'do': 'note', 'text': '   '},
+      ]));
+      await _run(e, 2);
+      expect(notes, ['A derivative is a rate of change.']);
+    });
+  });
+
   group('engine', () {
     test('spawn, move and remove change the world over time', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       final done = e.play(parseScript([
         {'do': 'spawn', 'id': 'b', 'kind': 'box', 'x': 0.5},
         {'do': 'move', 'target': 'b', 'x': 0.9, 'style': 'slide', 'ms': 500},
@@ -92,7 +160,7 @@ void main() {
     });
 
     test('a push moves the prop and the blob together, then the blob relaxes', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       final done = e.play(parseScript([
         {'do': 'spawn', 'id': 'b', 'kind': 'box', 'x': 0.5},
         {'do': 'push', 'target': 'b', 'dx': 0.2, 'ms': 600},
@@ -110,7 +178,7 @@ void main() {
     });
 
     test('a skit ask waits for an answer, then runs that branch', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       final done = e.play(parseScript([
         {
           'do': 'ask',
@@ -138,7 +206,7 @@ void main() {
     });
 
     test('a chat question outranks a playing skit', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       e.play(forceSkit);
       await _run(e, 1);
       expect(e.running, isTrue);
@@ -151,7 +219,7 @@ void main() {
     });
 
     test('carry, throw, drop, scale, spin, relabel, effects and hats', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       final done = e.play(parseScript([
         {'do': 'spawn', 'id': 'a', 'kind': 'emoji', 'label': 'A', 'x': 0.6},
         {'do': 'carry', 'target': 'a'},
@@ -192,18 +260,28 @@ void main() {
     });
 
     test('a live performance plays actions as they arrive, then ends', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       e.beginLive();
       expect(e.running, isTrue, reason: 'waiting for the first action');
       e.enqueue(StageAction.fromJson({'do': 'spawn', 'id': 'a', 'kind': 'emoji', 'label': 'A', 'x': 0.7}));
       await _run(e, 0.6);
       expect(e.props.keys, ['a'], reason: 'played before the script is complete');
 
-      e.enqueue(StageAction.fromJson({'do': 'ask', 'question': '?', 'choices': [{'id': 'x', 'text': 'x'}]}));
+      // a skit may end with a quick check: it waits for the pick, then reacts
+      e.enqueue(StageAction.fromJson({
+        'do': 'ask', 'question': 'Slope of x^2 at 3?',
+        'choices': [{'id': 'a', 'text': '6'}, {'id': 'b', 'text': '9'}],
+        'then': {'a': [{'do': 'emote', 'mood': 'proud'}]},
+      }));
       e.enqueue(StageAction.fromJson({'do': 'emote', 'mood': 'excited'}));
-      await _run(e, 0.2);
-      expect(e.asking, isFalse, reason: 'a script never asks; the chat does');
-      expect(e.mood, Mood.excited);
+      await _run(e, 0.5);
+      expect(e.asking, isTrue);
+      expect(e.bubbleText, 'Slope of x^2 at 3?');
+      expect(e.mood, isNot(Mood.excited), reason: 'the rest waits for the answer');
+      e.answer('a');
+      await _run(e, 0.1);
+      expect(e.asking, isFalse);
+      expect(e.mood, Mood.excited, reason: 'reacted (proud), then the performance went on');
 
       e.endLive();
       await _run(e, 0.2);
@@ -216,7 +294,7 @@ void main() {
     });
 
     test('the "I remember" gag plays, and the performance joins it instead of wiping it', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       e.recalled(retracted: true);
       await _run(e, 0.6);
       expect(e.props.containsKey('_bulb'), isTrue, reason: 'the lightbulb moment');
@@ -233,8 +311,30 @@ void main() {
       expect(e.props.containsKey('_bulb'), isFalse);
     });
 
+    test('"I remember" arriving mid-performance plays next and keeps what is on stage', () async {
+      // 2026-09-28: asking the same question again showed nothing -- the gag
+      // reset the stage, throwing away the performance's first beats, and
+      // everything after them pointed at things that no longer existed
+      final e = StageEngine()..speed = 1;
+      e.beginLive();
+      e.enqueue(StageAction.fromJson({'do': 'spawn', 'id': 'ship', 'kind': 'emoji', 'label': 'S', 'x': 0.8}));
+      await _run(e, 0.6);
+      expect(e.props.containsKey('ship'), isTrue);
+
+      e.recalled(retracted: false);
+      e.enqueue(StageAction.fromJson({'do': 'move', 'target': 'ship', 'x': 0.6, 'ms': 500}));
+      e.endLive();
+      await _run(e, 0.8);
+      expect(e.props.containsKey('_bulb'), isTrue, reason: 'the gag plays next');
+      expect(e.props['ship']!.diedAt, isNull, reason: 'nothing was wiped');
+      for (var i = 0; i < 40 && e.running; i++) {
+        await _run(e, 0.25);
+      }
+      expect(e.props['ship']!.pos.base(e.time).dx, closeTo(0.6, 1e-9), reason: 'and the show went on');
+    });
+
     test('a gag with no performance after it winds down by itself', () async {
-      final e = StageEngine();
+      final e = StageEngine()..speed = 1;
       e.recalled(retracted: false);
       for (var i = 0; i < 60 && e.running; i++) {
         await _run(e, 0.25);
@@ -244,7 +344,7 @@ void main() {
 
     test('the gravity skit plays start to finish down either branch', () async {
       for (final pick in ['yes', 'no']) {
-        final e = StageEngine();
+        final e = StageEngine()..speed = 1;
         final done = e.play(gravitySkit);
         for (var i = 0; i < 80 && !e.asking; i++) {
           await _run(e, 0.5);
@@ -261,7 +361,7 @@ void main() {
 
     test('the demo skit plays start to finish down either branch', () async {
       for (final pick in ['harder', 'lighter']) {
-        final e = StageEngine();
+        final e = StageEngine()..speed = 1;
         final done = e.play(forceSkit);
         for (var i = 0; i < 60 && !e.asking; i++) {
           await _run(e, 0.5);
@@ -375,15 +475,130 @@ void main() {
       chat.dispose();
     });
 
-    testWidgets('the demo button plays the skit and its ask shows choices', (tester) async {
-      await tester.pumpWidget(_host(StagePanel(onCollapse: () {})));
-      await tester.tap(find.byKey(const ValueKey('stage-demo')));
-      await tester.pump();
-      expect(find.byTooltip('Stop the skit'), findsOneWidget);
+    testWidgets('it starts with the answer, and a fact box zooms out and floats down', (tester) async {
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      final engine = StageEngine();
+      final chat = ChatController(
+        api: backend.api,
+        learner: const Learner(id: 'l1', label: 'Asha'),
+        transportFactory: (_) async => transport,
+      );
+      Future<void> play(double seconds) async {
+        for (var i = 0; i < (seconds * 20).ceil(); i++) {
+          engine.tick(0.05);
+          await tester.pump(const Duration(milliseconds: 50));
+        }
+      }
 
-      await tester.tap(find.byKey(const ValueKey('stage-demo')));
+      await tester.runAsync(chat.start);
+      await tester.pumpWidget(_host(SizedBox(
+        width: 700,
+        height: 800,
+        child: StagePanel(chat: chat, engine: engine, onCollapse: () {}),
+      )));
+      chat.send('what is a derivative?');
+
+      // the stage opens with the answer's first words, mid-paragraph
+      transport.emit(const StageStart(0));
+      transport.emit(const Delta('A rate of'));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await play(0.3);
+      expect(engine.running, isTrue);
+      expect(engine.mood, Mood.excited, reason: 'it perks up at once');
+      expect(chat.status, ChatStatus.streaming);
+
+      transport.emit(const StageActionEvent(0, {'do': 'note', 'text': 'A derivative is a rate of change.'}));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await play(1.2);
+      expect(find.byKey(const ValueKey('flying-note-0')), findsOneWidget, reason: 'a box beside the slime');
+      await play(3);
+      expect(find.byKey(const ValueKey('flying-note-0')), findsNothing);
+      expect(find.descendant(of: find.byKey(const ValueKey('keep-in-mind')),
+          matching: find.text('A derivative is a rate of change.')), findsOneWidget, reason: 'landed below');
+
+      expect(find.byKey(const ValueKey('stage-speed')), findsNothing, reason: 'one fixed pace, no setter');
+      await tester.pumpWidget(_host(const SizedBox()));
+      chat.dispose();
+      engine.dispose();
+    });
+
+    testWidgets('the replay button plays the last answer\'s animation again, or stops it', (tester) async {
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      final engine = StageEngine();
+      final chat = ChatController(
+        api: backend.api,
+        learner: const Learner(id: 'l1', label: 'Asha'),
+        transportFactory: (_) async => transport,
+      );
+      Future<void> play(double seconds) async {
+        for (var i = 0; i < (seconds * 20).ceil(); i++) {
+          engine.tick(0.05);
+          await tester.pump();
+        }
+      }
+
+      await tester.runAsync(chat.start);
+      await tester.pumpWidget(_host(StagePanel(chat: chat, engine: engine, onCollapse: () {})));
+      expect(find.byTooltip('Nothing to replay yet'), findsOneWidget);
+      expect(find.byKey(const ValueKey('stage-demo')), findsNothing, reason: 'the demo is gone');
+
+      chat.send('what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 1));
+      transport.emit(const StageStart(0));
+      transport.emit(const StageActionEvent(0, {'do': 'note', 'text': 'A derivative is a rate of change.'}));
+      transport.emit(const StageActionEvent(0, {'do': 'say', 'text': 'Zoom!'}));
+      transport.emit(const StageEnd(0));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await play(8);
+      expect(engine.running, isFalse);
+      expect(find.byTooltip('Replay the animation'), findsOneWidget);
+      expect(find.text('A derivative is a rate of change.'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('stage-replay')));
+      await play(0.3);
+      expect(find.byTooltip('Stop the animation'), findsOneWidget);
+      await play(2);
+      expect(find.text('A derivative is a rate of change.'), findsOneWidget, reason: 'not pinned twice');
+
+      await tester.tap(find.byKey(const ValueKey('stage-replay')));
       await tester.pump();
-      expect(find.byTooltip('Play the demo skit'), findsOneWidget);
+      expect(find.byTooltip('Replay the animation'), findsOneWidget, reason: 'stopped');
+
+      await tester.pumpWidget(_host(const SizedBox()));
+      chat.dispose();
+      engine.dispose();
+    });
+
+    testWidgets('while the chat writes, the slime watches it instead of talking', (tester) async {
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      final engine = StageEngine();
+      final chat = ChatController(
+        api: backend.api,
+        learner: const Learner(id: 'l1', label: 'Asha'),
+        transportFactory: (_) async => transport,
+      );
+      await tester.runAsync(chat.start);
+      await tester.pumpWidget(_host(StagePanel(chat: chat, engine: engine, onCollapse: () {})));
+      chat.send('what is a derivative?');
+      transport.emit(const Delta('A rate '));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(chat.status, ChatStatus.streaming);
+      expect(engine.talking, isFalse, reason: 'it is not the one writing');
+      expect(engine.watchingChat, isTrue);
+      expect(engine.lookX, 1.0, reason: 'eyes toward the chat');
+
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 1));
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+      expect(engine.watchingChat, isFalse);
+
+      await tester.pumpWidget(_host(const SizedBox()));
+      chat.dispose();
+      engine.dispose();
     });
   });
 }

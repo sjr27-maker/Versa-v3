@@ -2290,6 +2290,9 @@ class SessionLoop:
             if question_author is QuestionAuthor.SYSTEM_OPTION
             else turn_text
         )
+        # This turn is an answer (not options): the server's stage, written
+        # since the message arrived, may now show (server.py _StageRun).
+        await _emit_turn_event({"type": "answering"})
 
         (
             learner_history_block,

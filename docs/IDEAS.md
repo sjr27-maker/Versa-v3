@@ -356,6 +356,19 @@ per-session pending-options state in the loop. See the decisions log.
 - Options still take ~6-10 s to appear in the app (embedding, ambiguity check
   and option generation run one after another); "options first, memory second"
   (section 1) is the lever.
+- **Thinking-style detection fragments and drifts** (found 2026-09-27, live,
+  `docs/verification-runs/thinking_style_FF_20260927.md`). FF's consistent
+  style did get promoted (5/5), but spread over 5 candidates, because
+  `consolidate_session` asks the confirmation call about the single nearest
+  candidate only (`limit=1`): a stray nearest candidate shadows the real one.
+  The 0.72 similarity bar never filtered anything (all nearest sims were
+  0.84-0.95). A varied-persona control reached 3/5 on a vague "linear
+  progression" match -- heading for a false promotion. A candidate's text is
+  frozen at its first session. And a confirmed style can displace a real
+  topic ambiguity ("logs": FF was offered how-to-learn options, never
+  "logarithms or log files?"). Levers, not decided: ask about the top-k
+  candidates, raise or measure the vector bar, a stricter judge prompt, more
+  control runs. Not fixed.
 - The claim layer can't promote a claim under the current confidence clamp
   (threshold 0.8, clamp max 0.7) — by design until calibration exists.
 - **Failed background node calls leave zero durable trace** (found
@@ -383,6 +396,77 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-09-28** — The stage: a room, a story, and instruments. Your words:
+  "by 3d space I expected it to work for everything"; "let the transition
+  between the stages ... be smooth"; "more dynamicity while retaining
+  smoothness"; "it speeds up one thing but there is no reference of time".
+  - *Room:* always 3D; anything can stand deeper (`z`); flat props have body;
+    the slime hops aside when something lands on it.
+  - *Story:* one set of objects kept and changed; set up -> show -> react ->
+    link; `scene` steps the last idea back (dimmed) instead of erasing it.
+  - *Motion:* varied entrances, idle bob, trails, orbit paths, a camera that
+    eases in on what's watched, `link` (a flowing connection).
+  - *Instruments:* clock, stopwatch, counter, gauge, bar, thermometer --
+    animated by the engine; `track` binds one to a moving thing (a clock
+    slows by sqrt(1-v^2), a gauge reads speed, a counter adds distance);
+    `cruise` holds a speed; `compare` makes two lanes; symbols go `on` the
+    thing they name; a `plan` line comes first, and `check_script` logs a
+    plan it didn't keep or a quantity nothing measures.
+
+- **2026-09-27/28** — The stage: never stuck, real graphs and maths, fast,
+  and 3D. Your words, in order: "when a mistake is done it stays here";
+  "real visuals like graphs"; "add mathematical symbols and formula";
+  "make them load in like 2-3 sec ... if there is a continuing question";
+  "give the slime the ability to make the space around it 3d and new
+  objects to spawn".
+  - *Never stuck:* a quick check carries its right answer; a wrong pick is
+    shown it ("It's 6!") before the reaction; every performance ends calm
+    and its props fade. Picks are kept (`stage_checks`, invariant 15).
+  - *Graphs + maths:* axes, curves from a formula (a small safe reader, the
+    same grammar checked on the server), points that slide, tangents with a
+    live slope; formulas typeset with `flutter_math_fork` (LaTeX). The
+    server repairs LaTeX a model single-escaped in JSON (\frac -> form feed).
+  - *Speed:* the stage starts the moment the student sends -- alongside the
+    answer, from the question + the previous answer (+ the direction tapped)
+    -- on its own light-thinking model setting (`GEMINI_THINKING_STAGE`,
+    "minimal"). Measured end to end: stage opens at 0.0s, first beat
+    1.7-1.9s, for new questions and continuations (was ~10s). Trade-off: an
+    ambiguous question starts a skit that the options then take over.
+  - *3D:* a `world` action turns the stage into a space with a perspective
+    floor; solids (cube sphere cylinder cone pyramid prism torus planet
+    atom) are real lit meshes with depth, shadows and back-to-front
+    drawing; `turn` rotates, `orbit` circles one solid around another,
+    `spin` keeps it turning. Live: the moon question went 3D with an orbit,
+    a cube's volume turned a cube beside typeset formulas, a derivative
+    used the graph kit.
+
+- **2026-09-27** — The stage acts out the ANSWER, in step with the chat.
+  Your words: "currently its too fast and the steps by which it explains
+  disappears ... let it go to the bottom below the animations, if there is
+  an option to ask some question then let it, also sync it with the chat,
+  when I say continue the chat is saying one thing and the slime thinks
+  something else".
+  - *Sync:* the director (stage.py) now gets the answer itself, numbered by
+    paragraph, and emits `section` markers before each paragraph's beats.
+    The app lights that paragraph up in the chat while it plays, and holds
+    it at least as long as it takes to read (~0.3 s/word). A fork
+    continuation also gets the previous answer, so the story carries on.
+    Trade-off: the skit starts when the answer is complete (it can't act out
+    what isn't written yet); options turns get no skit (the slime asks the
+    options instead).
+  - *Keep in mind:* a new `note` action pins 2-4 takeaways below the stage,
+    where they stay for the whole chat.
+  - *Questions:* the skit may end with one quick check (`ask` with 2-3
+    answers and a reaction to each); it waits for the pick. Not yet
+    recorded server-side -- the pick lives only in the app for now.
+  - *Pace:* default 0.8x, a Slow/Normal/Fast control on the stage, and
+    speech bubbles stay up long enough to read (~0.4 s/word, 2-8 s).
+  - Verified live: a 3-paragraph derivative answer came back as section
+    1/2/3 with a faithful note each and a closing check; the "snapshot"
+    continuation carried the same story on.
+  - *Next (your "give it more power"):* not started -- see the suggestions
+    discussed (graph/diagram kits, layout by meaning, touchable scenes).
 
 - **2026-09-27** — The fork and the depth x breadth pad (migration 079,
   `FinalAnswer(continues=...)`, app `widgets/depth_breadth_pad.dart`).

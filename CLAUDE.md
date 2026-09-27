@@ -421,3 +421,23 @@ order, and what they pass over -- is the thinking-style evidence this
 feature exists to collect, and session-end consolidation reads it back.
 If a pick could be edited or a set pruned, that order would stop being a
 record of what the learner actually did.
+
+### 15. The stage's quick checks are append-only
+
+`StageCheckStore` (`stage_checks`, migration `080_stage_checks.sql`, code
+in `src/versa/stage.py`) must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `StageCheckStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `stage.py` or its migration.
+- One row per pick: the question, its choices, what was picked, the
+  answer the director marked right (or NULL), and whether they matched.
+  Written once, never edited.
+- Walled off: nothing here is written into claims or thinking styles --
+  episodic evidence only, the same wall as invariants 6/8/13/14.
+- Verified by `tests/test_stage_checks_append_only.py`, the same AST-based
+  check used for invariants 1, 4, 6-14.
+
+Why: whether a student got the stage's check right is a record of what
+actually landed. If a wrong answer could be quietly edited to right, or
+pruned, any later reading of "what this student understood" stops being
+trustworthy.

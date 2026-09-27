@@ -45,6 +45,10 @@ class FakeTransport implements ChatTransport {
       });
 
   @override
+  void sendStageCheck(Map<String, Object?> check) =>
+      sent.add({'type': 'stage_check', for (final e in check.entries) e.key: '${e.value}'});
+
+  @override
   void regenerate(int requestId, {String? directions}) =>
       sent.add({'type': 'regenerate', 'request_id': '$requestId', 'directions': ?directions});
 

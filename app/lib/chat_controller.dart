@@ -256,6 +256,23 @@ class ChatController extends ChangeNotifier {
     _notify();
   }
 
+  /// The student answered the stage's quick check for [turnIndex]: send it
+  /// to be kept (right or wrong is evidence of what landed).
+  void recordStageCheck({
+    required int turnIndex,
+    required String question,
+    required List<(String, String)> choices,
+    required String picked,
+    String? answer,
+  }) =>
+      _transport?.sendStageCheck({
+        'turn_index': turnIndex,
+        'question': question,
+        'choices': [for (final (id, text) in choices) {'id': id, 'text': text}],
+        'picked': picked,
+        'answer': answer,
+      });
+
   /// How this chat shows "where this could go": 'fork' (links the answer
   /// ends with) or 'strip' (cards below it). Set by the screen from
   /// AppState.directionsStyle.

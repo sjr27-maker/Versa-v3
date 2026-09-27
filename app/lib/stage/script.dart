@@ -37,7 +37,24 @@ Mood moodFromName(String? name) =>
 enum PropKind {
   box, ball, arrow, text, star, heart, cloud, //
   emoji, circle, rect, triangle, line, path, wave,
+  // the graph kit: axes -> plot (a formula) -> dot (a point on it) -> tangent
+  axes, plot, dot, tangent,
+  // a typeset formula (LaTeX)
+  math,
+  // a flowing connection between two props (`on` -> `to`)
+  link,
+  // instruments: they SHOW a quantity changing (the engine animates them)
+  clock, stopwatch, counter, gauge, bar, thermometer,
+  // 3D solids (solids.dart), placed in the stage's world with depth
+  cube, sphere, cylinder, cone, pyramid, prism, torus, planet, atom,
 }
+
+bool isSolidKind(PropKind k) => k.index >= PropKind.cube.index;
+
+bool isInstrumentKind(PropKind k) => k.index >= PropKind.clock.index && k.index <= PropKind.thermometer.index;
+
+bool isGraphKind(PropKind k) =>
+    k == PropKind.axes || k == PropKind.plot || k == PropKind.dot || k == PropKind.tangent;
 
 /// Null for a kind this build doesn't know (see SpawnAction.fromJson: it
 /// becomes a text label, so the idea still reaches the screen).
@@ -102,6 +119,12 @@ sealed class StageAction {
           x2: (j['x2'] as num?)?.toDouble(),
           y2: (j['y2'] as num?)?.toDouble(),
           label: kind == null ? (s('label') ?? s('kind')) : s('label'),
+          caption: s('caption'),
+          to: s('to'),
+          enter: s('enter'),
+          rate: (j['rate'] as num?)?.toDouble(),
+          value: (j['value'] as num?)?.toDouble(),
+          track: s('track'),
           size: d('size', 1),
           color: s('color'),
           w: (j['w'] as num?)?.toDouble(),
@@ -112,7 +135,34 @@ sealed class StageAction {
           ],
           amp: d('amp', 0.04),
           cycles: d('cycles', 3),
+          fn: s('fn'),
+          on: s('on'),
+          at: (j['at'] as num?)?.toDouble(),
+          xmin: d('xmin', -5),
+          xmax: d('xmax', 5),
+          ymin: d('ymin', -5),
+          ymax: d('ymax', 5),
+          tex: s('tex'),
+          z: d('z', 0),
+          lift: d('lift', 0),
+          spin: d('spin', 0),
+          yaw: d('yaw', 0.08),
+          pitch: d('pitch', 0),
         );
+      case 'world':
+        return WorldAction(threeD: s('mode') == '3d');
+      case 'turn':
+        return TurnAction(target: s('target') ?? '', yaw: d('yaw', 1), pitch: d('pitch', 0), ms: ms(1500));
+      case 'orbit':
+        return OrbitAction(
+          target: s('target') ?? '',
+          around: s('around') ?? '',
+          radius: d('radius', 0.15),
+          turns: d('turns', 1),
+          ms: ms(3000),
+        );
+      case 'slide':
+        return SlideAction(target: s('target') ?? '', at: d('at', 0), ms: ms(1400));
       case 'move':
         return MoveAction(
           target: s('target') ?? 'blob',
@@ -160,8 +210,29 @@ sealed class StageAction {
         );
       case 'wear':
         return WearAction(s('label'));
+      case 'note':
+        final text = s('text');
+        return text == null || text.trim().isEmpty ? const WaitAction(0) : NoteAction(text.trim());
       case 'wait':
         return WaitAction(ms(500));
+      case 'scene':
+        return const SceneAction();
+      case 'set':
+        return SetAction(
+          target: s('target') ?? '',
+          value: (j['value'] as num?)?.toDouble(),
+          rate: (j['rate'] as num?)?.toDouble(),
+          ms: ms(800),
+        );
+      case 'cruise':
+        return CruiseAction(target: s('target') ?? '', speed: d('speed', 0.8), ms: ms(3000));
+      case 'compare':
+        return CompareAction(left: s('left'), right: s('right'));
+      case 'plan':
+        return PlanAction({
+          for (final e in (j['cast'] as Map? ?? const {}).entries)
+            if (e.value is String) '${e.key}': e.value as String,
+        });
       case 'together':
         return TogetherAction(list('actions'));
       case 'ask':
@@ -177,6 +248,7 @@ sealed class StageAction {
               StageChoice.fromJson((c as Map).cast<String, dynamic>()),
           ],
           then: branches,
+          answer: j['answer'] == null ? null : '${j['answer']}',
         );
       default:
         return const WaitAction(0);
@@ -203,6 +275,12 @@ class SpawnAction extends StageAction {
     this.x2,
     this.y2,
     this.label,
+    this.caption,
+    this.to,
+    this.enter,
+    this.rate,
+    this.value,
+    this.track,
     this.size = 1,
     this.color,
     this.w,
@@ -210,12 +288,52 @@ class SpawnAction extends StageAction {
     this.points = const [],
     this.amp = 0.04,
     this.cycles = 3,
+    this.fn,
+    this.on,
+    this.at,
+    this.xmin = -5,
+    this.xmax = 5,
+    this.ymin = -5,
+    this.ymax = 5,
+    this.tex,
+    this.z = 0,
+    this.lift = 0,
+    this.spin = 0,
+    this.yaw = 0.08,
+    this.pitch = 0,
   });
   final String id;
   final PropKind kind;
   final double x, y;
+
+  /// 3D solids: depth into the stage (0 front .. 1 far), height above the
+  /// floor, a steady spin (turns per second), and a starting yaw/pitch (turns).
+  final double z, lift, spin, yaw, pitch;
+
+  /// Graph kit. `fn`: a plot's formula of x; `on`: the prop this one sits on
+  /// (a plot on axes, a dot on a plot, a tangent on a dot); `at`: a dot's x;
+  /// xmin..ymax: the axes' ranges. `tex`: a typeset (LaTeX) formula or label.
+  final String? fn, on;
+  final double? at;
+  final double xmin, xmax, ymin, ymax;
+  final String? tex;
   final double? x2, y2;
   final String? label;
+
+  /// Words under an emoji ("t = 0" under a clock): an emoji's label is the
+  /// glyph itself.
+  final String? caption;
+
+  /// Link: the prop it flows to (from `on`).
+  final String? to;
+
+  /// How it arrives: pop | drop | rise | swoop (null = the app picks).
+  final String? enter;
+
+  /// Instruments: ticks/counts per second, a gauge's reading (0..1), and a
+  /// moving thing it is bound to (see StageEngine's instruments).
+  final double? rate, value;
+  final String? track;
   final double size;
 
   /// A palette name ("accent", "olive", "warn", "ink", "blue") -- never a raw
@@ -226,6 +344,36 @@ class SpawnAction extends StageAction {
 
   /// Wave only: amplitude (fraction of stage height) and how many cycles fit.
   final double amp, cycles;
+}
+
+/// Switch the stage between a flat backdrop and a 3D space with a floor.
+class WorldAction extends StageAction {
+  const WorldAction({required this.threeD});
+  final bool threeD;
+}
+
+/// Turn a 3D solid by [yaw]/[pitch] full rotations.
+class TurnAction extends StageAction {
+  const TurnAction({required this.target, this.yaw = 1, this.pitch = 0, this.ms = 1500});
+  final String target;
+  final double yaw, pitch;
+  final int ms;
+}
+
+/// Send a solid around another [turns] times at [radius] (passing behind it).
+class OrbitAction extends StageAction {
+  const OrbitAction({required this.target, required this.around, this.radius = 0.15, this.turns = 1, this.ms = 3000});
+  final String target, around;
+  final double radius, turns;
+  final int ms;
+}
+
+/// Slide a graph dot along its curve to x = [at].
+class SlideAction extends StageAction {
+  const SlideAction({required this.target, required this.at, this.ms = 1400});
+  final String target;
+  final double at;
+  final int ms;
 }
 
 /// Travel to x (and y, for props that fly). `target` is "blob" or a prop id.
@@ -302,6 +450,42 @@ class WaitAction extends StageAction {
   final int ms;
 }
 
+/// The story moves on: what's on stage steps back into the room, dimmed but
+/// still there; anything used again comes forward.
+class SceneAction extends StageAction {
+  const SceneAction();
+}
+
+/// An instrument's reading and/or rate eases to new values.
+class SetAction extends StageAction {
+  const SetAction({required this.target, this.value, this.rate, required this.ms});
+  final String target;
+  final double? value, rate;
+  final int ms;
+}
+
+/// A thing travels at a steady [speed] (0..0.99) for [ms], in place: speed
+/// lines stream past it, and whatever tracks it responds.
+class CruiseAction extends StageAction {
+  const CruiseAction({required this.target, required this.speed, required this.ms});
+  final String target;
+  final double speed;
+  final int ms;
+}
+
+/// Two lanes for a side-by-side comparison (both null: the lanes go).
+class CompareAction extends StageAction {
+  const CompareAction({this.left, this.right});
+  final String? left, right;
+}
+
+/// The script's plan: what each id stands for (used as its caption when it
+/// has none).
+class PlanAction extends StageAction {
+  const PlanAction(this.cast);
+  final Map<String, String> cast;
+}
+
 /// Run several actions at once; finishes when the slowest does.
 class TogetherAction extends StageAction {
   const TogetherAction(this.actions);
@@ -312,10 +496,14 @@ class TogetherAction extends StageAction {
 /// bubbles beneath it. The script waits for an answer, then runs the matching
 /// `then` branch (if any).
 class AskAction extends StageAction {
-  const AskAction({required this.question, required this.choices, this.then = const {}});
+  const AskAction({required this.question, required this.choices, this.then = const {}, this.answer});
   final String question;
   final List<StageChoice> choices;
   final Map<String, List<StageAction>> then;
+
+  /// The right choice's id, when the director marked one -- a wrong pick is
+  /// shown the right answer before the slime's reaction.
+  final String? answer;
 }
 
 /// Grow or shrink a prop to [to] × its spawned size.
@@ -379,4 +567,10 @@ class EffectAction extends StageAction {
 class WearAction extends StageAction {
   const WearAction(this.label);
   final String? label;
+}
+
+/// A takeaway worth keeping: pinned under the stage ("Keep in mind").
+class NoteAction extends StageAction {
+  const NoteAction(this.text);
+  final String text;
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter_math_fork/flutter_math.dart';
 
 import '../theme.dart';
 import 'engine.dart';
@@ -59,25 +60,129 @@ class _StageViewState extends State<StageView> with SingleTickerProviderStateMix
     return LayoutBuilder(builder: (context, c) {
       final size = Size(c.maxWidth, c.maxHeight);
       widget.engine.size = size;
+      final stage = Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(key: const ValueKey('stage-canvas'), painter: StagePainter(widget.engine)),
+          ),
+          ListenableBuilder(
+            listenable: widget.engine,
+            builder: (context, _) => Stack(
+              children: [
+                ..._formulas(size),
+                ..._speech(size),
+                ..._choices(size),
+              ],
+            ),
+          ),
+        ],
+      );
+      // the camera: everything -- the painting and the words on it -- moves
+      // together, so nothing drifts out of place
       return ClipRect(
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(key: const ValueKey('stage-canvas'), painter: StagePainter(widget.engine)),
-            ),
-            ListenableBuilder(
-              listenable: widget.engine,
-              builder: (context, _) => Stack(
-                children: [
-                  ..._speech(size),
-                  ..._choices(size),
-                ],
-              ),
-            ),
-          ],
+        child: ListenableBuilder(
+          listenable: widget.engine,
+          builder: (context, child) {
+            final e = widget.engine;
+            final z = e.camZoom;
+            if ((z - 1).abs() < 1e-4) return child!;
+            final f = Offset(e.camFocus.dx * size.width, e.camFocus.dy * size.height);
+            final m = Matrix4.identity()
+              ..translateByDouble(size.width / 2 - f.dx * z, size.height / 2 - f.dy * z, 0, 1)
+              ..scaleByDouble(z, z, 1, 1);
+            return Transform(transform: m, child: child);
+          },
+          child: stage,
         ),
       );
     });
+  }
+
+  // ---------------------------------------------------------- formulas
+
+  /// Typeset (LaTeX) text on the stage: `math` props, and the labels of the
+  /// graph kit -- a curve's equation, a point's name, a tangent's slope
+  /// (`{slope}` is filled in live as the point slides). Built once per
+  /// distinct text, not every frame.
+  final Map<String, Widget> _typeset = {};
+
+  Widget _tex(String tex, double fontSize, Color color) {
+    final key = '$fontSize|${color.toARGB32()}|$tex';
+    return _typeset.putIfAbsent(key, () {
+      if (_typeset.length > 200) _typeset.clear();
+      return Math.tex(
+        tex,
+        mathStyle: MathStyle.text,
+        textStyle: TextStyle(fontSize: fontSize, color: color),
+        onErrorFallback: (_) => Text(tex, style: TextStyle(fontSize: fontSize, color: color)),
+      );
+    });
+  }
+
+  List<Widget> _formulas(Size size) {
+    final e = widget.engine;
+    final out = <Widget>[];
+    for (final p in e.props.values) {
+      final tex = p.tex;
+      if (tex == null || tex.isEmpty) continue;
+      final since = isGraphKind(p.kind) ? e.fadingSince(p) : p.diedAt;
+      final fade = since == null ? 1.0 : 1 - ((e.time - since) / 0.45).clamp(0.0, 1.0);
+      final age = e.time - p.bornAt;
+      final dim = (isGraphKind(p.kind) ? e.axesOf(p) ?? p : p).dim.at(e.time);
+      final opacity = (fade * dim * (age / 0.35).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+      if (opacity <= 0) continue;
+      final color = propColor(p.color, Paper.ink);
+      Offset? at;
+      var shift = Offset.zero; // FractionalTranslation of the label itself
+      var fontSize = 15.0;
+      var text = tex;
+      switch (p.kind) {
+        case PropKind.math:
+          at = e.propAt(p);
+          shift = const Offset(-0.5, -0.5);
+          fontSize = 18 * p.size;
+        case PropKind.axes:
+          at = e.graphToStage(p, p.xmin, p.ymax);
+          shift = const Offset(0, -1.15);
+          fontSize = 13;
+        case PropKind.plot:
+          final axes = e.axesOf(p), f = p.formula;
+          if (axes == null || f == null || age < 1.0) break;
+          final gx = axes.xmin + 0.82 * (axes.xmax - axes.xmin);
+          final gy = f(gx).clamp(axes.ymin, axes.ymax);
+          at = e.graphToStage(axes, gx, gy.isFinite ? gy : axes.ymax);
+          shift = const Offset(-1.0, -1.3);
+        case PropKind.dot:
+          final d = e.dotPoint(p);
+          if (d != null) at = d + Offset(10 / size.width, -8 / size.height);
+          shift = const Offset(0, -1);
+        case PropKind.tangent:
+          final d = e.dotPoint(e.parentOf(p));
+          final slope = e.slopeUnder(p);
+          if (d == null) break;
+          at = d + Offset(14 / size.width, 12 / size.height);
+          if (slope != null) {
+            final v = (slope * 10).round() / 10;
+            text = tex.replaceAll('{slope}', (v == 0 ? 0.0 : v).toStringAsFixed(1));
+          }
+          fontSize = 13.5;
+        default:
+          break;
+      }
+      if (at == null) continue;
+      out.add(Positioned(
+        key: ValueKey('tex-${p.id}'),
+        left: at.dx * size.width,
+        top: at.dy * size.height,
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: opacity,
+            child: FractionalTranslation(translation: shift, child: _tex(text, fontSize, color)),
+          ),
+        ),
+      ));
+    }
+    return out;
   }
 
   // ------------------------------------------------------------ speech

@@ -282,3 +282,29 @@ async def test_moving_the_pad_rewrites_the_answer_and_re_pitches_the_directions(
         assert [(r["depth_level"], r["breadth_level"]) for r in levels] == [(50, 50), (90, 10)]
     finally:
         await _stop(live)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_nothing_to_go_from_offers_no_strip_and_records_nothing(clean_pool, embedding_client):
+    """ "hi" once got six cards about oxygen and nerve impulses: the model now
+    judges first, and a deliberate {"cards": null} means no set -- not a retry."""
+    live = await _start(clean_pool, _llm(**{"DIRECTIONS:SUGGEST": json.dumps({"cards": None})}), embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http) as client:
+            lid = (await client.post("/api/learners", json={"label": "greeter"})).json()["id"]
+            sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
+        async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
+            await _turn(ws, {"type": "message", "directions": "fork", "text": "hi"})
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(_directions_event(ws), timeout=1.5)
+        prompt = next(p for p in live.app.state.loop.suggest_directions._llm.prompts
+                      if p.startswith("DIRECTIONS:SUGGEST"))
+        assert '{"cards": null}' in prompt and "a greeting" in prompt
+        async with clean_pool.acquire() as conn:
+            assert await conn.fetchval("SELECT COUNT(*) FROM direction_sets") == 0
+            assert await conn.fetchval(
+                "SELECT COUNT(*) FROM node_calls WHERE node_name = 'SuggestDirections'") == 1
+            assert await conn.fetchval(
+                "SELECT output_json FROM node_calls WHERE node_name = 'SuggestDirections'") == {}
+    finally:
+        await _stop(live)

@@ -21,6 +21,9 @@ transport:
     /api/learners/{id}/exams, /api/exams/{id}, /api/exams/{id}/mock,
     /api/exam-units/{id}/quiz, /api/exam-quizzes/{id}[/submit],
     /api/exams/{id}/plan (GET, POST), /api/exam-plan-items/{id}/done
+    Stage quick checks: the client sends {"type": "stage_check", "turn_index",
+    "question", "choices", "picked", "answer"} when the student answers one;
+    the server keeps it (stage_checks) and replies with nothing.
     Directions (directions.py): a message, pick or regenerate may add
     "directions": "fork" (links the answer ends with) or true (cards) --
     the client shows them. A fork pick adds "continue": true, so the answer
@@ -59,7 +62,7 @@ Chat protocol (JSON text frames).
 
   server -> client, only when the turn asked for "stage" and is an ANSWER
   (an options turn has no performance: the slime asks the options instead)
-    {"type": "stage_start", "turn_index": N}   at the answer's first word
+    {"type": "stage_start", "turn_index": N}   once the turn commits to answering
                                   (generation began when the message arrived)
     {"type": "stage", "turn_index": N, "action": {...}}   0..n, as generated
     {"type": "stage_end", "turn_index": N}
@@ -145,7 +148,7 @@ from versa.rooms import RoomHub, build_rooms_router
 from versa.session_builder import build_session_loop
 from versa.session_history import reconstruct_session_history
 from versa.session_knobs import SessionKnobs
-from versa.stage import StageDirector, stage_sink
+from versa.stage import StageCheckStore, StageDirector, stage_sink
 
 logger = logging.getLogger(__name__)
 
@@ -359,7 +362,8 @@ def create_app(
     qna_store = ItemQnAStore(pool)
     explain_item = ExplainItem(tiers.fast)
     answer_item_question = AnswerItemQuestion(tiers.fast)
-    stage_director = StageDirector(tiers.fast)
+    stage_director = StageDirector(tiers.stage or tiers.fast)
+    stage_checks = StageCheckStore(pool)
     # Performances run alongside (and may outlive) their turn; hold a
     # reference so a running one isn't garbage-collected.
     stage_tasks: set[asyncio.Task] = set()
@@ -904,6 +908,10 @@ def create_app(
         try:
             while connected:
                 data = await ws.receive_json()
+                if data.get("type") == "stage_check":
+                    # the student answered the stage's quick check: keep it
+                    await _record_stage_check(session_id, data, send)
+                    continue
                 if data.get("type") == "regenerate":
                     # A newer slider position supersedes a rewrite still in
                     # flight: cancel it (it records nothing) and start over.
@@ -929,6 +937,22 @@ def create_app(
         finally:
             if active_sends.get(session_id) is send:
                 active_sends.pop(session_id, None)
+
+    async def _record_stage_check(session_id: UUID, data: dict, send) -> None:
+        choices = [
+            {"id": str(c.get("id", ""))[:24], "text": str(c.get("text", ""))[:60]}
+            for c in (data.get("choices") or [])[:3] if isinstance(c, dict)
+        ]
+        picked = str(data.get("picked") or "")
+        if not picked or picked not in {c["id"] for c in choices}:
+            await send({"type": "error", "message": "that answer isn't one of the choices"})
+            return
+        answer = data.get("answer")
+        await stage_checks.record(
+            session_id=session_id, turn_index=int(data.get("turn_index") or 0),
+            question=str(data.get("question") or ""), choices=choices, picked_id=picked,
+            answer_id=str(answer) if answer is not None and str(answer) in {c["id"] for c in choices} else None,
+        )
 
     async def _locked_regenerate(
         lock: asyncio.Lock, session_id: UUID, request_id, send, presentation: str | None = None,
@@ -1005,9 +1029,25 @@ def create_app(
             self._held: list[dict] = []
             self._released = False
             self._finished = False
+            self._discarded = False
+
+        @property
+        def released(self) -> bool:
+            return self._released
+
+        async def discard(self) -> None:
+            """The turn asked options instead of answering: this skit acted
+            out a guess, so it is never shown (the director's call still
+            finishes and is recorded -- invariant 2 -- it just goes nowhere)."""
+            async with self._lock:
+                if not self._released:
+                    self._discarded = True
+                    self._held.clear()
 
         async def forward(self, action: dict) -> None:
             async with self._lock:
+                if self._discarded:
+                    return
                 if self._released:
                     await self._send({"type": "stage", "turn_index": self.turn_index, "action": action})
                 else:
@@ -1015,7 +1055,7 @@ def create_app(
 
         async def release(self) -> None:
             async with self._lock:
-                if self._released:
+                if self._released or self._discarded:
                     return
                 self._released = True
                 await self._send({"type": "stage_start", "turn_index": self.turn_index})
@@ -1031,19 +1071,43 @@ def create_app(
                 if self._released:
                     await self._send({"type": "stage_end", "turn_index": self.turn_index})
 
-    async def _run_stage(session_id: UUID, turn_index: int, message: str, perf: _Performance) -> None:
-        """Generate this turn's performance (stage.py) into `perf`. Best
-        effort: a failure here costs the slime its skit, never the answer.
-        Runs to completion even if the turn turns out to be an options turn,
-        so the call is still recorded to node_calls (invariant 2)."""
-        stage_sink.set(perf.forward)  # this task's own context only
-        try:
-            await loop._call_node(stage_director, session_id, turn_index, message=message)
-        except Exception:
-            logger.warning("stage direction failed on turn %d for session %s",
-                           turn_index, session_id, exc_info=True)
-        finally:
-            await perf.finish()
+    class _StageRun:
+        """One turn's stage: ONE continuous animation, written from the moment
+        the student sends -- alongside the answer, not after it (2026-09-27:
+        "make them load in like 2-3 sec"). The director gets the question,
+        the previous answer for continuity, and for a fork continuation the
+        direction tapped. It is SHOWN once the turn commits to answering
+        (the loop's "answering" event; the held beats flush at once) and
+        never on a turn that asks options instead (2026-09-28: the options
+        used to stop a skit already playing, and the pick then restarted it
+        from scratch). Best effort: a failure costs the slime its skit,
+        never the answer."""
+
+        def __init__(self, session_id: UUID, turn_index: int, message: str, perf,
+                     continues: str | None) -> None:
+            self.session_id, self.turn_index, self.message = session_id, turn_index, message
+            self.perf, self.continues = perf, continues
+            self.task = asyncio.create_task(self._work())
+            stage_tasks.add(self.task)
+            self.task.add_done_callback(stage_tasks.discard)
+
+        async def _work(self) -> None:
+            stage_sink.set(self.perf.forward)  # this task's own context only
+            try:
+                kwargs: dict = {"message": self.message, "live": True}
+                if self.turn_index > 0:
+                    previous = await node_calls.get_call_for_turn(
+                        self.session_id, self.turn_index - 1, "FinalAnswer")
+                    if previous and isinstance(previous.output_json, str):
+                        kwargs["previous_answer"] = previous.output_json
+                if self.continues:
+                    kwargs["continues"] = self.continues
+                await loop._call_node(stage_director, self.session_id, self.turn_index, **kwargs)
+            except Exception:
+                logger.warning("stage direction failed on turn %d for session %s",
+                               self.turn_index, self.session_id, exc_info=True)
+            finally:
+                await self.perf.finish()
 
     def _presentation(data: dict) -> str | None:
         """What a client says it shows under answers: "fork" (links the
@@ -1147,21 +1211,19 @@ def create_app(
         latest_turn[session_id] = turn_index
         await send({"type": "turn_start", "turn_index": turn_index})
         first_output_ms: float | None = None
-        perf: _Performance | None = None
-        if data.get("stage"):
-            perf = _Performance(turn_index, send)
-            task = asyncio.create_task(_run_stage(session_id, turn_index, text, perf))
-            stage_tasks.add(task)
-            task.add_done_callback(stage_tasks.discard)
+        # The stage starts the moment the student sends: one animation of the
+        # whole explanation, written alongside the answer (_StageRun).
+        stage = (
+            _StageRun(session_id, turn_index, text, _Performance(turn_index, send), continues)
+            if data.get("stage") else None
+        )
 
         async def on_delta(piece: str) -> None:
             nonlocal first_output_ms
             if first_output_ms is None:
                 first_output_ms = (time.monotonic() - started) * 1000
-                # The answer has started, so this is an answer turn, not
-                # an options turn: let the performance out.
-                if perf is not None:
-                    await perf.release()
+                if stage is not None:
+                    await stage.perf.release()  # an answer, whatever path wrote it
             await send({"type": "delta", "text": piece})
 
         options_sent = False
@@ -1171,11 +1233,21 @@ def create_app(
             # options shown before memory has had its say, and the
             # "I remember" beat -- with or without retracting them.
             nonlocal first_output_ms, options_sent
+            if event.get("type") == "answering":
+                # the turn answers: the stage may show (it's the server's
+                # own signal, not the client's)
+                if stage is not None:
+                    await stage.perf.release()
+                return
             if event.get("type") == "options":
                 options_sent = True
                 if first_output_ms is None:
                     first_output_ms = (time.monotonic() - started) * 1000
             await send(event)
+            if event.get("type") == "recalled" and stage is not None:
+                # memory knew what they meant: this turn answers. After the
+                # event, so the app's "I remember" beat leads the show.
+                await stage.perf.release()
 
         try:
             message = await loop.handle_turn(
@@ -1185,9 +1257,15 @@ def create_app(
             options = await loop.pending_options(session_id)
         except Exception as exc:
             logger.exception("turn %d failed for session %s", turn_index, session_id)
+            if stage is not None:
+                await stage.perf.discard()
             await send({"type": "error", "message": f"the turn failed: {exc}"})
             return
 
+        if stage is not None:
+            # options: the slime asks them instead -- this skit never shows;
+            # an answer that somehow never said so still gets its skit
+            await (stage.perf.discard() if options else stage.perf.release())
         total_ms = (time.monotonic() - started) * 1000
         if options and not options_sent:
             await send({

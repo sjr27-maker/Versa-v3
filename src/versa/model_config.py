@@ -67,6 +67,10 @@ class ModelTierConfig(BaseModel):
     # writes the answer, which streams: its thinking delays the FIRST word, so
     # it stays minimal until answer quality under it has been evaluated.
     fast_thinking: str = "256"
+    # The stage director (stage.py) writes a skit, not a judgement: measured
+    # 2026-09-27 (3 prompts), its first beat came at 2.5s median with a 7.9s
+    # outlier on the fast tier's 256 budget, 1.8s steady with "minimal".
+    stage_thinking: str = "minimal"
     capable_thinking: str = "256"
     best_thinking: str = "minimal"
 
@@ -83,6 +87,7 @@ class ModelTierConfig(BaseModel):
             best=os.getenv("GEMINI_MODEL_BEST", defaults.best),
             embedding=os.getenv("GEMINI_MODEL_EMBEDDING", defaults.embedding),
             fast_thinking=os.getenv("GEMINI_THINKING_FAST", defaults.fast_thinking),
+            stage_thinking=os.getenv("GEMINI_THINKING_STAGE", defaults.stage_thinking),
             capable_thinking=os.getenv("GEMINI_THINKING_CAPABLE", defaults.capable_thinking),
             best_thinking=os.getenv("GEMINI_THINKING_BEST", defaults.best_thinking),
         )

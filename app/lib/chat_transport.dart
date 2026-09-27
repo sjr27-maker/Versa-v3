@@ -25,6 +25,9 @@ abstract class ChatTransport {
   /// Rewrite the latest answer at the chat's current slider levels (and,
   /// with [directions], re-offer the directions for the new window).
   void regenerate(int requestId, {String? directions});
+
+  /// The student answered the stage's quick check (server keeps it).
+  void sendStageCheck(Map<String, Object?> check);
   Future<void> close();
 }
 
@@ -69,6 +72,10 @@ class WebSocketChatTransport implements ChatTransport {
         'directions': ?directions,
         if (continueAnswer) 'continue': true,
       }));
+
+  @override
+  void sendStageCheck(Map<String, Object?> check) =>
+      _channel.sink.add(jsonEncode({'type': 'stage_check', ...check}));
 
   @override
   void regenerate(int requestId, {String? directions}) => _channel.sink

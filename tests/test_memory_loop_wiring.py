@@ -417,7 +417,8 @@ async def test_memory_pre_check_skips_branching_when_confirmed(
 
     result = await loop.handle_turn(session_id, 0, message, on_event=on_event)
     assert result == "answer using the remembered fact"
-    assert events == [{"type": "recalled", "retracted": False}], "the 'I remember' beat, no options shown"
+    assert events == [{"type": "recalled", "retracted": False}, {"type": "answering"}], (
+        "the 'I remember' beat, no options shown -- then it answers")
 
     # AssessAndBranch ran alongside memory; its readings were never offered
     # (no DisambiguationOptions call) but are on record, superseded
@@ -674,7 +675,7 @@ async def test_options_shown_first_are_retracted_when_memory_remembers(
 
     result = await loop.handle_turn(session_id, 0, message, on_event=on_event)
 
-    assert [e["type"] for e in events] == ["options", "recalled"]
+    assert [e["type"] for e in events] == ["options", "recalled", "answering"]
     assert len(events[0]["options"]) == 2
     assert events[1] == {"type": "recalled", "retracted": True}
     assert result == "answer using the remembered fact"

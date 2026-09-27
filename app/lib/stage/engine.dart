@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/animation.dart';
 import 'package:flutter/foundation.dart';
 
+import 'formula.dart';
 import 'script.dart';
 
 /// Where something is going: a from→to over [dur] seconds starting at
@@ -98,6 +99,12 @@ class StageProp {
     required this.bornAt,
     this.headDelta,
     this.label,
+    this.caption,
+    this.to,
+    this.enter,
+    this.track,
+    double rate = 1,
+    double value = 0.3,
     this.size = 1,
     this.color,
     this.w,
@@ -105,15 +112,79 @@ class StageProp {
     this.points = const [],
     this.amp = 0.04,
     this.cycles = 3,
-  });
+    this.fn,
+    this.on,
+    double at = 0,
+    this.xmin = -5,
+    this.xmax = 5,
+    this.ymin = -5,
+    this.ymax = 5,
+    this.tex,
+    this.z = 0,
+    this.lift = 0,
+    this.spinRate = 0,
+    double yaw = 0,
+    double pitch = 0,
+  })  : homeZ = z,
+        rate = Ramp.still(rate),
+        value = Ramp.still(value),
+        display = value,
+        at = Ramp.still(at),
+        yaw = Ramp.still(yaw),
+        pitch = Ramp.still(pitch);
   final String id;
   final PropKind kind;
   Track pos;
+
+  /// Graph kit (see SpawnAction): a plot's formula, what this sits on, a
+  /// dot's x (it slides), the axes' ranges, and a typeset label.
+  final String? fn, on;
+  late final Formula? formula = parseFormula(fn);
+  Ramp at;
+  final double xmin, xmax, ymin, ymax;
+  final String? tex;
+
+  /// 3D solids: depth (0 front .. 1 far), height above the floor, steady spin
+  /// (turns/s), and yaw/pitch in turns (ramped by TurnAction).
+  double z;
+  final double lift, spinRate;
+
+  /// Stepped back by a SceneAction: depth and brightness ease to [z]'s new
+  /// value / dimmer, and back when the prop is used again. [homeZ] is where
+  /// it was put.
+  Ramp? depth;
+  final double homeZ;
+  Ramp dim = Ramp.still(1);
+  bool get receded => dim.to < 1;
+  Ramp yaw, pitch;
+
+  /// Orbiting another prop (OrbitAction): which, how far, and the angle in turns.
+  String? around;
+  double orbitRadius = 0;
+  Ramp orbitPhase = Ramp.still(0);
   final double bornAt;
 
   /// Arrow/line/wave: the far end relative to (x, y) (it travels with it).
   final Offset? headDelta;
   String? label;
+
+  /// Words under an emoji (its label is the glyph).
+  String? caption;
+
+  /// Link: where it flows to. Entrance style (null = picked from the id).
+  final String? to, enter;
+
+  /// Instruments: what it is bound to, its rate (ticks/counts per second)
+  /// and set reading (0..1); [reading] is the elapsed time or count so far,
+  /// [display] the needle/fill shown right now.
+  final String? track;
+  Ramp rate, value;
+  double reading = 0, display;
+
+  /// Cruising speed (CruiseAction), and how fast it is going right now
+  /// (0..0.99, from its cruise or its actual motion).
+  Ramp cruise = Ramp.still(0);
+  double speedNow = 0;
   final double size;
   String? color;
   final double? w, h;
@@ -216,8 +287,13 @@ class StageEngine extends ChangeNotifier {
   Track blob = Track.still(const Offset(0.3, kGroundY));
   Mood mood = Mood.neutral;
 
-  /// Mouth flapping (an answer is streaming in the chat).
+  /// Mouth flapping. Nothing sets it today: while the chat writes, the slime
+  /// watches the chat instead ([watchingChat]).
   bool talking = false;
+
+  /// The chat is working (thinking or writing the answer): between skits the
+  /// slime keeps its eyes on it, like reading along.
+  bool watchingChat = false;
 
   /// Leaning into something (-1 left .. 1 right); eased toward [_leanTarget].
   double lean = 0;
@@ -247,6 +323,25 @@ class StageEngine extends ChangeNotifier {
   /// An emoji on the blob's head (WearAction), or null.
   String? hat;
 
+  // ------------------------------------------------ pace + the chat's answer
+
+  /// How fast skits play: < 1 slower, > 1 faster. Scales every wait, move
+  /// and speech bubble. Fixed at a little slower than the original pace (the
+  /// user's call, 2026-09-27); tests set 1 to keep their timings exact.
+  double speed = 0.8;
+
+  /// A takeaway to pin below the stage.
+  void Function(String text)? onNote;
+
+  /// The student answered a skit's quick check: (question, choices, the id
+  /// picked, the id marked right or null) -- the panel keeps it.
+  void Function(String question, List<StageChoice> choices, String picked, String? answer)? onChecked;
+
+  /// When a finished performance tidies up: the props fade, nothing is left
+  /// frozen mid-reaction (the "stuck" stage, 2026-09-27).
+  double? _settleAt;
+  static const settleAfter = 3.5;
+
   bool get running => _running > 0;
   int _running = 0;
   int _gen = 0;
@@ -275,6 +370,9 @@ class StageEngine extends ChangeNotifier {
   double propHalf(StageProp p) => switch (p.kind) {
         PropKind.box => (size.height * 0.075).clamp(16.0, 48.0) * p.size,
         PropKind.ball => (size.height * 0.05).clamp(12.0, 34.0) * p.size,
+        PropKind.clock || PropKind.stopwatch || PropKind.counter || PropKind.gauge || PropKind.bar ||
+            PropKind.thermometer =>
+          (size.height * 0.075).clamp(18.0, 50.0) * p.size,
         _ => (size.height * 0.05).clamp(12.0, 34.0) * p.size,
       };
 
@@ -287,8 +385,241 @@ class StageEngine extends ChangeNotifier {
   /// Where the top of the blob's head is, in stage fractions.
   Offset get blobTop => blobPos - Offset(0, _pxToY(blobHeight));
 
-  /// A prop's base point right now -- on the blob's head while carried.
-  Offset propAt(StageProp p) => p.carried ? blobTop + Offset(0, _pxToY(4)) : p.pos.at(time);
+  /// A prop's base point right now -- on the blob's head while carried, on
+  /// its curve for a graph dot.
+  Offset propAt(StageProp p) {
+    if (p.kind == PropKind.dot || p.kind == PropKind.tangent) {
+      final d = dotPoint(p.kind == PropKind.dot ? p : parentOf(p));
+      if (d != null) return d;
+    }
+    if (p.carried) return blobTop + Offset(0, _pxToY(4));
+    final host = hostOf(p);
+    if (host != null) {
+      final b = propBounds(host);
+      if (b != null) return Offset(b.center.dx, b.top - _pxToY(12));
+    }
+    if (isSolidKind(p.kind)) return solidPlace(p).$1;
+    return project(p.pos.at(time), p.z).$1;
+  }
+
+  /// How large a prop looks at its depth (1 at the front).
+  /// The thing a label is attached to ("on"), for a text or formula.
+  StageProp? hostOf(StageProp p) {
+    if (p.on == null || (p.kind != PropKind.text && p.kind != PropKind.math)) return null;
+    final host = props[p.on];
+    // one level only: a label on a label is placed where it was put
+    if (host == null || host.on != null && (host.kind == PropKind.text || host.kind == PropKind.math)) return null;
+    return host;
+  }
+
+  double propScale(StageProp p) {
+    final host = hostOf(p);
+    if (host != null) return propScale(host);
+    if (p.carried || isGraphKind(p.kind)) return 1;
+    if (isSolidKind(p.kind)) return solidPlace(p).$2;
+    return project(p.pos.at(time), p.z).$2;
+  }
+
+  // ------------------------------------------------------------- compare
+
+  /// Two lanes, left and right, while comparing (CompareAction).
+  String? compareLeft, compareRight;
+  Ramp compare = Ramp.still(0);
+
+  // ------------------------------------------------------------ 3D world
+
+  /// 0 = the flat stage, 1 = the 3D space (eased between by WorldAction).
+  /// The stage IS a room by default (2026-09-28: "by 3d space I expected it
+  /// to work for everything"); "flat" is still there for a plain board.
+  Ramp world = Ramp.still(1);
+  double get worldT => world.at(time).clamp(0.0, 1.0);
+
+  static const horizonY = 0.30;
+
+  /// Perspective at depth z: 1 at the front, smaller toward the horizon.
+  static double perspective(double z) => 1 / (1 + 1.8 * z.clamp(0.0, 1.0));
+
+  /// Where the floor's lines meet: the camera drifts a little from side to
+  /// side, so the room lives. The front plane (z = 0: the slime, the graphs,
+  /// the formulas) never moves -- only depth does, as parallax.
+  double get vanishX => 0.5 + math.sin(time * 0.21) * 0.035 * worldT;
+
+  /// A point at depth [z] -> where it shows on the stage, and how large.
+  /// Its height above the floor is kept (shrunk with distance).
+  (Offset, double) project(Offset at, double z) {
+    final t = worldT;
+    if (z <= 0 || t <= 0) return (at, 1);
+    final k = perspective(z);
+    final vx = vanishX;
+    final deep = Offset(vx + (at.dx - vx) * k, horizonY + (kGroundY - horizonY) * k - (kGroundY - at.dy) * k);
+    return (Offset.lerp(at, deep, t)!, 1 + (k - 1) * t);
+  }
+
+  /// Where a solid stands right now -- its contact point on the floor, in stage
+  /// fractions -- how large it looks (1 = its own size), and its depth (for
+  /// back-to-front drawing). Flat and 3D placements are eased by [worldT].
+  (Offset, double, double) solidPlace(StageProp p, {double? phase}) {
+    var x = p.pos.at(time).dx, z = p.z, lift = p.lift;
+    final c = p.around != null ? props[p.around] : null;
+    var behind = 0.0;
+    if (c != null) {
+      final a = 2 * math.pi * (phase ?? p.orbitPhase.at(time));
+      x = c.pos.at(time).dx + math.cos(a) * p.orbitRadius;
+      z = c.z + math.sin(a) * p.orbitRadius * 1.6;
+      lift = c.lift;
+      behind = math.sin(a) * p.orbitRadius;
+    }
+    final t = worldT;
+    // flat: an orbit reads as an ellipse, the far side a little higher
+    final flat = Offset(x, kGroundY - lift - behind * 0.35);
+    final k = perspective(z);
+    final vx = vanishX;
+    final deep = Offset(vx + (x - vx) * k, horizonY + (kGroundY - horizonY) * k - lift * k);
+    final scale = (1 - t) * (1 - behind * 0.6) + t * k;
+    return (Offset.lerp(flat, deep, t)!, scale.clamp(0.2, 2.0), t > 0 ? z : behind);
+  }
+
+  // ---------------------------------------------------------- instruments
+
+  /// Stage fractions per second that count as "the fastest" (speed 1).
+  static const topSpeed = 1.2;
+
+  /// What each id stands for, from the script's plan.
+  final Map<String, String> cast = {};
+
+  /// Speeds first (everything a tracker might read), then instruments: a
+  /// clock ticks at its rate -- slowed by sqrt(1 - v^2) when it tracks a
+  /// thing moving at v (time dilation, shown not told) -- a counter counts or
+  /// adds up distance, a gauge/bar/thermometer shows its setting or the
+  /// tracked thing's speed.
+  void _stepInstruments(double dt) {
+    if (dt <= 0) return;
+    for (final p in props.values) {
+      final cruising = p.cruise.at(time);
+      var raw = cruising;
+      if (raw < 0.01) {
+        final moved = (p.pos.at(time) - p.pos.at(time - dt)).distance / dt / topSpeed;
+        raw = moved.isFinite ? moved : 0;
+      }
+      p.speedNow += (raw.clamp(0.0, 0.99) - p.speedNow) * math.min(1, dt * 6);
+    }
+    for (final p in props.values) {
+      if (!isInstrumentKind(p.kind)) continue;
+      final tracked = p.track == null ? null : props[p.track];
+      final v = tracked?.speedNow ?? 0;
+      final r = p.rate.at(time);
+      switch (p.kind) {
+        case PropKind.clock || PropKind.stopwatch:
+          final slow = tracked == null ? 1.0 : math.sqrt(1 - math.min(v, 0.97) * math.min(v, 0.97));
+          p.reading += r * slow * dt;
+        case PropKind.counter:
+          p.reading += tracked == null ? r * dt : v * topSpeed * r * 10 * dt;
+        default:
+          final target = tracked == null ? p.value.at(time) : v;
+          p.display += (target - p.display) * math.min(1, dt * 5);
+      }
+    }
+  }
+
+  // --------------------------------------------------------------- camera
+
+  /// A gentle camera (2026-09-28: "more dynamicity while retaining
+  /// smoothness"): during a performance it eases in a little on the thing
+  /// the slime is watching, and back out when it asks or is done. [camFocus]
+  /// is in stage fractions; StageView turns both into a transform.
+  double camZoom = 1;
+  Offset camFocus = const Offset(0.5, 0.5);
+  static const camMaxZoom = 1.09;
+
+  void _stepCamera(double dt) {
+    var zoom = 1.0;
+    var focus = const Offset(0.5, 0.5);
+    final p = _lookTarget == null ? null : props[_lookTarget];
+    if (running && question == null && p != null && p.diedAt == null && !isGraphKind(p.kind)) {
+      final b = propBounds(p);
+      if (b != null && b.width < 0.45 && b.height < 0.45) {
+        zoom = camMaxZoom;
+        focus = b.center;
+      }
+    }
+    // slow and critically damped: never a jolt
+    final k = 1 - math.exp(-dt * 1.4);
+    camZoom += (zoom - camZoom) * k;
+    // the focus may only pull the view so far that the edges stay covered
+    final room = (1 - 1 / camZoom) / 2;
+    final clamped = Offset(
+      focus.dx.clamp(0.5 - room, 0.5 + room),
+      focus.dy.clamp(0.5 - room, 0.5 + room),
+    );
+    camFocus = Offset.lerp(camFocus, clamped, k)!;
+  }
+
+  // ------------------------------------------------------------ graph kit
+
+  StageProp? parentOf(StageProp? p) => p?.on == null ? null : props[p!.on];
+
+  /// The axes a graph prop ultimately sits on.
+  StageProp? axesOf(StageProp? p) {
+    for (var i = 0; p != null && i < 4; i++) {
+      if (p.kind == PropKind.axes) return p;
+      p = parentOf(p);
+    }
+    return null;
+  }
+
+  /// The plot under a dot or a tangent (or the plot itself).
+  StageProp? plotOf(StageProp? p) {
+    for (var i = 0; p != null && i < 3; i++) {
+      if (p.kind == PropKind.plot) return p;
+      p = parentOf(p);
+    }
+    return null;
+  }
+
+  /// A point in an axes' own numbers -> stage fractions. An axes' (x, y) is
+  /// its bottom-left corner; w is a fraction of the stage's width, h of its
+  /// height.
+  Offset graphToStage(StageProp axes, double gx, double gy) {
+    final base = axes.pos.at(time);
+    final w = axes.w ?? 0.5, h = axes.h ?? 0.4;
+    return Offset(
+      base.dx + (gx - axes.xmin) / (axes.xmax - axes.xmin) * w,
+      base.dy - (gy - axes.ymin) / (axes.ymax - axes.ymin) * h,
+    );
+  }
+
+  /// A dot's place on its curve right now (null if it can't be drawn).
+  Offset? dotPoint(StageProp? dot) {
+    if (dot == null || dot.kind != PropKind.dot) return null;
+    final plot = plotOf(parentOf(dot));
+    final axes = axesOf(dot);
+    final f = plot?.formula;
+    if (axes == null || f == null) return null;
+    final x = dot.at.at(time);
+    final y = f(x);
+    if (!y.isFinite) return null;
+    return graphToStage(axes, x, y);
+  }
+
+  /// The slope under a dot or a tangent right now.
+  double? slopeUnder(StageProp p) {
+    final dot = p.kind == PropKind.dot ? p : parentOf(p);
+    final f = plotOf(dot)?.formula;
+    if (dot == null || f == null) return null;
+    final s = slopeAt(f, dot.at.at(time));
+    return s.isFinite ? s : null;
+  }
+
+  /// When a graph prop fades: its own removal, or anything it sits on.
+  double? fadingSince(StageProp? p) {
+    double? since;
+    for (var i = 0; p != null && i < 4; i++) {
+      final d = p.diedAt;
+      if (d != null && (since == null || d < since)) since = d;
+      p = parentOf(p);
+    }
+    return since;
+  }
 
   // ------------------------------------------------------------- queries
 
@@ -308,6 +639,8 @@ class StageEngine extends ChangeNotifier {
   /// Where the eyes point, in stage fractions (null = straight ahead).
   double? get lookX {
     if (time < _glanceUntil && _glanceX != null) return _glanceX;
+    // the chat sits to the stage's right: read along with it
+    if (watchingChat && !running && _lookTarget == null) return 1.0;
     if (_lookTarget != null) {
       final p = props[_lookTarget];
       if (p != null) return propAt(p).dx;
@@ -347,13 +680,33 @@ class StageEngine extends ChangeNotifier {
       }
     }
 
-    props.removeWhere((_, p) => p.diedAt != null && time - p.diedAt! > 0.6);
+    for (final p in props.values) {
+      final d = p.depth;
+      if (d != null) {
+        p.z = d.at(time);
+        if (time >= d.start + d.dur) p.depth = null;
+      }
+    }
+    props.removeWhere((_, p) {
+      final since = isGraphKind(p.kind) ? fadingSince(p) : p.diedAt;
+      return since != null && time - since > 0.6;
+    });
     _stepParticles(dt);
+    _stepCamera(dt);
+    _stepInstruments(dt);
 
     if (_awaitingPerformance && time >= _awaitDeadline) {
       // No performance followed the gag (e.g. the answer failed).
       _awaitingPerformance = false;
       endLive();
+    }
+
+    if (!running && question == null && _settleAt != null && time >= _settleAt!) {
+      _settleAt = null;
+      for (final p in props.values) {
+        p.diedAt ??= time;
+      }
+      _emitters.clear();
     }
 
     if (!running && question == null && time >= _nextIdle) _idleFidget();
@@ -374,7 +727,10 @@ class StageEngine extends ChangeNotifier {
 
   void impulse(double amount) => _squashV += amount * 14;
 
-  Future<void> _sleep(double seconds) {
+  /// Waits [seconds] of skit time -- stretched or shrunk by [speed].
+  Future<void> _sleep(double seconds) => _sleepRaw(seconds / speed);
+
+  Future<void> _sleepRaw(double seconds) {
     if (seconds <= 0) return Future.value();
     final c = Completer<void>();
     _sleepers.add(_Sleeper(time + seconds, c));
@@ -405,11 +761,15 @@ class StageEngine extends ChangeNotifier {
   /// Clear the stage: stop, poof every prop, walk home.
   void reset() {
     stop();
+    _settleAt = null;
+    world = Ramp.still(1);
     for (final p in props.values) {
       p.diedAt ??= time;
     }
     _emitters.clear();
     hat = null;
+    compare = Ramp(compare.at(time), 0, time, 0.5);
+    cast.clear();
     mood = Mood.neutral;
     _lookTarget = null;
     _lookX = null;
@@ -426,9 +786,21 @@ class StageEngine extends ChangeNotifier {
       await _runAll(script, gen);
     } finally {
       _running--;
-      if (gen == _gen) _leanTarget = 0;
+      if (gen == _gen) _settle();
       notifyListeners();
     }
+  }
+
+  /// A performance ended: back to a calm face at once (never frozen confused
+  /// or sad), and the props fade a moment later -- unless something new
+  /// starts first.
+  void _settle() {
+    _leanTarget = 0;
+    if (const {Mood.confused, Mood.sad, Mood.strain, Mood.surprised, Mood.thinking}.contains(mood)) {
+      mood = Mood.happy;
+      impulse(0.15);
+    }
+    _settleAt = time + settleAfter;
   }
 
   Future<void> _runAll(List<StageAction> actions, int gen) async {
@@ -471,19 +843,17 @@ class StageEngine extends ChangeNotifier {
         }
       } finally {
         _running--;
-        if (gen == _gen) {
-          _leanTarget = 0;
-          if (mood == Mood.strain) mood = Mood.neutral;
-        }
+        if (gen == _gen) _settle();
         notifyListeners();
       }
     }();
   }
 
-  /// One action of the live performance. An `ask` is ignored: the slime's
-  /// questions come from the chat's options turn ([ask]), never a script.
+  /// One action of the live performance. A skit may end with ONE quick
+  /// check (`ask`): it waits for the pick, and the slime reacts to it. (The
+  /// chat's own ambiguity options still take the stage over via [ask].)
   void enqueue(StageAction action) {
-    if (!_liveOpen || action is AskAction) return;
+    if (!_liveOpen) return;
     _live.add(action);
     _wakeLive();
   }
@@ -507,7 +877,7 @@ class StageEngine extends ChangeNotifier {
     final line = lines[_rng.nextInt(lines.length)];
     final at = blobTop;
     final bulbY = (at.dy - 0.08).clamp(0.05, kGroundY);
-    _intro = parseScript([
+    final gag = parseScript([
       {
         'do': 'together',
         'actions': [
@@ -524,6 +894,15 @@ class StageEngine extends ChangeNotifier {
       {'do': 'remove', 'id': '_bulb'},
       {'do': 'emote', 'mood': 'happy'},
     ]);
+    if (_liveOpen && running && !_awaitingPerformance) {
+      // The performance is already under way (2026-09-28: resetting here
+      // threw away its first beats -- the plan, the spawns -- and a repeated
+      // question then showed nothing): the gag plays next, the show goes on.
+      _live.insertAll(0, gag);
+      _wakeLive();
+      return;
+    }
+    _intro = gag;
     _awaitingPerformance = false;
     beginLive();
     _awaitingPerformance = true;
@@ -581,7 +960,49 @@ class StageEngine extends ChangeNotifier {
 
   // ------------------------------------------------------------- actions
 
+  String? _targetOf(StageAction a) => switch (a) {
+        MoveAction(:final target) => target,
+        SetAction(:final target) => target,
+        CruiseAction(:final target) => target,
+        ApproachAction(:final target) => target,
+        PushAction(:final target) => target,
+        ShakeAction(:final target) => target,
+        ScaleAction(:final target) => target,
+        SpinAction(:final target) => target,
+        RecolorAction(:final target) => target,
+        RelabelAction(:final target) => target,
+        CarryAction(:final target) => target,
+        ThrowAction(:final target) => target,
+        LookAction(:final target) => target,
+        TurnAction(:final target) => target,
+        OrbitAction(:final target) => target,
+        SlideAction(:final target) => target,
+        _ => null,
+      };
+
+  /// A prop that stepped back comes forward again -- with what it sits on or
+  /// circles, so a curve returns with its axes.
+  void _bringForward(String? id) {
+    void forward(StageProp p) {
+      if (!p.receded) return;
+      p.dim = Ramp(p.dim.at(time), 1, time, 0.6, curve: Curves.easeOut);
+      p.depth = Ramp(p.z, p.homeZ, time, 0.6, curve: Curves.easeOutCubic);
+    }
+
+    var p = id == null ? null : props[id];
+    for (var i = 0; p != null && i < 4; i++) {
+      forward(p);
+      final host = p;
+      for (final q in props.values) {
+        if (hostOf(q) == host) forward(q);
+      }
+      p = props[p.on ?? p.around ?? ''];
+    }
+  }
+
   Future<void> _perform(StageAction a, int gen) async {
+    _bringForward(_targetOf(a));
+    if (a is OrbitAction) _bringForward(a.around);
     switch (a) {
       case SpawnAction():
         final tail = Offset(a.x, a.y);
@@ -596,6 +1017,12 @@ class StageEngine extends ChangeNotifier {
             _ => null,
           },
           label: a.label,
+          caption: a.caption,
+          to: a.to,
+          enter: a.enter,
+          track: a.track,
+          rate: a.rate ?? 1,
+          value: a.value ?? 0.3,
           size: a.size,
           color: a.color,
           w: a.w,
@@ -603,12 +1030,44 @@ class StageEngine extends ChangeNotifier {
           points: [for (final pt in a.points) pt - tail],
           amp: a.amp,
           cycles: a.cycles,
+          fn: a.fn,
+          on: a.on,
+          at: a.at ?? 0,
+          xmin: a.xmin,
+          xmax: a.xmax,
+          ymin: a.ymin,
+          ymax: a.ymax,
+          tex: a.tex,
+          z: a.z,
+          lift: a.lift,
+          spinRate: a.spin,
+          yaw: a.yaw,
+          pitch: a.pitch,
         );
-        // The blob conjures it: a little heave, eyes on the new thing.
-        impulse(0.18);
+        // The blob conjures it: a hop, a sparkle where it lands, eyes on it --
+        // and if it appeared where the slime stands, the slime hops aside
+        // rather than hiding it (2026-09-28).
+        final made = props[a.id]!;
+        final named = cast[a.id];
+        if (named != null) {
+          if ((made.kind == PropKind.emoji || isInstrumentKind(made.kind)) && made.caption == null) {
+            made.caption = named;
+          } else if (isSolidKind(made.kind) && made.label == null) {
+            made.label = named;
+          }
+        }
         _lookTarget = a.id;
+        if (!isGraphKind(a.kind) || a.kind == PropKind.axes) {
+          final b = propBounds(made);
+          if (b != null) _burst(EffectKind.sparks, Offset(b.center.dx, b.bottom), 8);
+        }
         notifyListeners();
-        await _sleep(0.35);
+        if (!await _stepAside(made, gen)) {
+          final here = blob.base(time);
+          blob = Track(here, here, time, 0.32, MoveStyle.leap, arc: 0.05);
+          await _sleep(0.35);
+          impulse(-0.15);
+        }
 
       case MoveAction():
         final seconds = a.ms / 1000;
@@ -623,7 +1082,9 @@ class StageEngine extends ChangeNotifier {
           final from = p.carried ? propAt(p) : p.pos.base(time);
           p.carried = false;
           p.pos = Track(from, Offset(a.x, a.y ?? from.dy), time, seconds, a.style);
+          _lookTarget = p.id; // it watches the thing move
           await _sleep(seconds);
+          await _stepAside(p, gen);
         }
 
       case ApproachAction():
@@ -643,10 +1104,21 @@ class StageEngine extends ChangeNotifier {
 
       case SayAction():
         speech = a.text;
-        final hold = (a.ms ?? (900 + a.text.length * 45).clamp(1200, 5000)) / 1000;
-        _speechUntil = time + hold;
+        // long enough to READ, whatever the script asked for
+        final words = a.text.trim().split(RegExp(r'\s+')).length;
+        final reading = (1.2 + words * 0.4).clamp(2.0, 8.0);
+        final hold = math.max(reading, (a.ms ?? 0) / 1000);
+        _speechUntil = time + hold / speed;
         notifyListeners();
         await _sleep(hold);
+
+      case NoteAction():
+        onNote?.call(a.text);
+        mood = Mood.proud;
+        impulse(0.2);
+        _burst(EffectKind.stars, blobTop + const Offset(0, 0.02), 6);
+        notifyListeners();
+        await _sleep(0.9);
 
       case LookAction():
         _lookTarget = a.target;
@@ -677,8 +1149,19 @@ class StageEngine extends ChangeNotifier {
         }
 
       case RemoveAction():
-        props[a.id]?.diedAt = time;
-        if (_lookTarget == a.id) _lookTarget = null;
+        // a graph piece takes whatever sits on it along (a curve's point, its tangent)
+        final gone = {a.id};
+        for (var grew = true; grew;) {
+          grew = false;
+          for (final p in props.values) {
+            final hangs = (p.on != null && gone.contains(p.on)) || (p.to != null && gone.contains(p.to));
+            if (hangs && gone.add(p.id)) grew = true;
+          }
+        }
+        for (final id in gone) {
+          props[id]?.diedAt ??= time;
+        }
+        if (gone.contains(_lookTarget)) _lookTarget = null;
         await _sleep(0.3);
 
       case ScaleAction():
@@ -701,8 +1184,16 @@ class StageEngine extends ChangeNotifier {
       case RelabelAction():
         final p = props[a.target];
         if (p == null) return;
-        p.label = a.label;
+        // on an emoji, words are its caption ("10 min" under the clock); a
+        // glyph swaps the emoji itself
+        final words = RegExp(r'[A-Za-z0-9]');
+        if (p.kind == PropKind.emoji && words.hasMatch(a.label) && !words.hasMatch(p.label ?? '')) {
+          p.caption = a.label;
+        } else {
+          p.label = a.label;
+        }
         p.shakeUntil = time + 0.2;
+        _lookTarget = p.id;
         notifyListeners();
 
       case CarryAction():
@@ -716,6 +1207,7 @@ class StageEngine extends ChangeNotifier {
         impulse(-0.3);
         await _sleep(0.25);
         p.carried = true;
+        p.z = 0;
         mood = Mood.happy;
         impulse(0.25);
         await _sleep(0.3);
@@ -725,6 +1217,7 @@ class StageEngine extends ChangeNotifier {
         if (p == null || !p.carried) return;
         final from = propAt(p);
         p.carried = false;
+        p.z = 0;
         p.pos = Track(from, Offset(from.dx, kGroundY), time, 0.4, MoveStyle.fall);
         impulse(0.2);
         await _sleep(0.4);
@@ -759,10 +1252,105 @@ class StageEngine extends ChangeNotifier {
       case WaitAction():
         await _sleep(a.ms / 1000);
 
+      case SetAction():
+        final p = props[a.target];
+        if (p == null) return;
+        final seconds = a.ms / 1000 / speed;
+        if (a.value != null) p.value = Ramp(p.value.at(time), a.value!, time, seconds, curve: Curves.easeInOut);
+        if (a.rate != null) p.rate = Ramp(p.rate.at(time), a.rate!, time, seconds, curve: Curves.easeInOut);
+        _lookTarget = p.id;
+        await _sleepRaw(seconds);
+
+      case CruiseAction():
+        final p = props[a.target];
+        if (p == null) return;
+        p.cruise = Ramp(p.cruise.at(time), a.speed, time, 0.6, curve: Curves.easeInOut);
+        _lookTarget = p.id;
+        await _sleep(a.ms / 1000);
+        if (gen != _gen) return;
+        p.cruise = Ramp(p.cruise.at(time), 0, time, 0.6, curve: Curves.easeInOut);
+        await _sleepRaw(0.6);
+
+      case CompareAction():
+        final on = a.left != null || a.right != null;
+        if (on) {
+          compareLeft = a.left;
+          compareRight = a.right;
+        }
+        compare = Ramp(compare.at(time), on ? 1 : 0, time, 0.7, curve: Curves.easeInOut);
+        if (on) {
+          // the narrator stands between the two
+          final here = blob.base(time);
+          if ((here.dx - 0.5).abs() > 0.04) {
+            blob = Track(here, const Offset(0.5, kGroundY), time, 0.6, MoveStyle.leap, arc: 0.1);
+          }
+          _lookTarget = null;
+          _lookX = null;
+        }
+        await _sleep(0.7);
+
+      case PlanAction():
+        cast.addAll(a.cast);
+
+      case SceneAction():
+        // moving on: what was shown steps back into the room and dims --
+        // still there, so the next idea visibly follows from it -- while the
+        // slime takes a breath and turns to the student
+        for (final p in props.values) {
+          if (p.diedAt != null || p.carried) continue;
+          p.dim = Ramp(p.dim.at(time), isGraphKind(p.kind) ? 0.3 : 0.45, time, 0.9, curve: Curves.easeInOut);
+          if (!isGraphKind(p.kind) && p.kind != PropKind.math) {
+            p.depth = Ramp(p.z, math.min(1.0, p.z + 0.4), time, 0.9, curve: Curves.easeInOutCubic);
+          }
+        }
+        _lookTarget = null;
+        _lookX = null;
+        final here = blob.base(time);
+        blob = Track(here, here, time, 0.4, MoveStyle.leap, arc: 0.05);
+        if (const {Mood.confused, Mood.sad, Mood.strain, Mood.surprised}.contains(mood)) mood = Mood.neutral;
+        await _sleep(0.9);
+
+      case WorldAction():
+        final to = a.threeD ? 1.0 : 0.0;
+        if (world.to != to) world = Ramp(worldT, to, time, 0.9 / speed, curve: Curves.easeInOutCubic);
+        await _sleep(0.9);
+
+      case TurnAction():
+        final p = props[a.target];
+        if (p == null) return;
+        final seconds = a.ms / 1000 / speed;
+        p.yaw = Ramp(p.yaw.at(time), p.yaw.at(time) + a.yaw, time, seconds, curve: Curves.easeInOut);
+        p.pitch = Ramp(p.pitch.at(time), p.pitch.at(time) + a.pitch, time, seconds, curve: Curves.easeInOut);
+        _lookTarget = p.id;
+        await _sleepRaw(seconds);
+
+      case OrbitAction():
+        final p = props[a.target];
+        if (p == null || props[a.around] == null || a.around == a.target) return;
+        final seconds = a.ms / 1000 / speed;
+        final from = p.around == a.around ? p.orbitPhase.at(time) : 0.0;
+        p.around = a.around;
+        p.orbitRadius = a.radius;
+        p.orbitPhase = Ramp(from, from + a.turns, time, seconds, curve: Curves.linear);
+        _lookTarget = a.around;
+        await _sleepRaw(seconds);
+
+      case SlideAction():
+        final p = props[a.target];
+        if (p == null || p.kind != PropKind.dot) return;
+        final seconds = a.ms / 1000 / speed;
+        p.at = Ramp(p.at.at(time), a.at, time, seconds, curve: Curves.easeInOut);
+        _lookTarget = p.id;
+        await _sleepRaw(seconds);
+
       case TogetherAction():
         await Future.wait([for (final x in a.actions) _perform(x, gen)]);
 
       case AskAction():
+        _lookTarget = null;
+        _lookX = null;
+        await _sleep(0.35);
+        if (gen != _gen) return;
         question = StageQuestion(key: 'skit-${a.hashCode}', text: a.question, choices: a.choices);
         mood = Mood.confused;
         impulse(0.2);
@@ -770,6 +1358,15 @@ class StageEngine extends ChangeNotifier {
         notifyListeners();
         final picked = await _answer!.future;
         if (picked == null || gen != _gen) return;
+        onChecked?.call(a.question, a.choices, picked, a.answer);
+        final right = a.choices.where((c) => c.id == a.answer).firstOrNull;
+        if (right != null && picked != a.answer) {
+          // a wrong pick is corrected, not left hanging: show the right one
+          mood = Mood.thinking;
+          notifyListeners();
+          await _perform(SayAction('It\'s \u201c${right.text}\u201d!'), gen);
+          if (gen != _gen) return;
+        }
         final branch = a.then[picked];
         if (branch != null) await _runAll(branch, gen);
     }
@@ -864,6 +1461,116 @@ class StageEngine extends ChangeNotifier {
       p.pos += p.vel * dt;
     }
     particles.removeWhere((p) => time - p.born > p.life);
+  }
+
+  // ------------------------------------------------------- keeping clear
+
+  /// Roughly where a prop shows on the stage, in stage fractions (null for
+  /// what can't be placed: a graph piece whose axes are gone, say).
+  Rect? propBounds(StageProp p) {
+    if (p.kind == PropKind.link) return null;
+    final wpx = size.width <= 0 ? 1.0 : size.width, hpx = size.height <= 0 ? 1.0 : size.height;
+    if (isGraphKind(p.kind)) {
+      final axes = axesOf(p);
+      if (axes == null) return null;
+      return Rect.fromPoints(graphToStage(axes, axes.xmin, axes.ymax), graphToStage(axes, axes.xmax, axes.ymin))
+          .inflate(0.02);
+    }
+    final at = propAt(p);
+    final k = propScale(p) * p.scale.at(time);
+    if (isSolidKind(p.kind)) {
+      final s = blobRadius * 1.7 * p.size * k;
+      return Rect.fromLTWH(at.dx - s / 2 / wpx, at.dy - s / hpx, s / wpx, s / hpx);
+    }
+    Rect px(double w, double h) => Rect.fromLTWH(at.dx - w * k / 2 / wpx, at.dy - h * k / hpx, w * k / wpx, h * k / hpx);
+    switch (p.kind) {
+      case PropKind.arrow || PropKind.line || PropKind.wave:
+        final d = p.headDelta ?? const Offset(0.15, 0);
+        return Rect.fromPoints(at, at + d * k).inflate(0.03);
+      case PropKind.path:
+        var r = Rect.fromLTWH(at.dx, at.dy, 0, 0);
+        for (final q in p.points) {
+          r = r.expandToInclude(Rect.fromLTWH(at.dx + q.dx * k, at.dy + q.dy * k, 0, 0));
+        }
+        return r.inflate(0.02);
+      case PropKind.text:
+        final fs = 15.0 * p.size;
+        final w = math.min(160.0, (p.label ?? '').length * fs * 0.6);
+        return Rect.fromCenter(center: at, width: w * k / wpx, height: fs * 1.4 * k / hpx);
+      case PropKind.math:
+        final fs = 18.0 * p.size;
+        final w = math.min(260.0, (p.tex ?? '').length * fs * 0.45);
+        return Rect.fromCenter(center: at, width: w / wpx, height: fs * 2 / hpx);
+      case PropKind.circle:
+        final d = (p.w ?? 0.12) * hpx * p.size;
+        return px(d, d);
+      case PropKind.rect || PropKind.triangle:
+        final w = (p.w ?? 0.15) * hpx * p.size;
+        return px(w, (p.h ?? p.w ?? 0.15) * hpx * p.size);
+      case PropKind.cloud:
+        final half = propHalf(p);
+        return px(half * 3.4, half * 1.5);
+      case PropKind.counter:
+        final half = propHalf(p);
+        return px(half * 2.6, half * 1.4);
+      case PropKind.gauge:
+        final half = propHalf(p);
+        return px(half * 2.8, half * 1.9);
+      case PropKind.bar || PropKind.thermometer:
+        final half = propHalf(p);
+        return px(half * 1.1, half * 2.9);
+      default:
+        final half = propHalf(p);
+        return px(half * 2, half * 2);
+    }
+  }
+
+  /// Where the slime would cover things if it stood at [x].
+  Rect _blobBoxAt(double x) {
+    final w = _pxToX(blobRadius * 1.25), h = _pxToY(blobRadius * 2.1);
+    return Rect.fromLTRB(x - w, kGroundY - h, x + w, kGroundY);
+  }
+
+  double _covered(Rect me, {String? except}) {
+    var total = 0.0;
+    for (final p in props.values) {
+      if (p.diedAt != null || p.carried || p.id == except) continue;
+      final b = propBounds(p);
+      if (b == null) continue;
+      final o = me.intersect(b);
+      if (o.width > 0 && o.height > 0) total += o.width * o.height;
+    }
+    return total;
+  }
+
+  /// If the slime hides [p], hop to the nearest spot beside it that hides
+  /// nothing (or the least). True if it moved.
+  Future<bool> _stepAside(StageProp p, int gen) async {
+    if (gen != _gen || p.carried) return false;
+    final here = blob.base(time);
+    final target = propBounds(p);
+    if (target == null) return false;
+    final mine = _blobBoxAt(here.dx).intersect(target);
+    if (mine.width <= 0 || mine.height <= 0) return false;
+    double? best;
+    var bestCost = double.infinity;
+    for (var x = 0.08; x <= 0.921; x += 0.02) {
+      final box = _blobBoxAt(x);
+      final cost = _covered(box) * 400 + (x - here.dx).abs() + (x - target.center.dx).abs() * 0.3;
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = x;
+      }
+    }
+    if (best == null || (best - here.dx).abs() < 0.02) return false;
+    final hop = ((best - here.dx).abs() * 1.6).clamp(0.4, 1.0);
+    mood = mood == Mood.neutral ? Mood.surprised : mood;
+    blob = Track(here, Offset(best, kGroundY), time, hop, MoveStyle.leap, arc: 0.14);
+    await _sleep(hop);
+    if (mood == Mood.surprised) mood = Mood.happy;
+    impulse(-0.25);
+    _lookTarget = p.id;
+    return true;
   }
 
   /// Hop to stand touching [p], on its left (dir 1) or right (dir -1) side.

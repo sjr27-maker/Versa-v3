@@ -140,9 +140,24 @@ def directions_prompt(message: str, answer: str, knobs: SessionKnobs) -> str:
         "in their voice, specific to THIS topic (e.g. \"Show me with a speedometer\", "
         f"\"Work one out: x^3\"), at most {MAX_CARD_CHARS} characters, no numbering, "
         "no question marks. Different slots must lead to genuinely different places.\n"
-        'Respond with JSON: {"cards": {"intuition": "...", "example": "...", "why": "...", '
+        # 2026-09-27: "hi" got six cards about oxygen and nerve impulses.
+        "\nBut FIRST judge whether the answer explains anything there is somewhere to go "
+        "from. If it doesn't -- a greeting, small talk, thanks, a question about you or the "
+        "app, the answer asking the learner what they want -- offer nothing: respond "
+        '{"cards": null}.\n'
+        'Otherwise respond with JSON: {"cards": {"intuition": "...", "example": "...", "why": "...", '
         '"use": "...", "deeper": "...", "next": "..."}}'
     )
+
+
+def declined(raw: str) -> bool:
+    """The model judged there is nowhere to go from this answer ({"cards": null})."""
+    match = re.search(r"\{.*\}", raw or "", re.DOTALL)
+    try:
+        parsed = json.loads(match.group(0)) if match else None
+    except json.JSONDecodeError:
+        return False
+    return isinstance(parsed, dict) and "cards" in parsed and parsed["cards"] is None
 
 
 def parse_cards(raw: str) -> dict[str, str]:
@@ -181,8 +196,8 @@ class SuggestDirections:
         raw = await self._llm.complete(directions_prompt(message, answer, knobs))
         self.last_call_count += 1
         cards = parse_cards(raw)
-        if cards:
-            return cards
+        if cards or declined(raw):
+            return cards  # a deliberate "nothing to offer" is an answer, not a failure
         raw = await self._llm.complete(directions_prompt(message, answer, knobs))
         self.last_call_count += 1
         return parse_cards(raw)
