@@ -27,11 +27,13 @@ Future<void> _boot(
   required FakeBackend backend,
   FakeTransport? transport,
   Map<String, Object> prefs = const {},
+  bool offerPlans = false,
 }) async {
   final p = await _prefs(prefs);
   await tester.pumpWidget(VersaApp(
     api: backend.api,
     prefs: p,
+    offerPlans: offerPlans,
     chatFactory: (AppState app, {resumeSessionId}) => ChatController(
       api: app.api,
       learner: app.learner!,
@@ -75,6 +77,33 @@ void main() {
 
       expect(find.text('Hello, Asha'), findsOneWidget);
       expect(backend.learnersSeen, contains('Asha'));
+    });
+
+    testWidgets('a new learner sees the plans once, with the free month', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      await _boot(tester, backend: backend, offerPlans: true);
+      await _signIn(tester, 'Asha');
+
+      expect(find.text('Welcome, Asha'), findsOneWidget);
+      expect(find.text('1 MONTH FREE'), findsOneWidget);
+      expect(find.byKey(const ValueKey('plans-start-trial')), findsOneWidget);
+      expect(find.byKey(const ValueKey('plans-exam-pass')), findsOneWidget);
+
+      // no store on this platform: says where to buy, stays on the plans
+      await tester.tap(find.byKey(const ValueKey('plans-start-trial')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('plans-message')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('plans-continue-free')));
+      await tester.pumpAndSettle();
+      expect(find.text('Hello, Asha'), findsOneWidget);
+
+      // the next launch: not shown again
+      await tester.pumpWidget(const SizedBox());
+      await _boot(tester, backend: backend, offerPlans: true,
+          prefs: {'learner_label': 'Asha', 'plans_seen_${backend.learnerIdFor('Asha')}': true});
+      expect(find.text('Hello, Asha'), findsOneWidget);
     });
 
     testWidgets('says plainly when the server is not running', (tester) async {

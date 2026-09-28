@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../api.dart';
+import '../billing/sparks.dart';
 import 'topic_models.dart';
 
 /// The Learn-a-topic REST endpoints (src/versa/topics.py). Shares the app's
@@ -35,6 +36,7 @@ class TopicApi {
   }
 
   Object? _decode(http.Response r, String fail) {
+    PaywallHub.check(r); // 402: out of Sparks -> the Sparks sheet opens
     if (r.statusCode != 200) {
       var detail = '$fail (${r.statusCode})';
       try {
@@ -43,6 +45,7 @@ class TopicApi {
       } catch (_) {}
       throw ApiException(detail);
     }
+    if (r.request?.method == 'POST') PaywallHub.changed(); // Sparks may have moved
     return jsonDecode(utf8.decode(r.bodyBytes));
   }
 

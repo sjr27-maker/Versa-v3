@@ -50,6 +50,9 @@ async def pool():
         # comprehensive (includes the tables migration 032 retires) so
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
+        await conn.execute("DROP TABLE IF EXISTS spark_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS exam_pass_grants CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS billing_events CASCADE")
         for table in ("room_node_calls", "room_option_picks", "room_options", "room_option_sets",
                       "room_task_events", "room_tasks", "room_messages", "room_members", "rooms"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
@@ -153,7 +156,7 @@ async def pool():
 async def clean_pool(pool):
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE evidence_records, node_calls, turn_diagnostics, turns, "
+            "TRUNCATE spark_events, exam_pass_grants, billing_events, evidence_records, node_calls, turn_diagnostics, turns, "
             "sessions, learners, disambiguation_options, disambiguation_branches, "
             "disambiguation_turns, learner_facts, thinking_style_candidates, "
             "predictions, instrument_events, instruments, interaction_contracts, "

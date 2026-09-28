@@ -2,15 +2,22 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'billing/billing.dart';
+import 'billing/sparks.dart';
 import 'chat_controller.dart';
 import 'models.dart';
 
 /// Who is using the app, and the few settings that outlive a restart.
 class AppState extends ChangeNotifier {
   // ignore: prefer_initializing_formals -- a private field can't be a named formal
-  AppState({required this.api, SharedPreferences? prefs}) : _prefs = prefs;
+  AppState({required this.api, SharedPreferences? prefs, Billing? billing, this.offerPlans = false})
+      : _prefs = prefs,
+        sparks = SparksState(api: SparksApi.of(api), billing: billing ?? const NoBilling());
 
   final VersaApi api;
+
+  /// Sparks and the plan (billing/sparks.dart), following whoever is signed in.
+  final SparksState sparks;
   SharedPreferences? _prefs;
 
   /// This device's saved settings (null until [load]); rooms keep the list of
@@ -21,6 +28,25 @@ class AppState extends ChangeNotifier {
   static const _kTiming = 'show_timing';
   static const _kStagePanel = 'show_stage_panel';
   static const _kDirections = 'directions_style';
+  static String _kPlansSeen(String learnerId) => 'plans_seen_$learnerId';
+
+  /// Show the plans (billing/plans_screen.dart) once to each learner before
+  /// the app, right after they first sign in. Off in widget tests.
+  final bool offerPlans;
+
+  bool get needsPlans {
+    final l = learner;
+    if (!offerPlans || l == null || _prefs == null) return false;
+    if (sparks.status?.isPaid == true) return false;
+    return !(_prefs!.getBool(_kPlansSeen(l.id)) ?? false);
+  }
+
+  Future<void> markPlansSeen() async {
+    final l = learner;
+    if (l == null) return;
+    await _prefs?.setBool(_kPlansSeen(l.id), true);
+    notifyListeners();
+  }
 
   Learner? learner;
   bool loaded = false;
@@ -55,6 +81,7 @@ class AppState extends ChangeNotifier {
         // Get-or-create by name: always yields the CURRENT id (e.g. if the
         // dev database was wiped since last time).
         learner = await api.upsertLearner(label);
+        sparks.signedIn(learner!.id);
       } catch (_) {
         // Server not up yet: stay signed out; the sign-in screen retries.
       }
@@ -67,12 +94,14 @@ class AppState extends ChangeNotifier {
     final clean = name.trim();
     learner = await api.upsertLearner(clean);
     await _prefs!.setString(_kLabel, learner!.label);
+    sparks.signedIn(learner!.id);
     notifyListeners();
   }
 
   Future<void> signOut() async {
     learner = null;
     await _prefs!.remove(_kLabel);
+    sparks.signedOut();
     notifyListeners();
   }
 
@@ -234,7 +263,27 @@ class ShellState extends ChangeNotifier {
 
   /// Keeps the sidebar's preview/recency in step with the active chat: a
   /// refetch each time a turn finishes (busy -> ready), not on every delta.
+  /// Every chat's Sparks frames go to the shared SparksState; a paywall
+  /// frame opens the Sparks sheet (SparksPaywallListener in the shell).
+  ChatController _wireSparks(ChatController c) {
+    c.sparkEvents.listen((e) {
+      switch (e) {
+        case SparksEvent(:final balance):
+          app.sparks.charged(balance);
+        case SparksRewardEvent(:final reason, :final amount):
+          app.sparks.rewarded(reason, amount);
+        case PaywallEvent(:final detail):
+          PaywallHub.request(PaywallRequest.fromDetail(detail));
+          app.sparks.refresh();
+        default:
+          break;
+      }
+    });
+    return c;
+  }
+
   void _wireSandbox(ChatController c) {
+    _wireSparks(c);
     var previous = c.status;
     c.addListener(() {
       final wasBusy = previous == ChatStatus.thinking || previous == ChatStatus.streaming;
@@ -324,7 +373,7 @@ class ShellState extends ChangeNotifier {
   /// A chat controller built the same way the Sandbox one is (so tests'
   /// scripted connections apply to lesson chats too). The caller owns it.
   ChatController makeChat({String? resumeSessionId}) =>
-      _chatFactory(app, resumeSessionId: resumeSessionId);
+      _wireSparks(_chatFactory(app, resumeSessionId: resumeSessionId));
 
   /// Forget the live chat (e.g. after switching learner).
   void reset() {

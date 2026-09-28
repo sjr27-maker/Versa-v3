@@ -103,6 +103,12 @@ class ChatController extends ChangeNotifier {
   /// never chat content.
   final _progressEvents = StreamController<ProgressEvent>.broadcast();
   Stream<ProgressEvent> get progressEvents => _progressEvents.stream;
+
+  /// Sparks (src/versa/sparks.py): an answer's charge, a reward, or a
+  /// paywall. Not chat content either -- the shell's SparksState keeps the
+  /// balance and opens the sheet.
+  final _sparkEvents = StreamController<ServerEvent>.broadcast();
+  Stream<ServerEvent> get sparkEvents => _sparkEvents.stream;
   bool get busy => status == ChatStatus.thinking || status == ChatStatus.streaming;
 
   Future<void> start() async {
@@ -356,6 +362,24 @@ class ChatController extends ChangeNotifier {
       case ProgressEvent():
         if (!_progressEvents.isClosed) _progressEvents.add(event);
         return;
+      case SparksEvent() || SparksRewardEvent():
+        if (!_sparkEvents.isClosed) _sparkEvents.add(event);
+        return;
+      case PaywallEvent():
+        // The turn never ran: close it with a plain note and hand the
+        // reason to whoever shows the Sparks sheet.
+        if (!_sparkEvents.isClosed) _sparkEvents.add(event);
+        final m = _current;
+        const note = "You're out of Sparks for now. They refill on their own, "
+            'or you can top up.';
+        if (m != null) {
+          m.pending = false;
+          m.streaming = false;
+          m.text = note;
+        } else {
+          messages.add(ChatMessage(id: _nextId++, role: Role.tutor, text: note));
+        }
+        _finishTurn();
       case TurnStart():
         break;
       case Delta(:final text):
@@ -490,6 +514,7 @@ class ChatController extends ChangeNotifier {
     _disposed = true;
     _stageEvents.close();
     _progressEvents.close();
+    _sparkEvents.close();
     _knobTimer?.cancel();
     _subscription?.cancel();
     _transport?.close();

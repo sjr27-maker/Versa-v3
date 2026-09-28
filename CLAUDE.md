@@ -441,3 +441,57 @@ Why: whether a student got the stage's check right is a record of what
 actually landed. If a wrong answer could be quietly edited to right, or
 pruned, any later reading of "what this student understood" stops being
 trustworthy.
+
+### 16. Sparks are an append-only ledger
+
+`spark_events` (migration `081_sparks.sql`, code in `src/versa/sparks.py`)
+must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `SparkStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `sparks.py` or its migration.
+- A balance is never stored: it is `SUM(amount)` over the learner's events.
+  Spends are negative; welcome grants, refills, refunds, rewards and
+  purchases are positive.
+- A refund is a new event pointing at the spend it reverses
+  (`ref.spend_key`), never an edit of the spend.
+- Every event has a UNIQUE `idempotency_key`, so a retried request, a
+  double-tapped button or a replayed RevenueCat webhook lands at most once.
+  A refill window that added nothing is still recorded (amount 0) so a
+  window refills once.
+- Charging is per-learner serialized (`pg_advisory_xact_lock`), so two
+  requests can never spend the same Spark.
+- Sparks are billing state, not the learner model: nothing in `sparks.py`
+  reads or writes facts, claims or thinking styles, and exam results only
+  enter as pass/fail for a reward (invariant 13 still holds).
+- Verified by `tests/test_sparks_append_only.py`, the same AST-based check
+  used for invariants 1, 4, 6-15.
+
+Why: Sparks are money-adjacent. A student (or a judge, or a refund
+dispute) must be able to see exactly why a balance is what it is -- what
+was spent on what, what was earned back and when. An editable balance
+can't answer that.
+
+### 17. Billing records are append-only
+
+`billing_events` and `exam_pass_grants` (migration `082_billing.sql`, code
+in `src/versa/billing.py`) must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `BillingStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `billing.py` or its migration.
+- Every purchase notice Versa receives -- a RevenueCat webhook or a
+  purchase found by an app-triggered sync -- is kept verbatim, once
+  (`event_key` is UNIQUE: RevenueCat's event id, or `sync:<transaction>`).
+- One purchase is applied once, whichever route it arrives by: Spark packs
+  are keyed by store transaction in the Spark ledger (invariant 16), Exam
+  Passes by `exam_pass_grants.transaction_id` (UNIQUE).
+- Whether an Exam Pass is running is derived from `starts_at`/`ends_at`,
+  never flagged. Whether a learner has Plus is RevenueCat's answer, read
+  (and cached briefly), never copied into a Versa column.
+- Billing never blocks learning: if RevenueCat can't be reached, the last
+  known plan (or Free) is used.
+- Verified by `tests/test_billing.py`, the same AST-based check used for
+  invariants 1, 4, 6-16.
+
+Why: what a student paid for, and what Versa gave them for it, has to be
+provable later -- for the student, for a refund, for a store review. An
+edited or pruned billing record can't prove anything.

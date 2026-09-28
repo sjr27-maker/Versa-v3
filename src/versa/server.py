@@ -33,6 +33,13 @@ transport:
     take one, which runs as the next turn.
     Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
     /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
+    Billing (billing.py): GET /api/learners/{id}/billing (plan, Plus expiry,
+    Exam Pass window), POST /api/learners/{id}/billing/sync {exam_id?} (right
+    after a purchase), POST /api/billing/revenuecat/webhook (RevenueCat)
+    Sparks (sparks.py): GET /api/learners/{id}/sparks -- balance, plan, costs,
+    next refill and recent events. Priced HTTP actions answer 402 with
+    {"detail": {"reason": "sparks", "action", "needed", "balance", "tier",
+    "next_refill_at"}} when the balance is too low.
     WS   /api/sessions/{id}/chat           one chat, one turn at a time
 
 Chat protocol (JSON text frames).
@@ -50,6 +57,11 @@ Chat protocol (JSON text frames).
     {"type": "done", "turn_index": N, "kind": "answer" | "options", "text": "...",
      "timing": {"first_output_ms": ..., "total_ms": ...}}
     {"type": "error", "message": "..."}   the turn failed; the socket stays usable
+    {"type": "paywall", "reason": "sparks", "action": "answer", "needed",
+     "balance", "tier", "next_refill_at"}  not enough Sparks: the turn did not
+                                          run (sent instead of turn_start)
+    {"type": "sparks", "balance": N, "spent": N}   just before `done` on an
+                                          answer turn. Options turns cost nothing.
 
   IDEAS.md "oh wait...": memory is checked alongside the ambiguity check, so
     {"type": "options", ...}   may arrive BEFORE the turn is over (still
@@ -73,6 +85,10 @@ Chat protocol (JSON text frames).
   complete -- usually just after `done`, from the turn's background tail
     {"type": "progress", "lesson_id", "task_id", "lesson_percent",
      "chapter_percent", "topic_percent", "lesson_status"}
+  and, when that completes the lesson, the reward it earned
+    {"type": "sparks_reward", "reason": "lesson_completed", "amount": N}
+  (the same event, reason "study_streak", follows `sparks` on the answer that
+  completes a run of study days, also before `done`)
 
 `done.text` is authoritative: on a failed answer it replaces whatever
 partial deltas were shown. `timing.first_output_ms` is when the student first
@@ -117,6 +133,8 @@ from versa.embeddings import EmbeddingClient
 from versa.feed import build_feed_router
 from versa import directions as _directions
 from versa.exams import build_exams_router
+from versa.billing import Billing, build_billing_router
+from versa.sparks import InsufficientSparks, SparkEngine, build_sparks_router
 from versa.topics import build_topics_router
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients
@@ -327,6 +345,8 @@ def create_app(
     web_dir: Path | str | None = None,
     llm_mode: Literal["live", "stub"] = "live",
     cors_origin_regex: str = LOCAL_ORIGIN_REGEX,
+    sparks: SparkEngine | None = None,
+    billing: Billing | None = None,
 ) -> FastAPI:
     # A session's live websocket `send`, while one is connected -- the
     # sandbox-chat claim-update flow (loop.py's stated-preference
@@ -341,10 +361,39 @@ def create_app(
         if send_fn is not None:
             asyncio.create_task(send_fn({"type": "claim_update", **update}))
 
+    # Sparks (sparks.py): what real work costs, and what learning earns back.
+    # `VERSA_SPARKS=off` turns charging off. Billing (billing.py) connects
+    # RevenueCat: which plan a learner is on, bought Spark packs, Exam Passes.
+    # Without REVENUECAT_SECRET_KEY it is off and everyone is Free.
+    if billing is None:
+        billing = Billing.from_env(pool) if sparks is None else Billing(pool, None)
+    if sparks is None:
+        sparks = SparkEngine.from_env(pool, billing.tiers)
+    billing.sparks = sparks
+    background: set[asyncio.Task] = set()
+
     def on_lesson_progress(session_id: UUID, progress: dict) -> None:
         send_fn = active_sends.get(session_id)
         if send_fn is not None:
             asyncio.create_task(send_fn({"type": "progress", **progress}))
+        if progress.get("lesson_status") == "done":
+            task = asyncio.create_task(_reward_lesson(session_id, progress))
+            background.add(task)
+            task.add_done_callback(background.discard)
+
+    async def _reward_lesson(session_id: UUID, progress: dict) -> None:
+        try:
+            learner_id = await transcript.get_learner_id(session_id)
+            amount = await sparks.reward(
+                learner_id, "lesson_completed", f"lesson:{progress['lesson_id']}",
+                ref={"lesson_id": progress["lesson_id"], "session_id": session_id},
+            )
+        except Exception:
+            logger.exception("lesson reward failed for session %s", session_id)
+            return
+        send_fn = active_sends.get(session_id)
+        if amount and send_fn is not None:
+            await send_fn({"type": "sparks_reward", "reason": "lesson_completed", "amount": amount})
 
     loop: SessionLoop = build_session_loop(
         pool, tiers, embedding_client, domain_config=domain_config,
@@ -378,6 +427,8 @@ def create_app(
 
     app = FastAPI(title="Versa", docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.loop = loop
+    app.state.sparks = sparks
+    app.state.billing = billing
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=cors_origin_regex,
@@ -1190,6 +1241,15 @@ def create_app(
             await send({"type": "error", "message": f"unknown message type {kind!r}"})
             return
 
+        # Asking needs a Spark in hand; whether one is spent depends on how
+        # the turn ends (options are free, an answer costs one).
+        learner_id = await transcript.get_learner_id(session_id)
+        try:
+            await sparks.require(learner_id, "answer")
+        except InsufficientSparks as exc:
+            await send({"type": "paywall", **exc.detail()})
+            return
+
         turn_index = await next_turn_index(session_id)
         # What the learner did with the directions under the last answer:
         # took one, or passed them by asking their own question.
@@ -1273,6 +1333,21 @@ def create_app(
                 "message": message,
                 "options": [{"id": str(o.id), "text": o.text} for o in options],
             })
+        if not options:
+            try:
+                # the answer was already delivered: take what is there
+                charge = await sparks.charge(
+                    learner_id, "answer", f"turn:{session_id}:{turn_index}",
+                    ref={"session_id": session_id, "turn_index": turn_index},
+                    after_the_fact=True,
+                )
+            except Exception:
+                logger.exception("charging turn %d of session %s failed", turn_index, session_id)
+            else:
+                await send({"type": "sparks", "balance": charge.balance, "spent": charge.spent})
+                if charge.streak_reward:
+                    await send({"type": "sparks_reward", "reason": "study_streak",
+                                "amount": charge.streak_reward})
         await send({
             "type": "done",
             "turn_index": turn_index,
@@ -1295,12 +1370,15 @@ def create_app(
             task.add_done_callback(direction_tasks.discard)
 
     app.include_router(api)
+    app.include_router(build_sparks_router(sparks, pool))
+    app.include_router(build_billing_router(billing))
     app.include_router(build_feed_router(pool, tiers.fast))
     app.include_router(build_topics_router(
         pool, tiers.fast, loop._embedding_client, ablation_config=loop.ablation_config,
+        sparks=sparks,
     ))
     # Exam preparation (exams.py): syllabus units, unit quizzes, mock tests.
-    exams_router = build_exams_router(pool, tiers.fast)
+    exams_router = build_exams_router(pool, tiers.fast, sparks=sparks)
     app.state.exam_service = exams_router.exam_service
     app.state.direction_tasks = direction_tasks  # tests wait on these
     app.include_router(exams_router)

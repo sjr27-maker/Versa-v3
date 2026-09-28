@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../billing/sparks_widgets.dart';
 import '../theme.dart';
 import '../widgets/collapsed_rail.dart';
 import 'history_screen.dart';
@@ -147,6 +148,10 @@ class _Rail extends StatelessWidget {
                 onTap: () => onSelect(i),
               ),
             const Spacer(),
+            const Padding(
+              padding: EdgeInsets.only(left: 6, bottom: 14),
+              child: SparksChip(),
+            ),
             Padding(
               padding: const EdgeInsets.only(left: 10),
               child: Text('V0.1 · LOCAL', style: mono(9.5)),

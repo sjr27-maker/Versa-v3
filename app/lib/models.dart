@@ -299,6 +299,27 @@ class ProgressEvent extends ServerEvent {
   final String lessonStatus;
 }
 
+/// Out of Sparks (server `paywall` frame, src/versa/sparks.py): the turn did
+/// not run. [detail] is the server's reason (needed, balance, next_refill_at).
+class PaywallEvent extends ServerEvent {
+  const PaywallEvent(this.detail);
+  final Map<String, dynamic> detail;
+}
+
+/// An answer was charged (server `sparks` frame, just before `done`).
+class SparksEvent extends ServerEvent {
+  const SparksEvent({required this.balance, required this.spent});
+  final int balance;
+  final int spent;
+}
+
+/// Learning paid back: a finished lesson or a study streak.
+class SparksRewardEvent extends ServerEvent {
+  const SparksRewardEvent({required this.reason, required this.amount});
+  final String reason;
+  final int amount;
+}
+
 ServerEvent? parseServerEvent(Map<String, dynamic> json) {
   switch (json['type']) {
     case 'turn_start':
@@ -324,6 +345,18 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
       );
     case 'error':
       return ErrorEvent(json['message'] as String? ?? 'something went wrong');
+    case 'paywall':
+      return PaywallEvent(json);
+    case 'sparks':
+      return SparksEvent(
+        balance: (json['balance'] as num?)?.toInt() ?? 0,
+        spent: (json['spent'] as num?)?.toInt() ?? 0,
+      );
+    case 'sparks_reward':
+      return SparksRewardEvent(
+        reason: json['reason'] as String? ?? '',
+        amount: (json['amount'] as num?)?.toInt() ?? 0,
+      );
     case 'claim_update':
       return ClaimUpdateEvent(ClaimUpdate.fromJson(json));
     case 'regen_start':

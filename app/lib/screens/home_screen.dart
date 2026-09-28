@@ -5,6 +5,7 @@ import '../app_state.dart';
 import '../composer_draft.dart';
 import '../feed_api.dart';
 import '../models.dart';
+import '../billing/sparks_widgets.dart';
 import '../theme.dart';
 import '../widgets/feed_cards.dart';
 
@@ -109,7 +110,10 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Text('HOME', style: mono(11)),
               const SizedBox(height: 8),
-              Text('Hello, $name', style: serif(34)),
+              Row(children: [
+                Expanded(child: Text('Hello, $name', style: serif(34))),
+                const SparksChip(),
+              ]),
               const SizedBox(height: 22),
               _StartSandboxCard(onTap: _shell.openSandbox),
               const SizedBox(height: 32),

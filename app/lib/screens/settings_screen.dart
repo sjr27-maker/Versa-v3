@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../billing/sparks_widgets.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
@@ -93,6 +94,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ]),
               ]),
+              const SparksPlanCard(),
               card([
                 Text('Connection', style: serif(19)),
                 const SizedBox(height: 12),

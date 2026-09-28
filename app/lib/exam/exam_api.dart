@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../api.dart';
+import '../billing/sparks.dart';
 import 'exam_models.dart';
 
 /// The Exam-preparation REST endpoints (src/versa/exams.py). Shares the
@@ -34,6 +35,7 @@ class ExamApi {
   Future<Object?> _get(String path, String fail) async => _decode(await _http.get(_uri(path)).timeout(_read), fail);
 
   Object? _decode(http.Response r, String fail) {
+    PaywallHub.check(r); // 402: out of Sparks -> the Sparks sheet opens
     if (r.statusCode != 200) {
       var detail = '$fail (${r.statusCode})';
       try {
@@ -42,6 +44,7 @@ class ExamApi {
       } catch (_) {}
       throw ApiException(detail);
     }
+    if (r.request?.method == 'POST') PaywallHub.changed(); // Sparks may have moved
     return jsonDecode(utf8.decode(r.bodyBytes));
   }
 

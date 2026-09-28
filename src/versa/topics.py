@@ -49,6 +49,7 @@ prerequisite edges, no mastery estimate.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -1677,7 +1678,11 @@ def build_topics_router(
     *,
     ablation_config=None,
     link_fetcher: Callable | None = None,
+    sparks=None,
 ) -> APIRouter:
+    """`sparks` (a sparks.SparkEngine) prices the generating endpoints --
+    exploring, expanding a branch, building a course -- and answers 402 when
+    the balance is too low. None: nothing is charged."""
     router = APIRouter(prefix="/api")
     learners = LearnerStore(pool)
     transcript = TranscriptStore(pool)
@@ -1689,12 +1694,19 @@ def build_topics_router(
         if await learners.get(learner_id) is None:
             raise HTTPException(status_code=404, detail="unknown learner")
 
+    def priced(learner_id: UUID, action: str, **ref):
+        """Charge for generated work, refunded if it fails (sparks.py)."""
+        if sparks is None:
+            return contextlib.nullcontext()
+        return sparks.charged(learner_id, action, ref=ref)
+
     @router.post("/topic-explorations", response_model=ExplorationOut)
     async def explore(body: ExplorationIn) -> ExplorationOut:
         await require_learner(body.learner_id)
         if not body.query.strip():
             raise HTTPException(status_code=422, detail="query must not be blank")
-        return await service.explore_keyword(body.learner_id, body.query)
+        async with priced(body.learner_id, "explore_topic", source="search"):
+            return await service.explore_keyword(body.learner_id, body.query)
 
     @router.post("/topic-explorations/from-link", response_model=ExplorationOut)
     async def explore_link(body: LinkIn) -> ExplorationOut:
@@ -1703,7 +1715,8 @@ def build_topics_router(
             resource = await fetch_link(body.url)
         except _resources.ResourceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        return await service.explore_resource(body.learner_id, resource)
+        async with priced(body.learner_id, "explore_topic", source="link"):
+            return await service.explore_resource(body.learner_id, resource)
 
     @router.post("/topic-explorations/from-pdf", response_model=ExplorationOut)
     async def explore_pdf(learner_id: UUID = Form(...), file: UploadFile = File(...)) -> ExplorationOut:
@@ -1713,7 +1726,8 @@ def build_topics_router(
             resource = await asyncio.to_thread(_resources.extract_pdf, data, file.filename)
         except _resources.ResourceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        return await service.explore_resource(learner_id, resource)
+        async with priced(learner_id, "explore_topic", source="pdf"):
+            return await service.explore_resource(learner_id, resource)
 
     @router.get("/topic-explorations/{exploration_id}", response_model=ExplorationOut)
     async def get_exploration(exploration_id: UUID) -> ExplorationOut:
@@ -1724,12 +1738,22 @@ def build_topics_router(
 
     @router.post("/topic-nodes/{node_id}/expand", response_model=list[NodeOut])
     async def expand(node_id: UUID, body: ExpandIn | None = None) -> list[NodeOut]:
-        return await service.expand(node_id, bool(body and body.more))
+        more = bool(body and body.more)
+        node = await store.get_node(node_id) if sparks is not None else None
+        if node is None:  # unknown (the service answers 404) or nothing to price
+            return await service.expand(node_id, more)
+        exploration = await store.get_exploration(node.exploration_id)
+        has_children = any(n.parent_id == node.id for n in await store.list_nodes(node.exploration_id))
+        if has_children and not more:  # already expanded: read back, free
+            return await service.expand(node_id, more)
+        async with priced(exploration.learner_id, "expand_topic", node_id=node_id):
+            return await service.expand(node_id, more)
 
     @router.post("/topics", response_model=TopicOut)
     async def create_topic(body: TopicIn) -> TopicOut:
         await require_learner(body.learner_id)
-        return await service.build_topic(body)
+        async with priced(body.learner_id, "build_course"):
+            return await service.build_topic(body)
 
     @router.get("/learners/{learner_id}/topics", response_model=list[TopicSummaryOut])
     async def list_topics(learner_id: UUID) -> list[TopicSummaryOut]:

@@ -35,6 +35,7 @@ topic_generations.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -52,6 +53,7 @@ from versa import resources as _resources
 from versa.audit import to_jsonable
 from versa.learner import LearnerStore
 from versa.llm import LLMClient
+from versa.sparks import passed
 from versa.topics import TopicStore
 
 logger = logging.getLogger(__name__)
@@ -1262,7 +1264,12 @@ def _question_out(q: QuestionRow, units: dict[UUID, UnitRow]) -> QuestionOut:
 # ------------------------------------------------------------------ router
 
 
-def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None) -> APIRouter:
+def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None, sparks=None) -> APIRouter:
+    """`sparks` (a sparks.SparkEngine) prices creating an exam, a unit quiz
+    and a mock test (402 when the balance is too low), and rewards a passed
+    quiz or mock on hand-in. Only pass/fail leaves exam prep for that reward:
+    Sparks are billing state, not the learner model (invariant 13 holds).
+    None: nothing is charged or rewarded."""
     router = APIRouter(prefix="/api")
     learners = LearnerStore(pool)
     service = ExamService(pool, llm)
@@ -1272,12 +1279,19 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None)
         if await learners.get(learner_id) is None:
             raise HTTPException(status_code=404, detail="unknown learner")
 
+    def priced(learner_id: UUID, action: str, **ref):
+        """Charge for generated work, refunded if it fails (sparks.py)."""
+        if sparks is None:
+            return contextlib.nullcontext()
+        return sparks.charged(learner_id, action, ref=ref)
+
     @router.post("/exams", response_model=ExamOut)
     async def create_exam(body: ExamIn) -> ExamOut:
         await require_learner(body.learner_id)
         if not body.query.strip():
             raise HTTPException(status_code=422, detail="say what the exam is on")
-        return await service.create_from_search(body)
+        async with priced(body.learner_id, "create_exam", source="search"):
+            return await service.create_from_search(body)
 
     @router.post("/exams/from-link", response_model=ExamOut)
     async def create_from_link(body: ExamFromLinkIn) -> ExamOut:
@@ -1286,7 +1300,8 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None)
             resource = await fetch_link(body.url)
         except _resources.ResourceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        return await service.create_from_resource(body.learner_id, resource, body.title, body.exam_date)
+        async with priced(body.learner_id, "create_exam", source="link"):
+            return await service.create_from_resource(body.learner_id, resource, body.title, body.exam_date)
 
     @router.post("/exams/from-pdf", response_model=ExamOut)
     async def create_from_pdf(
@@ -1301,12 +1316,14 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None)
             resource = await asyncio.to_thread(_resources.extract_pdf, data, file.filename)
         except _resources.ResourceError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        return await service.create_from_resource(learner_id, resource, title, exam_date)
+        async with priced(learner_id, "create_exam", source="pdf"):
+            return await service.create_from_resource(learner_id, resource, title, exam_date)
 
     @router.post("/exams/from-course", response_model=ExamOut)
     async def create_from_course(body: ExamFromCourseIn) -> ExamOut:
         await require_learner(body.learner_id)
-        return await service.create_from_course(body)
+        async with priced(body.learner_id, "create_exam", source="course"):
+            return await service.create_from_course(body)
 
     @router.get("/learners/{learner_id}/exams", response_model=list[ExamSummaryOut])
     async def list_exams(learner_id: UUID) -> list[ExamSummaryOut]:
@@ -1319,11 +1336,20 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None)
 
     @router.post("/exam-units/{unit_id}/quiz", response_model=QuizOut)
     async def start_unit_quiz(unit_id: UUID) -> QuizOut:
-        return await service.start_unit_quiz(unit_id)
+        unit = await service.store.get_unit(unit_id)
+        if unit is None or sparks is None:
+            return await service.start_unit_quiz(unit_id)  # 404 / unpriced
+        exam = await service.store.get_exam(unit.exam_id)
+        async with priced(exam.learner_id, "unit_quiz", exam_id=exam.id, unit_id=unit_id):
+            return await service.start_unit_quiz(unit_id)
 
     @router.post("/exams/{exam_id}/mock", response_model=QuizOut)
     async def start_mock(exam_id: UUID) -> QuizOut:
-        return await service.start_mock(exam_id)
+        exam = await service.store.get_exam(exam_id)
+        if exam is None or sparks is None:
+            return await service.start_mock(exam_id)  # 404 / unpriced
+        async with priced(exam.learner_id, "mock_test", exam_id=exam_id):
+            return await service.start_mock(exam_id)
 
     @router.get("/exam-quizzes/{quiz_id}", response_model=QuizOut)
     async def get_quiz(quiz_id: UUID) -> QuizOut:
@@ -1331,7 +1357,17 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None)
 
     @router.post("/exam-quizzes/{quiz_id}/submit", response_model=QuizOut)
     async def submit(quiz_id: UUID, body: SubmitIn) -> QuizOut:
-        return await service.submit(quiz_id, body)
+        out = await service.submit(quiz_id, body)
+        if sparks is not None and out.score is not None and not out.over_time and passed(out.score.percent):
+            exam = await service.store.get_exam(out.exam_id)
+            reason = "unit_quiz_passed" if out.kind == "unit" else "mock_test_passed"
+            try:
+                await sparks.reward(exam.learner_id, reason, f"quiz:{quiz_id}",
+                                    ref={"exam_id": out.exam_id, "quiz_id": quiz_id,
+                                         "percent": out.score.percent})
+            except Exception:  # a reward must never cost the student their result
+                logger.exception("sparks reward failed for quiz %s", quiz_id)
+        return out
 
     @router.post("/exams/{exam_id}/plan", response_model=PlanOut)
     async def make_plan(exam_id: UUID, body: PlanIn | None = None) -> PlanOut:

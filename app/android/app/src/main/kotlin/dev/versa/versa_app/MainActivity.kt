@@ -1,5 +1,6 @@
 package dev.versa.versa_app
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// RevenueCat paywalls (purchases_ui_flutter) need a FragmentActivity.
+class MainActivity : FlutterFragmentActivity()
