@@ -9,14 +9,26 @@ import 'billing/plans_screen.dart';
 import 'billing/sparks.dart';
 import 'billing/sparks_widgets.dart';
 import 'config.dart';
-import 'screens/onboarding_screen.dart';
+import 'auth/firebase_identity.dart';
+import 'auth/identity.dart';
+import 'screens/profile_screen.dart';
+import 'screens/sign_in_screen.dart';
 import 'screens/shell.dart';
 import 'theme.dart';
 
-void main() => runApp(const VersaApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Google / email sign-in, when this build has a Firebase project
+  // (auth/firebase_identity.dart); otherwise only the testers' sign-in.
+  final identity = await FirebaseIdentity.create();
+  runApp(VersaApp(identity: identity));
+}
 
 class VersaApp extends StatefulWidget {
-  const VersaApp({super.key, this.api, this.prefs, this.chatFactory, this.billing, this.offerPlans});
+  const VersaApp({super.key, this.api, this.prefs, this.chatFactory, this.billing, this.offerPlans, this.identity});
+
+  /// Google / email sign-in (auth/identity.dart). Default: none.
+  final IdentityService? identity;
 
   /// Overrides for tests: a scripted API client / in-memory prefs / fake chat.
   final VersaApi? api;
@@ -45,6 +57,7 @@ class _VersaAppState extends State<VersaApp> {
       prefs: widget.prefs,
       billing: widget.billing ?? (widget.api == null ? RevenueCatBilling.create() : const NoBilling()),
       offerPlans: widget.offerPlans ?? widget.api == null,
+      identity: widget.identity ?? const NoIdentity(),
     )..load();
   }
 
@@ -81,7 +94,9 @@ class _Root extends StatelessWidget {
       );
     }
     final learner = app.learner;
-    if (learner == null) return const OnboardingScreen();
+    if (learner == null) return const SignInScreen();
+    // Sign-in -> the sign-up questions (once) -> the plans (once) -> the app.
+    if (app.needsProfile) return ProfileScreen(key: ValueKey('profile-${learner.id}'));
     if (app.needsPlans) {
       return PlansScreen(key: ValueKey('plans-${learner.id}'), name: learner.label, onDone: app.markPlansSeen);
     }

@@ -317,6 +317,17 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
         {"grades": [{"index": i, "correct": True, "feedback": "Stub: looks right."}
                     for i in range(prompt.count("Student's answer:"))]}
     ),
+    # profiles.py: a sign-up profile read into a structured picture.
+    "PROFILE:EXTRACT": json.dumps(
+        {
+            "stage": "higher_secondary", "education_system": "CBSE (India)", "level": "Class 11",
+            "location": "Kerala, India", "institution": None, "field": "Science (PCM)",
+            "subjects": ["Physics", "Chemistry", "Mathematics"], "working_towards": ["JEE Main"],
+            "starting_point": "Has covered Class 10 algebra and basic mechanics; start new ideas "
+                              "from those and build up.",
+            "age_fits_stage": True, "note": None,
+        }
+    ),
     # directions.py: one card per slot of the standard skeleton.
     "DIRECTIONS:SUGGEST": json.dumps(
         {
@@ -931,6 +942,25 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
             "required": ["intuition", "example", "why", "use", "deeper", "next"],
         }},
         "required": ["cards"],
+    },
+    "PROFILE:EXTRACT": {
+        "type": "OBJECT",
+        "properties": {
+            "stage": {"type": "STRING", "enum": [
+                "primary_school", "middle_school", "secondary_school", "higher_secondary",
+                "undergraduate", "postgraduate", "working", "other"]},
+            "education_system": {"type": "STRING", "nullable": True},
+            "level": {"type": "STRING", "nullable": True},
+            "location": {"type": "STRING", "nullable": True},
+            "institution": {"type": "STRING", "nullable": True},
+            "field": {"type": "STRING", "nullable": True},
+            "subjects": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "working_towards": {"type": "ARRAY", "items": {"type": "STRING"}},
+            "starting_point": {"type": "STRING", "nullable": True},
+            "age_fits_stage": {"type": "BOOLEAN"},
+            "note": {"type": "STRING", "nullable": True},
+        },
+        "required": ["stage", "subjects", "working_towards", "age_fits_stage"],
     },
     "EXAM:SYLLABUS": {
         "type": "OBJECT",

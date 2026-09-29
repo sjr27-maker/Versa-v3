@@ -12,6 +12,7 @@ requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.31.0",
     "fastapi>=0.141.1",
+    "google-auth[requests]>=2.40",
     "google-genai>=2.20.0",
     "httpx>=0.28.1",
     "pgvector>=0.5.0",

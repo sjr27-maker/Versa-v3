@@ -12,11 +12,15 @@ Evidence. What a learner picks, and above all the ORDER they explore in
 stated. So:
   - the skeleton is the same for everyone, so picks compare across people
     and across sessions; only the card wording is generated;
-  - the generator is deliberately given NO thinking style, claims or
-    history -- a set shaped by what we already believe about someone would
-    turn their pick into an echo of our own guess (the circularity risk in
-    IDEAS.md). The depth and breadth sliders are the only personal input:
-    the learner set them, and they bound the window the cards are pitched in;
+  - the generator is deliberately given NO thinking style, claims, profile
+    or cross-session history -- a set shaped by what we already believe
+    about someone would turn their pick into an echo of our own guess (the
+    circularity risk in IDEAS.md). Two personal inputs only, both things the
+    learner did rather than things we concluded, and both applied to every
+    slot alike: the depth and breadth sliders (the window the cards are
+    pitched in), and the directions they took earlier in THIS chat (so each
+    set builds on where they are and never re-offers ground covered --
+    "better paths each time", 2026-09-29);
   - card positions are shuffled for every set and stored, so a preference
     can be told apart from tapping whatever came first;
   - every set, card, pick and pass (with how long it took) is kept, and
@@ -125,7 +129,22 @@ def _window_line(knobs: SessionKnobs) -> str:
     )
 
 
-def directions_prompt(message: str, answer: str, knobs: SessionKnobs) -> str:
+def _path_line(path_so_far: list[str]) -> str:
+    """Where this learner has already gone in THIS chat, or '' before their
+    first pick (so the first set's prompt is unchanged)."""
+    if not path_so_far:
+        return ""
+    taken = " -> ".join(f'"{text}"' for text in path_so_far)
+    return (
+        f"\nIn this chat they have already taken, in order: {taken}. Every card should "
+        "build on where they are now and lead somewhere they have NOT been yet -- never "
+        "re-offer a direction they already took. This is the same for every slot.\n"
+    )
+
+
+def directions_prompt(
+    message: str, answer: str, knobs: SessionKnobs, path_so_far: list[str] | None = None,
+) -> str:
     slots = "".join(f"- {slot}: {desc}\n" for slot, desc in SLOTS.items())
     return (
         "DIRECTIONS:SUGGEST\n"
@@ -135,6 +154,7 @@ def directions_prompt(message: str, answer: str, knobs: SessionKnobs) -> str:
         f"Their message: {message}\n"
         f"The answer they got (may be cut off): <<<{answer[:1500]}>>>\n"
         f"{_window_line(knobs)}"
+        f"{_path_line(path_so_far or [])}"
         f"\nSlots:\n{slots}"
         "\nFor EVERY slot write one card: what the learner would tap to go there, "
         "in their voice, specific to THIS topic (e.g. \"Show me with a speedometer\", "
@@ -190,15 +210,22 @@ class SuggestDirections:
         self._llm = llm
         self.last_call_count = 0
 
-    async def run(self, message: str, answer: str, depth: int, breadth: int) -> dict[str, str]:
+    async def run(
+        self, message: str, answer: str, depth: int, breadth: int, path_so_far: list[str] | None = None,
+    ) -> dict[str, str]:
+        """`path_so_far`: the directions this learner took earlier in THIS
+        chat, in order -- so each set builds on where they are instead of
+        re-offering ground they covered. Given to every slot alike; nothing
+        learned about the learner (module docstring)."""
         self.last_call_count = 0
         knobs = SessionKnobs(depth=depth, breadth=breadth)
-        raw = await self._llm.complete(directions_prompt(message, answer, knobs))
+        prompt = directions_prompt(message, answer, knobs, path_so_far)
+        raw = await self._llm.complete(prompt)
         self.last_call_count += 1
         cards = parse_cards(raw)
         if cards or declined(raw):
             return cards  # a deliberate "nothing to offer" is an answer, not a failure
-        raw = await self._llm.complete(directions_prompt(message, answer, knobs))
+        raw = await self._llm.complete(prompt)
         self.last_call_count += 1
         return parse_cards(raw)
 
@@ -281,6 +308,17 @@ class DirectionStore:
             )
         except asyncpg.UniqueViolationError:
             raise AlreadySettled from None
+
+    async def taken_texts(self, session_id: UUID) -> list[str]:
+        """The cards this learner took in this session, in order (their
+        words on the cards they picked)."""
+        rows = await self._pool.fetch(
+            "SELECT c.text FROM direction_events e JOIN direction_sets s ON s.id = e.set_id "
+            "JOIN direction_cards c ON c.id = e.card_id "
+            "WHERE s.session_id = $1 AND e.kind = 'picked' ORDER BY s.turn_index, e.created_at",
+            session_id,
+        )
+        return [r["text"] for r in rows]
 
     async def session_path(self, session_id: UUID) -> list[PathStep]:
         """This session's order of approach: every settled set, in order."""

@@ -232,6 +232,51 @@ async def _run_migrations(status_only: bool, do_baseline: bool) -> None:
         await pool.close()
 
 
+async def _observations(learner_spec: str) -> None:
+    """`versa observations` -- the observation ledger for one learner
+    (observations.py, docs/THINKING_STYLE.md layer 1): every raw event split
+    by lens, then what the pick guesser currently reads off it -- the
+    moments it counts for less, its hit record, and the learner's way in
+    if it is clear yet. Read-only; no model call, writes nothing."""
+    from collections import Counter
+
+    from versa import pick_prediction as _pick_prediction
+    from versa.observations import DERIVATION_VERSION, ObservationReader, turn_flags
+
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        learner = await _resolve_learner(LearnerStore(pool), learner_spec)
+        ledger = await ObservationReader(pool).for_learner(learner.id)
+        print(f"learner {learner.id} -- {len(ledger)} observations ({DERIVATION_VERSION})")
+        by_lens = Counter((o.lens, o.key) for o in ledger)
+        for lens in ("style", "range", "interest", "ability", "mood", "said"):
+            keys = sorted((k, n) for (lz, k), n in by_lens.items() if lz == lens)
+            if keys:
+                print(f"  {lens:9s} " + ", ".join(f"{k} x{n}" for k, n in keys))
+        flags = turn_flags(ledger)
+        print(f"  counted for less: {len(flags.stuck)} stuck turn(s), {len(flags.rushed)} rushed session(s)")
+        store = _pick_prediction.PredictionStore(pool)
+        hits, guesses = await store.record(learner.id, window=1000)
+        print(f"  guesses: {hits} of {guesses} picks guessed right")
+        from versa.style_patterns import StyleReader
+
+        patterns = await StyleReader(pool).patterns(learner.id)
+        print(f"  thinking style ({len(patterns)} pattern(s)):" if patterns else "  thinking style: nothing clear yet")
+        for pattern in patterns:
+            print(f"    [{pattern.status}] {pattern.statement}")
+            for name, gate in pattern.gates.items():
+                print(f"        {'ok ' if gate.ok else 'no '} {name:12s} {gate.have}  (needs {gate.need})")
+        profile = await store.approach_profile(learner.id)
+        if profile is None:
+            print("  way in: not clear yet -- answers are not shaped")
+        else:
+            print("  way in: " + " -> ".join(_pick_prediction.slot_label(s) for s in profile.path))
+            for line in _pick_prediction.explain_profile(profile):
+                print(f"    {line}")
+    finally:
+        await pool.close()
+
+
 async def _review_claims(learner_spec: str) -> None:
     """`versa review-claims` -- the claim layer's review surface (per
     its own spec: "list every claim with its statement, test, status,
@@ -382,7 +427,18 @@ async def _serve(host: str, port: int, use_stub: bool, web_dir: str | None) -> N
     plus the built Flutter web app at "/" if `app/build/web` exists."""
     import uvicorn
 
-    from versa.server import create_app
+    from versa.accounts import Auth
+    from versa.server import LOCAL_ORIGIN_REGEX, create_app
+
+    # Sign-in (accounts.py) is on unless VERSA_AUTH=off, and a server other
+    # devices can reach must have it: that is the whole point of it.
+    local = host in ("127.0.0.1", "localhost", "::1")
+    auth = Auth.from_env(local=local)
+    if auth is None and not local:
+        print("error: VERSA_AUTH=off is only allowed with --host 127.0.0.1", file=sys.stderr)
+        sys.exit(2)
+    # The phone app doesn't need CORS; a separately hosted web build does.
+    cors = os.environ.get("VERSA_CORS_ORIGIN_REGEX") or (LOCAL_ORIGIN_REGEX if local else r"^$")
 
     tiers = _build_tier_clients(use_stub)
     embedding_client = _build_embedding_client(use_stub)
@@ -403,7 +459,19 @@ async def _serve(host: str, port: int, use_stub: bool, web_dir: str | None) -> N
             domain_config=domain_config,
             web_dir=resolved_web,
             llm_mode="stub" if use_stub else "live",
+            cors_origin_regex=cors,
+            auth=auth,
+            android_download_url=os.environ.get("VERSA_ANDROID_URL") or None,
         )
+        if auth is None:
+            print("versa: sign-in OFF (VERSA_AUTH=off) -- name-only, this machine only")
+        else:
+            ways = [w for w, on in (("Google/email", auth.google),
+                                    (f"dev names {sorted(auth.dev_logins)}", bool(auth.dev_logins))) if on]
+            print(f"versa: sign-in ON ({', '.join(ways) or 'nothing configured!'}; "
+                  f"invites {'required' if auth.invites_required else 'off'})")
+            for note in auth.notes:
+                print(f"versa:   note: {note}")
         shown_host = "localhost" if host in ("127.0.0.1", "0.0.0.0") else host
         print(f"versa: API      http://{shown_host}:{port}/api/health  "
               f"({'stub LLM' if use_stub else 'live Gemini'})")
@@ -412,12 +480,52 @@ async def _serve(host: str, port: int, use_stub: bool, web_dir: str | None) -> N
             lan = _lan_address() if host == "0.0.0.0" else None
             if lan:
                 # Study rooms (rooms/): other devices on this network join here.
-                print(f"versa: on your network  http://{lan}:{port}/   (no auth -- trusted networks only)")
+                print(f"versa: on your network  http://{lan}:{port}/")
         else:
             print(f"versa: no web build at {resolved_web} -- build it with "
                   "`cd app && flutter build web`, or run the app with `flutter run -d edge`")
-        server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning"))
+        server = uvicorn.Server(uvicorn.Config(
+            app, host=host, port=port, log_level="warning",
+            # behind Cloud Run's proxy: trust its X-Forwarded-* (https, client ip)
+            proxy_headers=True, forwarded_allow_ips=os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1"),
+        ))
         await server.serve()
+    finally:
+        await pool.close()
+
+
+async def _invite(args) -> None:
+    """`versa invite create|list|revoke` -- against DATABASE_URL, so point it
+    at the deployed database (e.g. through the Cloud SQL proxy) to make codes
+    for the demo."""
+    from datetime import UTC, datetime
+
+    from versa.accounts import AccountStore, create_invites
+
+    base = os.environ.get("VERSA_PUBLIC_URL", "http://localhost:8000").rstrip("/")
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        store = AccountStore(pool)
+        if args.invite_command == "create":
+            invites = await create_invites(
+                pool, count=max(1, args.count), max_uses=args.uses or None, note=args.note,
+                days=args.days, created_by=os.environ.get("USERNAME") or os.environ.get("USER"),
+            )
+            for invite in invites:
+                uses = "unlimited" if invite.max_uses is None else f"{invite.max_uses} use(s)"
+                print(f"{invite.code}  {base}/invite/{invite.code}  ({uses})")
+        elif args.invite_command == "list":
+            now = datetime.now(UTC)
+            for invite in await store.list_invites():
+                problem = store.invite_problem(invite, now)
+                limit = "unlimited" if invite.max_uses is None else str(invite.max_uses)
+                state = "ok" if problem is None else problem
+                print(f"{invite.code}  used {invite.uses}/{limit}  {state}  {invite.note or ''}")
+        elif args.invite_command == "revoke":
+            found = await store.revoke_invite(args.code, args.reason)
+            print("revoked" if found else "no such code")
+            if not found:
+                sys.exit(1)
     finally:
         await pool.close()
 
@@ -446,13 +554,27 @@ def main() -> None:
         "built web app at / if app/build/web exists)",
     )
     serve_parser.add_argument("--host", default="127.0.0.1",
-                              help="bind address (default 127.0.0.1 -- local only, no auth; "
-                              "0.0.0.0 lets other devices on your network in, e.g. for study rooms)")
+                              help="bind address (default 127.0.0.1 -- this machine only; "
+                              "0.0.0.0 lets other devices in, which needs sign-in on)")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.add_argument("--stub", action="store_true",
                               help="StubLLMClient/StubEmbeddingClient: no key, no cost")
     serve_parser.add_argument("--web-dir", default=None,
                               help="built Flutter web app to serve at / (default app/build/web)")
+    invite_parser = subparsers.add_parser(
+        "invite", help="invite codes for new accounts (Versa is invite-only; accounts.py)"
+    )
+    invite_sub = invite_parser.add_subparsers(dest="invite_command")
+    invite_create = invite_sub.add_parser("create", help="make invite code(s) and print their links")
+    invite_create.add_argument("--count", type=int, default=1, help="how many codes (default 1)")
+    invite_create.add_argument("--uses", type=int, default=1,
+                               help="accounts each code can let in (default 1; 0 = unlimited)")
+    invite_create.add_argument("--days", type=int, default=None, help="expire after this many days")
+    invite_create.add_argument("--note", default=None, help="who it's for, for your own records")
+    invite_sub.add_parser("list", help="every invite code, how often it was used, and whether it still works")
+    invite_revoke = invite_sub.add_parser("revoke", help="withdraw a code (accounts it already let in stay)")
+    invite_revoke.add_argument("code")
+    invite_revoke.add_argument("--reason", default=None)
     consolidate_parser = subparsers.add_parser(
         "consolidate-session",
         help="background step 6-8 of the memory layer (memory.py) for "
@@ -528,6 +650,16 @@ def main() -> None:
         "--learner", required=True,
         help="learner label or an existing learner's UUID",
     )
+    observations_parser = subparsers.add_parser(
+        "observations",
+        help="read-only: one learner's observation ledger (observations.py) "
+        "split by lens, what counts for less, the pick guesser's record and "
+        "their way in",
+    )
+    observations_parser.add_argument(
+        "--learner", required=True,
+        help="learner label or an existing learner's UUID",
+    )
     score_predictions_parser = subparsers.add_parser(
         "score-predictions",
         help="read-only reliability-diagram check (score_predictions.py): "
@@ -558,8 +690,15 @@ def main() -> None:
         asyncio.run(_compare_portraits(args.question, args.stub))
     elif args.command == "review-claims":
         asyncio.run(_review_claims(args.learner))
+    elif args.command == "observations":
+        asyncio.run(_observations(args.learner))
     elif args.command == "score-predictions":
         asyncio.run(_score_predictions(args.exclude_contaminated))
+    elif args.command == "invite":
+        if args.invite_command is None:
+            invite_parser.print_help()
+            sys.exit(2)
+        asyncio.run(_invite(args))
     elif args.command == "migrate":
         asyncio.run(_run_migrations(args.status, args.baseline))
     else:

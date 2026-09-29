@@ -182,6 +182,7 @@ def _assess_prompt(
     reference_binding_hint: str = "",
     domain: DomainConfig | None = None,
     lesson_context: str = "",
+    learner_background: str = "",
 ) -> str:
     d = domain or DomainConfig.education()
     history_block = (
@@ -216,6 +217,7 @@ def _assess_prompt(
         )
     return (
         "ASSESS:BRANCH\n"
+        f"{learner_background}"
         f"{history_block}"
         f"{thinking_style_block}"
         f"{reference_binding_block}"
@@ -300,7 +302,13 @@ class AssessAndBranch:
         thinking_style_hint: str = "",
         reference_binding_hint: str = "",
         lesson_context: str = "",
+        learner_background: str = "",
     ) -> DisambiguationAssessment:
+        """`learner_background` (profiles.render_background) is who the
+        learner said they are at sign-up: a Class 7 student and an engineer
+        asking "what is a derivative" are not asking the same thing, so the
+        ambiguity check judges readings against it. Empty when there is no
+        profile, which leaves the prompt unchanged."""
         self.last_call_count = 0
         rejected_reason = ""
         for _ in range(_MAX_ASSESS_ATTEMPTS):
@@ -308,7 +316,7 @@ class AssessAndBranch:
                 _assess_prompt(
                     message, recent_history, typed_past_note, rejected_reason,
                     thinking_style_hint, reference_binding_hint, self._domain,
-                    lesson_context,
+                    lesson_context, learner_background,
                 )
             )
             self.last_call_count += 1
@@ -380,6 +388,7 @@ def _options_prompt(
     claim_constraints_block: str = "",
     rejected_reason: str = "",
     domain: DomainConfig | None = None,
+    learner_background: str = "",
 ) -> str:
     d = domain or DomainConfig.education()
     listing = "\n".join(f"- id={b.id}: {b.statement}" for b in candidates)
@@ -422,6 +431,7 @@ def _options_prompt(
         "DISAMBIGUATE:OPTIONS\n"
         f"{structural_requirement}"
         f"{claim_constraints_block}"
+        f"{learner_background}"
         f"{context_block}"
         f"{thinking_style_block}"
         f"{past_block}"
@@ -646,6 +656,7 @@ class DisambiguationOptions:
         learner_history_block: str = "",
         structural_requirement: str = "",
         claim_constraints_block: str = "",
+        learner_background: str = "",
     ) -> OptionSet:
         self.last_call_count = 0
         if not branches:
@@ -665,6 +676,7 @@ class DisambiguationOptions:
                     claim_constraints_block=claim_constraints_block,
                     rejected_reason=rejected_reason,
                     domain=self._domain,
+                    learner_background=learner_background,
                 )
             )
             self.last_call_count += 1
@@ -803,10 +815,17 @@ class FinalAnswer:
         knob_directive: str = "",
         lesson_context: str = "",
         continues: str = "",
+        learner_background: str = "",
+        approach_directive: str = "",
     ) -> str:
         """`knob_directive` (session_knobs.render_knob_directive) is the
         person's per-session length/depth/tone controls, pre-rendered;
         empty when every knob is at its default.
+
+        `approach_directive` (pick_prediction.render_approach_directive) is
+        how this learner usually moves through an idea -- learned from their
+        own "where this could go" picks -- pre-rendered; empty until that is
+        clear, so the prompt is unchanged.
 
         `lesson_context` (topics.render_lesson_context) is the course,
         chapter, lesson, task list and teaching rules for a Learn-a-topic
@@ -884,6 +903,8 @@ class FinalAnswer:
             f"{structural_requirement}"
             f"{claim_constraints_block}"
             f"{knob_directive}"
+            f"{approach_directive}"
+            f"{learner_background}"
             f"{lesson_context}"
             f"{context_block}"
             f"{continuation_block}"

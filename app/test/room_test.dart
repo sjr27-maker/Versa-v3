@@ -186,14 +186,14 @@ Future<void> _openRooms(WidgetTester tester) async {
 }
 
 void main() {
-  late Future<RoomTransport> Function(Uri) realConnector;
+  late Future<RoomTransport> Function(Uri, List<String>?) realConnector;
   late FakeRoomTransport socket;
   final uris = <Uri>[];
   setUp(() {
     realConnector = roomSocketConnector;
     socket = FakeRoomTransport();
     uris.clear();
-    roomSocketConnector = (uri) async {
+    roomSocketConnector = (uri, _) async {
       uris.add(uri);
       return socket;
     };

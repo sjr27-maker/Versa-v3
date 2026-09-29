@@ -14,8 +14,9 @@ WebSocket, client -> server:
     {"type": "typing"}
 Errors come back as {"type": "error", "message": "..."}; the socket stays open.
 
-No authentication, like the rest of the local server: a name and a room code
-are enough to get in.
+With sign-in on (accounts.py), only signed-in people reach these routes;
+inside a room, a name and the room code are still what identify a member --
+rooms are walled off from learners (invariant 12).
 """
 
 from __future__ import annotations
@@ -178,7 +179,9 @@ def build_rooms_router(hub: RoomHub, *, link_fetcher: Callable | None = None) ->
             await ws.close(code=4404)
             return
         room, member = found
-        await ws.accept()
+        # A signed-in app offers ["versa", <token>] (server.py's guard checks
+        # the token); the offer must be echoed back or the browser drops it.
+        await ws.accept(subprotocol="versa" if "versa" in ws.scope.get("subprotocols", []) else None)
         connected = True
 
         async def send(event: dict) -> None:

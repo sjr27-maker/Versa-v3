@@ -63,6 +63,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from versa import embeddings as _embeddings
+from versa import profiles as _profiles
 from versa import resources as _resources
 from versa.audit import TranscriptStore, to_jsonable
 from versa.claims import ClaimStore
@@ -770,6 +771,16 @@ async def build_learner_profile(
     lines: list[str] = []
     used: dict = {}
     reviews = ReviewStore(pool)
+
+    try:
+        # What they told Versa at sign-up (profiles.py): the level to start
+        # a course at and build up from.
+        signup = _profiles.profile_lines(await _profiles.ProfileStore(pool).latest(learner_id))
+        if signup:
+            lines.append("They told Versa at sign-up: " + "; ".join(signup))
+            used["signup_profile"] = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("profile: sign-up profile failed for %s: %s", learner_id, exc)
 
     try:
         styles = await ThinkingStyleStore(pool).list_by_learner(learner_id)

@@ -295,9 +295,18 @@ per-session pending-options state in the loop. See the decisions log.
   The global History nav page is still a placeholder — it could now show the
   same per-mode list read across all modes; not built yet since Sandbox is
   the only live mode.
-- **Authentication** — `parked`. Sign-in is a name only; the server has no auth
-  and binds 127.0.0.1. Must exist before any deployment (the Dockerfile
-  deliberately has no entrypoint).
+- **Authentication** — `done` (2026-09-29). Firebase Google/email sign-in,
+  invite-only sign-up, a per-route ownership guard, the sign-up profile, and a
+  Cloud Run deploy (accounts.py, profiles.py, docs/DEPLOY.md). Left for later:
+  - *Verifiable parental consent* — `idea`. Under-18s tick a guardian box; the
+    DPDP Act wants consent that is verifiable (e.g. a parent confirming by
+    email). Needed before a real public launch with minors.
+  - *Revoking one device's sign-in* — `idea`. Session tokens are signed, not
+    stored; only rotating VERSA_SESSION_SECRET signs anyone out.
+  - *Rooms identity* — `idea`. Only signed-in people reach rooms, but inside a
+    room a member is still a name + member id (invariant 12's wall).
+  - *Invite deep link* — `idea`. The invite page shows the code to type; an
+    Android App Link could fill it in.
 - **Repeatable browser end-to-end check** — `ready`. The scripts that drove the
   real app (sign in → streamed answer → options → click → new chat; and
   separately the sidebar → new chat → resume flow) live in a scratch folder.
@@ -356,6 +365,29 @@ per-session pending-options state in the loop. See the decisions log.
 - Options still take ~6-10 s to appear in the app (embedding, ambiguity check
   and option generation run one after another); "options first, memory second"
   (section 1) is the lever.
+- **Raw-cosine "same subject" can't tell subjects apart on real embeddings**
+  (found 2026-09-29, live, `docs/verification-runs/adaptation_check_20260929.md`).
+  Six openers on six different subjects scored 0.52-0.71 raw cosine against
+  each other; consecutive turns of one chat 0.58-1.00. So
+  `RetrievalConfig.same_subject_threshold` (0.545) sits below nearly every
+  pair, and interactions.py's `entry_state` probably labels most turns
+  `continuing`, rarely `topic_switch`. Subtracting the average question
+  embedding first separates them (different subjects median 0.15, max 0.37;
+  same chat median 0.46) -- `is_follow_up` and style_patterns' topics now
+  do that (`CENTRED_FOLLOW_UP_THRESHOLD` 0.40, `TOPIC_THRESHOLD` 0.30).
+  **entry_state itself is not changed** -- deciding that is yours; it feeds
+  retrieval and claims. One staged run of calibration; recheck on organic data.
+- **Sparks chip/sheet widget test fails depending on the time of day**
+  (found 2026-09-29): `app/test/sparks_test.dart` "a paywall request opens
+  the Sparks sheet" passed in the morning, fails every time in the evening
+  with a layout assertion (`width.isFinite`, under the chip's
+  `IntrinsicWidth`). The sheet's refill line reads `DateTime.now()`. Not
+  investigated further.
+- **Two Python tests are flaky under load** (2026-09-29): 
+  `test_exams.py::test_plan_from_today_to_the_exam_ticks_itself_and_by_hand`
+  and `test_sandbox_chat_claim_updates.py::test_an_explicit_preference_that_matches_an_existing_claim_revises_it_via_review`
+  failed in a full run that shared the machine with a live Gemini run, and
+  pass alone.
 - **Thinking-style detection fragments and drifts** (found 2026-09-27, live,
   `docs/verification-runs/thinking_style_FF_20260927.md`). FF's consistent
   style did get promoted (5/5), but spread over 5 candidates, because
@@ -396,6 +428,58 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-09-29** — Thinking style is the core claim. Your words: "what
+  persists is the ability to think in a way for any topic"; "if they don't
+  select the provided options, we must keep experimenting until a match is
+  found, and see if that persists"; "a system that produces better and
+  better answers as time passes".
+  - *Definition and design:* `docs/THINKING_STYLE.md` -- the agreed
+    definition (proven by predicting the next unsteered choice), six lenses
+    (style, range, interest, ability, mood, said), the full evidence
+    inventory, layers 0-5, and what is proven so far. Directions are the
+    primary source and stay unpersonalised; interests are a separate model.
+  - *Slider history:* every settled slider move now lands in `knob_events`
+    (migration 084, invariant 19); `sessions` still holds only the current
+    levels. Nothing reads it yet -- it is layer 0 for the Range lens.
+  - *Versa guesses the pick (same day):* your words: "leave narrowing I
+    meant better paths each time, also this must be fast, and the user must
+    notice the change". Before every directions set, `pick_prediction.py`
+    guesses which card will be taken -- arithmetic, milliseconds, every
+    contribution named and kept (migration 085, invariant 20). After a pick
+    the reply is headed "Versa guessed you'd pick this · 7 of your last 10"
+    or "Versa expected ... -- you surprised it"; a tap shows what the guess
+    rested on. The cards themselves are unchanged. Not built yet: the guess
+    doesn't show when a chat is reopened from history; better paths/answers
+    from what it learns (layer 4).
+  - *Better answers (same day):* your order: "better answers first, then
+    the cards, then the layers". Once the first card a learner takes after
+    a question of their own is clear (>=4 fresh starts, one way in >=35%),
+    the answer starts that way -- no extra model call, recorded in
+    node_calls, shown as "Shaped to how you explore: ..." with the reasons
+    behind a tap. `VERSA_ADAPT_ANSWERS=off` turns it off for comparisons.
+  - *Better cards (same day):* each directions set is given the cards the
+    learner took earlier in this chat and told to build on them and never
+    re-offer them -- the same for every slot. Invariant 14 now allows this
+    one input (something they did, not something concluded) and names what
+    must never reach the generator: anything pick_prediction.py learned.
+  - *First answer always normal (same day):* your words: "let the first
+    always be normal ... if its something new, then starting with examples
+    would not be good". Shaping now applies only to a follow-up -- the same
+    question or one directly related to the last few turns of this chat
+    (InteractionRecorder.is_follow_up, the `continuing` threshold).
+  - *Layer 1 (same day):* `observations.py` splits every raw event by
+    lens (style, range, interest, ability, mood, said), derived on read,
+    nothing stored. Picks made while stuck or rushing now count for less in
+    the guess and the way in, by name. `versa observations --learner X`.
+  - *Layers 2 and 3 (same day):* your words: "make sure that the thinking
+    style actually means what we aim for". Layer 2 reads each session's
+    state (rushed, stuck, checks); layer 3 (`style_patterns.py`) turns picks
+    and slider moves into way-in / then / range patterns and only confirms
+    one that passes a gate per clause of the definition, including an
+    out-of-sample prediction test. Shown as "How you explore" on the
+    Thinking-style page, every check behind a tap.
+  - *Open:* exam prep as evidence (invariant 13); how a cohort is defined.
 
 - **2026-09-28** — The stage: a room, a story, and instruments. Your words:
   "by 3d space I expected it to work for everything"; "let the transition

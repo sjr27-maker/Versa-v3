@@ -50,6 +50,9 @@ async def pool():
         # comprehensive (includes the tables migration 032 retires) so
         # a run against a pre-032 schema is cleaned too; every DROP is
         # IF EXISTS.
+        for table in ("learner_profiles", "profile_extractions", "invite_revocations",
+                      "invite_redemptions", "invites", "learner_sign_ins", "learner_identities"):
+            await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS spark_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS exam_pass_grants CASCADE")
         await conn.execute("DROP TABLE IF EXISTS billing_events CASCADE")
@@ -57,7 +60,8 @@ async def pool():
                       "room_task_events", "room_tasks", "room_messages", "room_members", "rooms"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS stage_checks CASCADE")
-        for table in ("direction_events", "direction_cards", "direction_sets"):
+        await conn.execute("DROP TABLE IF EXISTS knob_events CASCADE")
+        for table in ("direction_predictions", "direction_events", "direction_cards", "direction_sets"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         for table in ("exam_plan_item_events", "exam_plan_items", "exam_plans",
                       "exam_answers", "exam_submissions", "exam_questions", "exam_quizzes",
@@ -156,7 +160,9 @@ async def pool():
 async def clean_pool(pool):
     async with pool.acquire() as conn:
         await conn.execute(
-            "TRUNCATE spark_events, exam_pass_grants, billing_events, evidence_records, node_calls, turn_diagnostics, turns, "
+            "TRUNCATE learner_profiles, profile_extractions, invite_revocations, invite_redemptions, "
+            "invites, learner_sign_ins, learner_identities, "
+            "spark_events, exam_pass_grants, billing_events, evidence_records, node_calls, turn_diagnostics, turns, "
             "sessions, learners, disambiguation_options, disambiguation_branches, "
             "disambiguation_turns, learner_facts, thinking_style_candidates, "
             "predictions, instrument_events, instruments, interaction_contracts, "
@@ -167,8 +173,8 @@ async def clean_pool(pool):
             "topic_resources, "
             "room_node_calls, room_option_picks, room_options, room_option_sets, "
             "room_task_events, room_tasks, room_messages, room_members, rooms, "
-            "stage_checks, "
-            "direction_events, direction_cards, direction_sets, "
+            "stage_checks, knob_events, "
+            "direction_predictions, direction_events, direction_cards, direction_sets, "
             "exam_plan_item_events, exam_plan_items, exam_plans, "
             "exam_answers, exam_submissions, exam_questions, exam_quizzes, exam_generations, "
             "exam_units, exams, "

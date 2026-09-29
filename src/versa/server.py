@@ -12,6 +12,8 @@ transport:
                                             (the chat-history sidebar), newest-active-first
     GET  /api/learners/{id}/sessions/all   every mode's chats together (the History page)
     GET  /api/learners/{id}/thinking-style confirmed / emerging thinking styles + observed claims
+    GET  /api/learners/{id}/style-patterns how they move through ideas, from their own
+                                          choices (style_patterns.py), every gate shown
     GET  /api/sessions/{id}/history         one chat's turn-by-turn record, to resume it
     POST /api/sessions/{id}/end            consolidate a finished chat in the background
     Learn a topic (topics.py): /api/topic-explorations[/from-link|/from-pdf],
@@ -30,7 +32,10 @@ transport:
     carries on instead of starting over. Then, after an answer, the server sends
     {"type": "directions", "turn_index", "set_id", "cards": [{"id", "text"}]}
     (display order); the client sends {"type": "direction", "card_id"} to
-    take one, which runs as the next turn.
+    take one, which runs as the next turn. Versa guessed the pick before the
+    set went out (pick_prediction.py); right after `turn_start` for a pick
+    it sends {"type": "guess", "turn_index", "hit", "predicted", "picked",
+    "hits", "guesses", "picks_seen", "because": [lines]}.
     Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
     /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
     Billing (billing.py): GET /api/learners/{id}/billing (plan, Plus expiry,
@@ -71,6 +76,11 @@ Chat protocol (JSON text frames).
                                back and the answer's deltas follow; `done`
                                then has kind "answer". retracted=false: the
                                options were never shown (memory won first).
+    {"type": "adapted", "path": [labels], "because": [lines]}   before the
+                               answer's deltas, once the learner's usual way
+                               into an idea is clear from their own direction
+                               picks (pick_prediction.py): the answer starts
+                               that way. Never on a direction pick or lesson.
 
   server -> client, only when the turn asked for "stage" and is an ANSWER
   (an options turn has no performance: the slime asks the options instead)
@@ -112,30 +122,50 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import html
 import logging
+import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
 import asyncpg
-from fastapi import APIRouter, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import HTTPConnection
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from versa import directions as _directions
+from versa import pick_prediction as _pick_prediction
+from versa import style_patterns as _style_patterns
+from versa.accounts import (
+    AccountStore,
+    Auth,
+    build_auth_router,
+    build_guard,
+    current_learner,
+    ws_subprotocol,
+)
 from versa.answer_versions import AnswerVersionStore
 from versa.audit import NodeCallStore, TranscriptStore
+from versa.billing import Billing, build_billing_router
 from versa.claims import ClaimStore
 from versa.disambiguate import DisambiguationStore
 from versa.domain_config import DomainConfig
 from versa.embeddings import EmbeddingClient
-from versa.feed import build_feed_router
-from versa import directions as _directions
 from versa.exams import build_exams_router
-from versa.billing import Billing, build_billing_router
-from versa.sparks import InsufficientSparks, SparkEngine, build_sparks_router
-from versa.topics import build_topics_router
+from versa.feed import build_feed_router
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients
 from versa.loop import SessionLoop
@@ -147,6 +177,7 @@ from versa.models import (
     OptionStatus,
     ThinkingStyleStatus,
 )
+from versa.profiles import ProfileStore, build_profiles_router
 from versa.reviews import (
     AnswerItemQuestion,
     ExplainItem,
@@ -165,8 +196,11 @@ from versa.reviews import (
 from versa.rooms import RoomHub, build_rooms_router
 from versa.session_builder import build_session_loop
 from versa.session_history import reconstruct_session_history
+from versa.knob_events import KnobEventStore
 from versa.session_knobs import SessionKnobs
+from versa.sparks import InsufficientSparks, SparkEngine, build_sparks_router
 from versa.stage import StageCheckStore, StageDirector, stage_sink
+from versa.topics import build_topics_router
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +239,11 @@ class SessionOut(BaseModel):
 
 class EndOut(BaseModel):
     status: Literal["scheduled", "already_consolidated", "too_short"]
+
+
+class StylePatternsOut(BaseModel):
+    version: str
+    patterns: list[_style_patterns.StylePattern]
 
 
 class ThinkingStyleItem(BaseModel):
@@ -336,6 +375,46 @@ def _describe_applied_change(result, previous_statement: str, applied_review_id:
     return result.answer
 
 
+def render_invite_page(code: str, problem: str | None, android_url: str | None) -> str:
+    """The page an invite link opens (GET /invite/{code}). Versa is shown as a
+    phone app, so this page only hands over the code and the download."""
+    safe_code = html.escape(code.upper())
+    if problem is not None:
+        body = f"<h1>This invite can't be used</h1><p>{html.escape(problem)}</p>" \
+               "<p>Ask the person who invited you for a new link.</p>"
+    else:
+        download = (
+            f'<a class="button" href="{html.escape(android_url, quote=True)}">Get Versa for Android</a>'
+            if android_url else "<p>The person who invited you will send you the app.</p>"
+        )
+        body = (
+            "<h1>You're invited to Versa</h1>"
+            "<p>A tutor that stops guessing: it asks when you're unclear, and learns how you think.</p>"
+            f"{download}"
+            "<p>Open the app, sign in with Google or email, and enter this invite code:</p>"
+            f'<p class="code">{safe_code}</p>'
+            "<p class=\"small\">The code works once per person. Keep it to yourself.</p>"
+        )
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>Versa invite</title><style>"
+        ":root{--bg:#f7f4ee;--fg:#1d1b18;--muted:#6b645a;--accent:#3d5a80;--card:#fff}"
+        "@media (prefers-color-scheme: dark){:root{--bg:#161513;--fg:#eee9e0;--muted:#a39b8f;"
+        "--accent:#8fb0d9;--card:#201e1b}}"
+        "body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif}"
+        "main{max-width:440px;margin:0 auto;padding:48px 16px}"
+        ".card{background:var(--card);border-radius:16px;padding:28px}"
+        "h1{font-size:24px;margin:0 0 8px}p{color:var(--muted)}"
+        ".code{font:600 28px/1.2 ui-monospace,monospace;letter-spacing:4px;color:var(--fg);"
+        "text-align:center;padding:12px;border:1px dashed var(--muted);border-radius:12px}"
+        ".button{display:block;text-align:center;background:var(--accent);color:#fff;"
+        "padding:14px;border-radius:12px;text-decoration:none;font-weight:600;margin:20px 0}"
+        ".small{font-size:13px}</style></head>"
+        f"<body><main><div class=\"card\">{body}</div></main></body></html>"
+    )
+
+
 def create_app(
     pool: asyncpg.Pool,
     tiers: ModelTierClients,
@@ -347,7 +426,14 @@ def create_app(
     cors_origin_regex: str = LOCAL_ORIGIN_REGEX,
     sparks: SparkEngine | None = None,
     billing: Billing | None = None,
+    auth: Auth | None = None,
+    android_download_url: str | None = None,
 ) -> FastAPI:
+    """`auth` (accounts.py) turns on sign-in: every /api route but health,
+    sign-in and the RevenueCat webhook then needs a session token, and may
+    only touch the signed-in learner's own things. None -- the test suite,
+    and `versa serve` with VERSA_AUTH=off on a laptop -- is the old open
+    server with name-only `POST /api/learners`."""
     # A session's live websocket `send`, while one is connected -- the
     # sandbox-chat claim-update flow (loop.py's stated-preference
     # matching) uses this to push a `claim_update` event the moment its
@@ -413,11 +499,14 @@ def create_app(
     answer_item_question = AnswerItemQuestion(tiers.fast)
     stage_director = StageDirector(tiers.stage or tiers.fast)
     stage_checks = StageCheckStore(pool)
+    knob_events = KnobEventStore(pool)
     # Performances run alongside (and may outlive) their turn; hold a
     # reference so a running one isn't garbage-collected.
     stage_tasks: set[asyncio.Task] = set()
     # "Where this could go" (directions.py): offered after every answer.
     direction_store = _directions.DirectionStore(pool)
+    # Versa's guess at each pick, made before the cards go out (pick_prediction.py).
+    pick_predictions = _pick_prediction.PredictionStore(pool)
     direction_tasks: set[asyncio.Task] = set()
     # session -> the turn most recently started here. Held in memory because
     # a turn's own row is written in its deferred tail, so reading turns back
@@ -425,7 +514,19 @@ def create_app(
     latest_turn: dict[UUID, int] = {}
     session_locks: dict[UUID, asyncio.Lock] = {}
 
-    app = FastAPI(title="Versa", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    guard = build_guard(auth, pool)
+    profiles = ProfileStore(pool)
+    accounts = AccountStore(pool)
+    show_docs = auth is None or os.environ.get("VERSA_API_DOCS", "").lower() == "on"
+    app = FastAPI(
+        title="Versa",
+        docs_url="/api/docs" if show_docs else None,
+        openapi_url="/api/openapi.json" if show_docs else None,
+        # Every route runs the guard first (accounts.py); it lets non-/api
+        # paths (the web app, the invite page) and the public routes through.
+        dependencies=[Depends(guard)],
+    )
+    app.state.auth = auth
     app.state.loop = loop
     app.state.sparks = sparks
     app.state.billing = billing
@@ -439,15 +540,41 @@ def create_app(
 
     @api.get("/health")
     async def health() -> dict:
-        return {"status": "ok", "llm": llm_mode}
+        # `auth` tells the app which sign-in screen to draw (accounts.py).
+        return {
+            "status": "ok", "llm": llm_mode,
+            "auth": auth.public_config() if auth is not None else {"required": False},
+        }
 
-    @api.post("/learners", response_model=LearnerOut)
-    async def upsert_learner(body: LearnerIn) -> LearnerOut:
-        label = body.label.strip()
-        if not label:
-            raise HTTPException(status_code=422, detail="label must not be blank")
-        learner = await learners.get_by_label(label) or await learners.create(label=label)
-        return LearnerOut(id=learner.id, label=learner.label or label)
+    if auth is None:
+        # The open server's name-only sign-in. With sign-in on, the dev
+        # testers use POST /api/auth/dev instead and this route doesn't exist.
+        @api.post("/learners", response_model=LearnerOut)
+        async def upsert_learner(body: LearnerIn) -> LearnerOut:
+            label = body.label.strip()
+            if not label:
+                raise HTTPException(status_code=422, detail="label must not be blank")
+            learner = await learners.get_by_label(label) or await learners.create(label=label)
+            return LearnerOut(id=learner.id, label=learner.label or label)
+
+    @api.get("/me")
+    async def me(conn: HTTPConnection) -> dict:
+        """Who this token belongs to (the app checks its saved sign-in with
+        this on start). Only with sign-in on."""
+        if auth is None:
+            raise HTTPException(status_code=404, detail="sign-in is off on this server")
+        learner_id = current_learner(conn)
+        learner = await learners.get(learner_id)
+        if learner is None:
+            raise HTTPException(status_code=401, detail="sign in first")
+        identity = await accounts.identity_for_learner(learner_id)
+        return {
+            "learner": {"id": str(learner_id),
+                        "label": (await profiles.display_name(learner_id)) or learner.label or "Learner"},
+            "profile_complete": await profiles.has_profile(learner_id),
+            "email": identity["email"] if identity is not None else None,
+            "sign_in_method": identity["sign_in_method"] if identity is not None else None,
+        }
 
     def run_consolidation(session_id: UUID) -> None:
         """Hand an ALREADY-CLAIMED session (sessions.consolidated_at set) to a
@@ -530,13 +657,19 @@ def create_app(
     @api.patch("/sessions/{session_id}/knobs", response_model=SessionKnobs)
     async def patch_knobs(session_id: UUID, body: SessionKnobsPatch) -> SessionKnobs:
         """Change the length, depth and/or breadth level (0-100) mid-chat; unset
-        fields are kept. Out-of-range values are rejected (422)."""
+        fields are kept. Out-of-range values are rejected (422). A move that
+        changed anything is also kept in `knob_events` (the session row only
+        holds the current levels)."""
         try:
             current = await transcript.get_knobs(session_id)
             updated = current.model_copy(update=body.model_dump(exclude_none=True))
             await transcript.set_knobs(session_id, updated)
         except KeyError:
             raise HTTPException(status_code=404, detail="unknown session") from None
+        await knob_events.record(
+            session_id=session_id, turn_count=await transcript.get_turn_count(session_id),
+            before=current, after=updated,
+        )
         return updated
 
     @api.get("/learners/{learner_id}/sessions", response_model=list[ChatSummary])
@@ -623,6 +756,17 @@ def create_app(
                 for r in reviews
             ],
         )
+
+    @api.get("/learners/{learner_id}/style-patterns", response_model=StylePatternsOut)
+    async def get_style_patterns(learner_id: UUID) -> StylePatternsOut:
+        """How this learner moves through ideas, read off their own choices
+        (style_patterns.py, docs/THINKING_STYLE.md layer 3): confirmed,
+        emerging and fading patterns, each with every gate and its numbers.
+        Derived on read; no model call."""
+        if await learners.get(learner_id) is None:
+            raise HTTPException(status_code=404, detail="unknown learner")
+        patterns = await _style_patterns.StyleReader(pool).patterns(learner_id)
+        return StylePatternsOut(version=_style_patterns.STYLE_VERSION, patterns=patterns)
 
     @api.get("/learners/{learner_id}/thinking-style", response_model=ThinkingStyleOut)
     async def get_thinking_style(learner_id: UUID, include_archived: bool = False) -> ThinkingStyleOut:
@@ -939,7 +1083,7 @@ def create_app(
         except KeyError:
             await ws.close(code=4404)
             return
-        await ws.accept()
+        await ws.accept(subprotocol=ws_subprotocol(ws))
         lock = session_locks.setdefault(session_id, asyncio.Lock())
         connected = True
 
@@ -1167,6 +1311,41 @@ def create_app(
         wanted = data.get("directions")
         return "fork" if wanted == "fork" else ("strip" if wanted else None)
 
+    async def _guess_pick(session_id: UUID, set_id: UUID) -> None:
+        """Record Versa's guess at which card will be taken, BEFORE the set is
+        sent (pick_prediction.py). Arithmetic only, so it costs milliseconds;
+        best effort -- a failure costs the guess, never the directions."""
+        try:
+            learner_id = await transcript.get_learner_id(session_id)
+            if learner_id is not None:
+                await pick_predictions.predict_for_set(
+                    learner_id=learner_id, session_id=session_id, set_id=set_id,
+                )
+        except Exception:
+            logger.warning("pick prediction failed for set %s", set_id, exc_info=True)
+
+    async def _reveal_guess(learner_id: UUID, set_id: UUID, picked_slot: str, turn_index: int, send) -> None:
+        """After a pick: tell the learner whether Versa guessed it, its recent
+        record, and what the guess rested on -- they see it learn them."""
+        try:
+            prediction = await pick_predictions.get(set_id)
+            if prediction is None:
+                return
+            hits, guesses = await pick_predictions.record(learner_id)
+            await send({
+                "type": "guess",
+                "turn_index": turn_index,
+                "hit": prediction.predicted_slot == picked_slot,
+                "predicted": _pick_prediction.slot_label(prediction.predicted_slot),
+                "picked": _pick_prediction.slot_label(picked_slot),
+                "hits": hits,
+                "guesses": guesses,
+                "picks_seen": prediction.evidence_count,
+                "because": _pick_prediction.explain(prediction),
+            })
+        except Exception:
+            logger.warning("revealing the guess failed for set %s", set_id, exc_info=True)
+
     async def _offer_directions(
         session_id: UUID, turn_index: int, message: str, answer: str, send, presentation: str = "strip",
     ) -> None:
@@ -1177,9 +1356,12 @@ def create_app(
         it was never shown, so it can't be evidence of anything."""
         try:
             knobs = await transcript.get_knobs(session_id)
+            taken = await direction_store.taken_texts(session_id)
             cards = await loop._call_node(
                 loop.suggest_directions, session_id, turn_index,
                 message=message, answer=answer, depth=knobs.depth, breadth=knobs.breadth,
+                # passed only once they have taken one, so the first set is unchanged
+                **({"path_so_far": taken} if taken else {}),
             )
             if not cards or latest_turn.get(session_id) != turn_index:
                 return  # the learner already moved on: this set was never shown
@@ -1187,6 +1369,7 @@ def create_app(
                 session_id=session_id, turn_index=turn_index, knobs=knobs,
                 cards=cards, positions=_directions.shuffled_positions(), presentation=presentation,
             )
+            await _guess_pick(session_id, direction_set.id)
             await send({
                 "type": "directions",
                 "turn_index": turn_index,
@@ -1270,6 +1453,8 @@ def create_app(
                 return
         latest_turn[session_id] = turn_index
         await send({"type": "turn_start", "turn_index": turn_index})
+        if kind == "direction":
+            await _reveal_guess(learner_id, direction_set.id, card.slot, turn_index, send)
         first_output_ms: float | None = None
         # The stage starts the moment the student sends: one animation of the
         # whole explanation, written alongside the answer (_StageRun).
@@ -1313,6 +1498,7 @@ def create_app(
             message = await loop.handle_turn(
                 session_id, turn_index, text, selected_option_id,
                 on_delta=on_delta, on_event=on_event, defer_tail=True, continues=continues,
+                direction_pick=kind == "direction",
             )
             options = await loop.pending_options(session_id)
         except Exception as exc:
@@ -1370,6 +1556,12 @@ def create_app(
             task.add_done_callback(direction_tasks.discard)
 
     app.include_router(api)
+    if auth is not None:
+        app.include_router(build_auth_router(
+            auth, pool, has_profile=profiles.has_profile, display_name=profiles.display_name,
+        ))
+    # The sign-up profile (profiles.py): asked once after the first sign-in.
+    app.include_router(build_profiles_router(pool, tiers.fast))
     app.include_router(build_sparks_router(sparks, pool))
     app.include_router(build_billing_router(billing))
     app.include_router(build_feed_router(pool, tiers.fast))
@@ -1386,6 +1578,12 @@ def create_app(
     room_hub = RoomHub(pool, tiers.fast)
     app.state.room_hub = room_hub
     app.include_router(build_rooms_router(room_hub))
+
+    @app.get("/invite/{code}", response_class=HTMLResponse, include_in_schema=False)
+    async def invite_page(code: str) -> HTMLResponse:
+        """What an invite link opens: the code, and where to get the app."""
+        problem = accounts.invite_problem(await accounts.get_invite(code), datetime.now(UTC))
+        return HTMLResponse(render_invite_page(code, problem, android_download_url))
 
     # The built Flutter web app, if there is one, at "/" -- registered last so
     # it can never shadow /api. One command, one URL.

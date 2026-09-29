@@ -1,0 +1,698 @@
+[
+ {
+  "topic": "how compound interest works (you just opened a savings account)",
+  "session_id": "f1aa28d7-cb26-4a8e-a7b1-f622039d76a2",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! I just opened my first savings account and want to learn how compound interest works. Can you show me a quick example with actual numbers so I can see how it's calculated?",
+    "answer_words": 130,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Give me a simple real world analogy for how compounding grows",
+     "How does compound interest affect credit cards and loans",
+     "Explain the actual mathematical formula behind compound interest",
+     "Explain how inflation impacts compound savings growth over time",
+     "Show me an example with monthly interest compounding instead",
+     "Calculate the Rule of 72 to see how fast money doubles"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How does compound interest affect credit cards and loans",
+    "answer_words": 164,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 41,
+     "because": [
+      "You opened a chat with \u201cwhere it is used\u201d 7 of 8 times.",
+      "You took \u201cwhere it is used\u201d 15 of your 41 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 8 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how compound interest works on mortgage repayments",
+     "Give me a simple analogy for snowballing debt",
+     "Walk through a $1,000 credit card balance over three months",
+     "Explain why credit cards compound daily instead of monthly",
+     "Calculate the difference between APR and Effective Annual Rate",
+     "Explain how simple interest loans differ from compounding loans"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "Can you show me a concrete example with actual numbers? Like, if I owe $1,000 on a card with a 20% interest rate and only pay the minimum, how does that look day-to-day?",
+    "answer_words": 359,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Compare daily compounding against monthly and annual compounding",
+     "Picture this daily growth like a snowball rolling down a hill",
+     "Explain the exact math formula used for daily compound interest",
+     "Show how high-yield savings accounts use compounding in my favor",
+     "Calculate the full payoff timeline if I pay the minimum each month",
+     "Explore how credit card grace periods prevent interest charges"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how high-yield savings accounts use compounding in my favor",
+    "answer_words": 224,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 4,
+     "guesses": 10,
+     "picks_seen": 42,
+     "because": [
+      "You took \u201cwork through one concrete example\u201d 22 of your 42 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 8 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how people use high-yield accounts for an emergency fund",
+     "Compare high-yield savings compounding with stock market investing",
+     "Walk through a $5,000 balance over 3 years with compounding",
+     "How does inflation offset the real gains from a high-yield account",
+     "Explain the formula behind monthly vs daily compounding",
+     "Give me a simple analogy for how compounding builds up over time"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "new_topic_midchat",
+    "text": "Hey, we're starting supply and demand in econ today. Can you show me a concrete example with actual numbers of how they work together?",
+    "answer_words": 229,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Explain what shifts the whole demand curve instead of just price",
+     "Explain why buyers want less and sellers offer more as price rises",
+     "Introduce supply and demand curves on a graph with consumer surplus",
+     "Walk me through a market where supply changes along with price",
+     "Show how ride-sharing apps use surge pricing during rush hour",
+     "Picture this market balancing act as a scale adjusting weights"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how ride-sharing apps use surge pricing during rush hour",
+    "answer_words": 392,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 4,
+     "guesses": 10,
+     "picks_seen": 43,
+     "because": [
+      "You took \u201cwhere it is used\u201d 17 of your 43 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 8 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Give me a simple everyday analogy for surge pricing",
+     "Explain price elasticity of demand in ride sharing",
+     "Walk through a full example with driver payout math",
+     "Show how airline tickets use dynamic pricing too",
+     "Show how peak and off-peak pricing works in electricity grids",
+     "Explain why dynamic pricing balances supply and demand"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "photosynthesis (biology homework)",
+  "session_id": "ca8407ae-66c0-40d8-ae18-06d557540a84",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey, can you show me a concrete, step-by-step example of photosynthesis with the actual numbers of molecules involved? I just want to see how the math of the formula works out first.",
+    "answer_words": 280,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Break down the light and dark stages behind this net formula",
+     "Show how cellular respiration reverses this exact reaction",
+     "Give me an everyday recipe analogy for balancing these atoms",
+     "Calculate the molecules needed to produce two glucose molecules",
+     "Explain why light energy is required to force this reaction",
+     "How farmers use this math to estimate crop yields"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How farmers use this math to estimate crop yields",
+    "answer_words": 275,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 45,
+     "because": [
+      "You opened a chat with \u201cwhere it is used\u201d 8 of 9 times.",
+      "You took \u201cwhere it is used\u201d 18 of your 45 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 8 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate a wheat yield using biomass and harvest index",
+     "See how satellite imagery tracks crop biomass in real time",
+     "Give me a simple factory analogy for harvest index",
+     "How soil nutrients like nitrogen limit potential yield",
+     "Why do different crops have different harvest index ratios",
+     "Explain how temperature affects the efficiency of photosynthesis"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "Can we do an actual calculation for a farm? Like, if a farmer has a specific amount of sunlight or carbon dioxide, how do we calculate the exact pounds of corn they get?",
+    "answer_words": 407,
+    "guess": null,
+    "adapted": {
+     "path": [
+      "where it is used",
+      "work through one concrete example"
+     ],
+     "because": [
+      "After an answer to your own question, you went to \u201cwhere it is used\u201d first 14 of 16 times -- more than any other way in.",
+      "After \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 10 of 11 times."
+     ]
+    },
+    "cards": [
+     "Calculate the CO2 needed for 500 pounds of corn dry mass",
+     "See how vertical farms automate CO2 enrichment for higher yield",
+     "Show me why water and sunlight limit this chemical conversion",
+     "Account for respiration losses when calculating final crop weight",
+     "Explore how light intensity caps the rate of photosynthesis",
+     "Picture a LEGO kit where every carbon block builds the plant"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate the CO2 needed for 500 pounds of corn dry mass",
+    "answer_words": 168,
+    "guess": {
+     "hit": false,
+     "predicted": "where it is used",
+     "picked": "work through one concrete example",
+     "hits": 4,
+     "guesses": 10,
+     "picks_seen": 46,
+     "because": [
+      "You took \u201cwhere it is used\u201d 19 of your 46 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 8 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate the CO2 required for 1000 pounds of dry wheat",
+     "Look at how C4 plants like corn capture CO2 differently than C3",
+     "Picture plant growth as pulling invisible bricks out of thin air",
+     "Explain why dry plant biomass is always around 40 percent carbon",
+     "Factor in photosynthetic efficiency and lost carbon from respiration",
+     "See how greenhouse farmers enrich air with CO2 to boost growth"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "new_topic_midchat",
+    "text": "Hey! Can you show me a specific example of a vaccine with its actual ingredients and exactly how many days it takes to start working?",
+    "options": [
+     "Yes, that's right",
+     "No, something else"
+    ]
+   },
+   {
+    "kind": "clicked_option",
+    "text": "Yes, that's right",
+    "answer_words": 383,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show how mRNA technology is used for other diseases like cancer",
+     "Detail the specific role of helper T-cells and B-cells in memory",
+     "Explain how booster shots refresh and strengthen this immune response",
+     "Explain how the immune system recognizes the spike protein as foreign",
+     "Trace the rest of the 14-day timeline step by step",
+     "Give me a simple analogy for how mRNA and lipids work together"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "recursion in programming (you're learning Python)",
+  "session_id": "07430d33-af63-45f6-ad6d-c52d4daf94ba",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! Can you show me a simple recursive function in Python with some actual numbers so I can see how it works?",
+    "answer_words": 290,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Explain how the call stack handles these function calls",
+     "Show what happens when recursion goes too deep and breaks",
+     "Give me an everyday analogy for recursion",
+     "Show me how recursion is used to search file directories",
+     "Trace a recursive sum of a list with numbers",
+     "Introduce memoization to make recursive functions faster"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "Okay, I see how the numbers trace down to factorial(1). But where do programmers actually use recursion in real-world software?",
+    "answer_words": 327,
+    "guess": null,
+    "adapted": {
+     "path": [
+      "where it is used",
+      "work through one concrete example"
+     ],
+     "because": [
+      "After an answer to your own question, you went to \u201cwhere it is used\u201d first 15 of 18 times -- more than any other way in.",
+      "After \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 10 of 11 times."
+     ]
+    },
+    "cards": [
+     "Compare recursion against explicit stack data structures",
+     "Explain why regular loops fail when searching unknown tree depths",
+     "Give me an everyday analogy for processing nested folder data",
+     "Walk through the folder search code with a concrete trace",
+     "How do we convert a recursive algorithm into an iterative one",
+     "Show me where recursion is used in web browser DOM rendering"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "That folder code got cut off. Can you finish the python code for that find_file function and show me exactly how it runs with those files?",
+    "answer_words": 431,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Trace the step-by-step execution for finding dog.png",
+     "Show how to update this to return all matching files instead of just\u2026",
+     "Give me an everyday analogy for recursive directory searching",
+     "Explain how the return result line passes the path back up",
+     "Rewrite this search using an iterative stack instead of recursion",
+     "Show how file system search algorithms work in real operating systems"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Trace the step-by-step execution for finding dog.png",
+    "answer_words": 268,
+    "guess": {
+     "hit": false,
+     "predicted": "where it is used",
+     "picked": "work through one concrete example",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 48,
+     "because": [
+      "You took \u201cwhere it is used\u201d 20 of your 48 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 10 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Give me an analogy like Russian nesting dolls for call stacks",
+     "Walk through an example where the target file is missing",
+     "Explain how breadth-first search differs from this approach",
+     "Explain why Call 1 resumes at the exact line it paused on",
+     "Analyze the stack memory limit if folders nest too deeply",
+     "Show how file managers like Finder use recursion to search"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "new_topic_midchat",
+    "text": "Hey! We are starting the Pythagorean theorem in math today. Can you show me a quick example with actual numbers worked out?",
+    "answer_words": 193,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show me a visual picture using physical squares on each side",
+     "Introduce special right triangles like 45-45-90 and 30-60-90",
+     "Explain why adding the two squares actually equals the big square",
+     "Try an example where the answer isn't a whole number",
+     "Work out an example where I have to find a missing leg instead",
+     "Show how this is used to measure screen sizes or map distances"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how this is used to measure screen sizes or map distances",
+    "answer_words": 348,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 49,
+     "because": [
+      "You took \u201cwhere it is used\u201d 20 of your 49 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 11 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Picture walking across a city grid vs cutting diagonally",
+     "Extend the distance formula to 3D points with x, y, and z",
+     "See how video games use this to check if an attack hits a target",
+     "Compare straight-line distance to Manhattan grid distance",
+     "Show why the 2D distance formula is just the Pythagorean theorem",
+     "Finish the coordinate distance calculation for (1,2) to (7,10)"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "supply and demand (economics class)",
+  "session_id": "5d2a077f-8604-47b6-846b-d7f6e6011479",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "hey! can we do supply and demand? could you show me a quick worked example with real numbers first so I can see how it actually works?",
+    "answer_words": 243,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Explain why buyers and sellers naturally push prices up or down",
+     "Explain what happens when a shift moves the whole demand curve",
+     "Show me how surge pricing on Uber uses supply and demand",
+     "Give me an everyday picture like a crowded garage sale",
+     "Walk me through a market where supply isn't fixed",
+     "Show me this on a supply and demand graph with curves"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show me how surge pricing on Uber uses supply and demand",
+    "answer_words": 346,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 51,
+     "because": [
+      "You opened a chat with \u201cwhere it is used\u201d 9 of 10 times.",
+      "You took \u201cwhere it is used\u201d 21 of your 51 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 11 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Walk me through how the algorithm calculates a 2x surge multiplier",
+     "Picture surge pricing like a crowded auction for taxi rides",
+     "Introduce congestion pricing for city road networks",
+     "Explain how price elasticity of demand controls rider behavior",
+     "Show me how hotel rooms or airlines use similar dynamic pricing",
+     "Analyze the mathematical model behind real-time market clearing"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "so can you show me the actual math or numbers for how the app decides to double the price from 15 to 30? like what is the exact formula it uses with the 300 riders and 100 drivers?",
+    "answer_words": 393,
+    "guess": null,
+    "adapted": {
+     "path": [
+      "where it is used",
+      "work through one concrete example"
+     ],
+     "because": [
+      "After an answer to your own question, you went to \u201cwhere it is used\u201d first 17 of 21 times -- more than any other way in.",
+      "After \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 11 of 12 times."
+     ]
+    },
+    "cards": [
+     "Why driver supply elasticity is usually lower than rider elasticity",
+     "Picture price elasticity using a flexible rubber band analogy",
+     "Include spatial equilibrium across neighboring zones in the math",
+     "Finish solving the equation 300 M^-1.0 = 100 M^0.5 step by step",
+     "How batch matching algorithms pair riders and drivers simultaneously",
+     "Show how airline ticket pricing uses dynamic demand equations"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Finish solving the equation 300 M^-1.0 = 100 M^0.5 step by step",
+    "answer_words": 186,
+    "guess": {
+     "hit": false,
+     "predicted": "where it is used",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 52,
+     "because": [
+      "You took \u201cwhere it is used\u201d 22 of your 52 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 11 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Solve another equilibrium equation with different elasticities",
+     "Solve a surge pricing equation with shift variables added",
+     "Explain why exponent rules let us combine variables like this",
+     "Show how real ride-hailing apps cap maximum surge multipliers",
+     "Give me a visual analogy for exponent balancing in pricing",
+     "Move from finding the surge multiplier to calculating price elasticity"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "new_topic_midchat",
+    "text": "hey! i want to learn how binary numbers work since i'm curious about computers. can you show me a quick example of a regular number translated to binary with the actual math?",
+    "answer_words": 332,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Explain why computers use base 2 instead of base 10 hardware-wise",
+     "Give me an analogy like light switches to picture binary digits",
+     "Explain how fractional or decimal numbers are stored in binary",
+     "Show me how to convert binary back into decimal using a formula",
+     "Show how binary is used to store text characters using ASCII",
+     "Convert a larger number like 45 into binary step by step"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how binary is used to store text characters using ASCII",
+    "answer_words": 410,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 53,
+     "because": [
+      "You took \u201cwhere it is used\u201d 22 of your 53 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 11 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how binary text representation is used in real file formats",
+     "Show how binary is used to store images and colors",
+     "Explain Unicode and UTF-8 and how they expand on ASCII",
+     "Give me a simple analogy for how binary stores text",
+     "Explain why ASCII only goes up to 127 instead of 255",
+     "Convert another short word like DOG into ASCII binary"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "how vaccines train the immune system (you're curious)",
+  "session_id": "1b136501-442b-4cc9-86fb-cf0d49ded7af",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey, I'm really curious about how vaccines train our immune system. Can you walk me through a specific concrete example of one vaccine, like with actual numbers of how many cells or antibodies change when you get it?",
+    "options": [
+     "Yes, that's right",
+     "No, something else"
+    ]
+   },
+   {
+    "kind": "clicked_option",
+    "text": "Yes, that's right",
+    "answer_words": 394,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show how this same mRNA tech is used for cancer treatments",
+     "Explain how lipid nanoparticles merge with cell membranes",
+     "Explain how memory B-cells provide long-term immunity",
+     "Explain the exact molecular mechanism of Helper T-cell activation",
+     "Walk through the timeline of the body's reaction day by day",
+     "Give me a simple metaphor for how mRNA vaccines work"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "own_follow_up",
+    "text": "this is cool but where exactly are these mrna vaccines actually being used right now besides covid? are they doing it for flu or cancer yet?",
+    "answer_words": 266,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Give me a simple analogy for custom cancer mRNA vaccines",
+     "Explain self-amplifying mRNA and how it differs from standard mRNA",
+     "How do scientists target neoantigens without attacking healthy tissue",
+     "Show me other diseases being tested with mRNA besides flu and cancer",
+     "Walk through how a patient gets a custom melanoma mRNA shot",
+     "Explain how an mRNA vaccine trains T-cells to kill tumor cells"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through how a patient gets a custom melanoma mRNA shot",
+    "answer_words": 269,
+    "guess": {
+     "hit": false,
+     "predicted": "where it is used",
+     "picked": "work through one concrete example",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 55,
+     "because": [
+      "You took \u201cwhere it is used\u201d 24 of your 55 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 12 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Walk through a specific patient's genetic mutation selection",
+     "Dive into how algorithms rank neoantigens for immunogenicity",
+     "Give me a simple analogy for how mRNA vaccines train T-cells",
+     "Explain what happens when trained T-cells encounter tumor cells",
+     "Explain why lipid nanoparticles are needed to deliver mRNA",
+     "Show how this custom mRNA tech is used for other cancer types"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "new_topic_midchat",
+    "text": "Hey! We are starting Newton's third law in physics today. Can you show me a quick example of this with actual numbers or a real calculation first?",
+    "answer_words": 248,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show how rocket propulsion relies on this law to work in space",
+     "Explain why action and reaction forces do not cancel each other out",
+     "How does this law connect to conservation of momentum mathematically",
+     "Calculate what happens when a jumper leaps off a heavy boat",
+     "Give me a simple picture or analogy for action-reaction pairs",
+     "Introduce Newton's first law and how inertia fits into the big picture"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how rocket propulsion relies on this law to work in space",
+    "answer_words": 279,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 56,
+     "because": [
+      "You took \u201cwhere it is used\u201d 24 of your 56 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 12 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate what happens as the rocket loses mass burning fuel",
+     "Show how ion thrusters use this principle for space probes",
+     "Give me a simple everyday analogy for rocket thrust",
+     "Show how orbital mechanics uses thrust to change orbits",
+     "Explain how momentum conservation guarantees thrust",
+     "Derive the Tsiolkovsky rocket equation with variable mass"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ }
+]

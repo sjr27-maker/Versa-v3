@@ -1,0 +1,21 @@
+# Keep the build context small and secrets out of the image.
+.env
+.env.*
+!.env.example
+.git
+.venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.claude
+archive
+docs
+tests
+scripts
+app/build
+app/.dart_tool
+app/android/.gradle
+app/android/app/build
+app/windows/flutter/ephemeral
+app/ios/Pods

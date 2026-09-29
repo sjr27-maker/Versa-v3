@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'auth/identity.dart';
 import 'billing/billing.dart';
 import 'billing/sparks.dart';
 import 'chat_controller.dart';
@@ -9,12 +12,20 @@ import 'models.dart';
 
 /// Who is using the app, and the few settings that outlive a restart.
 class AppState extends ChangeNotifier {
-  // ignore: prefer_initializing_formals -- a private field can't be a named formal
-  AppState({required this.api, SharedPreferences? prefs, Billing? billing, this.offerPlans = false})
+  AppState({
+    required this.api,
+    SharedPreferences? prefs,
+    Billing? billing,
+    this.offerPlans = false,
+    this.identity = const NoIdentity(),
+  })  // ignore: prefer_initializing_formals -- a private field can't be a named formal
       : _prefs = prefs,
         sparks = SparksState(api: SparksApi.of(api), billing: billing ?? const NoBilling());
 
   final VersaApi api;
+
+  /// Google / email sign-in (auth/firebase_identity.dart), or none.
+  final IdentityService identity;
 
   /// Sparks and the plan (billing/sparks.dart), following whoever is signed in.
   final SparksState sparks;
@@ -25,6 +36,7 @@ class AppState extends ChangeNotifier {
   SharedPreferences? get prefs => _prefs;
 
   static const _kLabel = 'learner_label';
+  static const _kToken = 'session_token';
   static const _kTiming = 'show_timing';
   static const _kStagePanel = 'show_stage_panel';
   static const _kDirections = 'directions_style';
@@ -70,39 +82,165 @@ class AppState extends ChangeNotifier {
   /// choice; every set records which one was actually shown.
   String directionsStyle = 'fork';
 
+  /// Which sign-in the server offers (null until it has answered).
+  AuthConfig? authConfig;
+
+  /// Whether the server could be reached at the last try.
+  bool serverReachable = true;
+
+  /// 'live' or 'stub', from the server's health check.
+  String? llmMode;
+
+  /// Whether the signed-in learner has filled in the sign-up profile
+  /// (profiles.py). Always true on an open server, which has no sign-up.
+  bool profileComplete = true;
+
+  /// The account's email, when it signed in with one.
+  String? email;
+
+  StreamSubscription<void>? _expiry;
+
+  /// Asked once after the first sign-in, before the plans and the app.
+  bool get needsProfile => learner != null && (authConfig?.required ?? false) && !profileComplete;
+
   Future<void> load() async {
     _prefs ??= await SharedPreferences.getInstance();
     showTiming = _prefs!.getBool(_kTiming) ?? true;
     showStagePanel = _prefs!.getBool(_kStagePanel) ?? false;
     directionsStyle = _prefs!.getString(_kDirections) == 'strip' ? 'strip' : 'fork';
+    _expiry ??= api.session.expired.listen((_) {
+      if (learner != null) signOut();
+    });
+    await _resume();
+    loaded = true;
+    notifyListeners();
+  }
+
+  /// Ask the server again (the sign-in screen's "Check again"): which
+  /// sign-in it offers, and whether the saved sign-in still holds.
+  Future<void> reconnect() async {
+    await _resume();
+    notifyListeners();
+  }
+
+  Future<void> _resume() async {
+    try {
+      final health = await api.health();
+      authConfig = AuthConfig.fromHealth(health);
+      llmMode = health['llm'] as String?;
+      serverReachable = true;
+    } catch (_) {
+      // Server not up yet: stay signed out; the sign-in screen retries.
+      serverReachable = false;
+      return;
+    }
+    if (authConfig!.required) {
+      final token = _prefs!.getString(_kToken);
+      if (token == null || token.isEmpty) return;
+      api.session.token = token;
+      try {
+        final me = await api.me();
+        _become(me.learner, profileComplete: me.profileComplete, email: me.email);
+      } on SignedOut {
+        await _forget();
+      } catch (_) {
+        // reachable a moment ago, not now: try again from the sign-in screen
+        api.session.token = null;
+      }
+      return;
+    }
     final label = _prefs!.getString(_kLabel);
     if (label != null && label.isNotEmpty) {
       try {
         // Get-or-create by name: always yields the CURRENT id (e.g. if the
         // dev database was wiped since last time).
-        learner = await api.upsertLearner(label);
-        sparks.signedIn(learner!.id);
+        _become(await api.upsertLearner(label), profileComplete: true);
       } catch (_) {
         // Server not up yet: stay signed out; the sign-in screen retries.
       }
     }
-    loaded = true;
+  }
+
+  void _become(Learner who, {required bool profileComplete, String? email}) {
+    learner = who;
+    this.profileComplete = profileComplete;
+    this.email = email;
+    sparks.signedIn(who.id);
+  }
+
+  /// An open server (sign-in off): a name is enough.
+  Future<void> signIn(String name) async {
+    final clean = name.trim();
+    _become(await api.upsertLearner(clean), profileComplete: true);
+    await _prefs!.setString(_kLabel, learner!.label);
     notifyListeners();
   }
 
-  Future<void> signIn(String name) async {
-    final clean = name.trim();
-    learner = await api.upsertLearner(clean);
-    await _prefs!.setString(_kLabel, learner!.label);
-    sparks.signedIn(learner!.id);
+  Future<void> _signedIn(SignInResult result, {String? email}) async {
+    api.session.token = result.token;
+    await _prefs!.setString(_kToken, result.token);
+    _become(result.learner, profileComplete: result.profileComplete, email: email);
     notifyListeners();
+  }
+
+  /// Google, then the server. Throws [InviteRequired] for a new account
+  /// without a working code -- the Google sign-in stays, so
+  /// [continueWithInvite] can finish it without asking Google again.
+  Future<void> signInWithGoogle({String? inviteCode}) async {
+    final idToken = await identity.signInWithGoogle();
+    await _signedIn(await api.signInWithFirebase(idToken, inviteCode: inviteCode));
+  }
+
+  Future<void> signInWithEmail(String email, String password, {required bool create, String? inviteCode}) async {
+    final idToken = create
+        ? await identity.createAccountWithEmail(email, password)
+        : await identity.signInWithEmail(email, password);
+    await _signedIn(await api.signInWithFirebase(idToken, inviteCode: inviteCode), email: email.trim());
+  }
+
+  /// Finish a sign-in the server held back for an invite code.
+  Future<void> continueWithInvite(String inviteCode) async {
+    final idToken = await identity.currentIdToken();
+    if (idToken == null) throw ApiException('Sign in again, then enter your code.');
+    await _signedIn(await api.signInWithFirebase(idToken, inviteCode: inviteCode));
+  }
+
+  /// The Versa team's testers, by name.
+  Future<void> signInAsTester(String name, {String? code}) async {
+    await _signedIn(await api.signInAsTester(name.trim(), code: code));
+  }
+
+  /// The sign-up profile was saved: on to the plans and the app.
+  void profileSaved(LearnerProfile profile) {
+    profileComplete = true;
+    final name = profile.name;
+    if (learner != null && name != null && name.isNotEmpty) {
+      learner = Learner(id: learner!.id, label: name);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _forget() async {
+    api.session.token = null;
+    await _prefs?.remove(_kToken);
   }
 
   Future<void> signOut() async {
     learner = null;
+    email = null;
     await _prefs!.remove(_kLabel);
+    await _forget();
+    try {
+      await identity.signOut();
+    } catch (_) {}
     sparks.signedOut();
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _expiry?.cancel();
+    super.dispose();
   }
 
   void setShowTiming(bool value) {

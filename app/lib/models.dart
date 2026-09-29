@@ -6,6 +6,43 @@ class Learner {
   final String label;
 }
 
+/// What a learner told Versa at sign-up (src/versa/profiles.py): their
+/// answers as given, and what the server read from them.
+class LearnerProfile {
+  const LearnerProfile({required this.answers, this.consent = const {}, this.extracted});
+
+  /// name, age, occupation (school / university / working / other),
+  /// country, region, institution, curriculum, level, course, subjects, goals.
+  final Map<String, dynamic> answers;
+  final Map<String, dynamic> consent;
+
+  /// stage, education_system, level, location, subjects, working_towards,
+  /// starting_point, age_fits_stage... Null if the reading failed.
+  final Map<String, dynamic>? extracted;
+
+  String? get name => answers['name'] as String?;
+  int? get age => (answers['age'] as num?)?.toInt();
+  String? get occupation => answers['occupation'] as String?;
+
+  /// One line for Settings, e.g. "Class 11 (CBSE (India)) · Kerala, India".
+  String get summary {
+    final x = extracted;
+    final level = (x?['level'] as String?) ?? answers['level'] as String?;
+    final system = (x?['education_system'] as String?) ?? answers['curriculum'] as String?;
+    final place = (x?['location'] as String?) ??
+        [answers['region'], answers['country']].whereType<String>().where((s) => s.isNotEmpty).join(', ');
+    final what = [if (level != null && level.isNotEmpty) level, if (system != null && system.isNotEmpty) '($system)']
+        .join(' ');
+    return [if (what.isNotEmpty) what, if (place.isNotEmpty) place].join(' · ');
+  }
+
+  factory LearnerProfile.fromJson(Map<String, dynamic> j) => LearnerProfile(
+        answers: Map<String, dynamic>.from(j['answers'] as Map),
+        consent: Map<String, dynamic>.from((j['consent'] as Map?) ?? const {}),
+        extracted: j['extracted'] is Map ? Map<String, dynamic>.from(j['extracted'] as Map) : null,
+      );
+}
+
 class ChatOption {
   const ChatOption({required this.id, required this.text});
   final String id;
@@ -80,6 +117,123 @@ class ClaimUpdate {
       };
 }
 
+/// Versa's guess at which direction the learner would take, revealed right
+/// after they took one (server: pick_prediction.py, the `guess` frame). The
+/// guess was made before the directions were shown; this is how the learner
+/// sees Versa learning them. `because` is what the guess rested on, in plain
+/// words, read off the stored numbers.
+class DirectionGuess {
+  const DirectionGuess({
+    required this.hit,
+    required this.predicted,
+    required this.picked,
+    required this.hits,
+    required this.guesses,
+    required this.picksSeen,
+    this.because = const [],
+  });
+
+  final bool hit;
+  final String predicted;
+  final String picked;
+
+  /// Versa's record over the learner's last few picks.
+  final int hits;
+  final int guesses;
+
+  /// How many of their picks the guess had to go on.
+  final int picksSeen;
+  final List<String> because;
+
+  factory DirectionGuess.fromJson(Map<String, dynamic> json) => DirectionGuess(
+        hit: json['hit'] == true,
+        predicted: json['predicted'] as String? ?? '',
+        picked: json['picked'] as String? ?? '',
+        hits: (json['hits'] as num?)?.toInt() ?? 0,
+        guesses: (json['guesses'] as num?)?.toInt() ?? 0,
+        picksSeen: (json['picks_seen'] as num?)?.toInt() ?? 0,
+        because: [for (final line in (json['because'] as List? ?? const [])) line.toString()],
+      );
+
+  /// Too little to go on yet for a record to mean much.
+  bool get stillLearning => guesses < 3;
+
+  String get headline => hit
+      ? "Versa guessed you'd pick this"
+      : 'Versa expected “$predicted” — you surprised it';
+
+  String get record => stillLearning ? 'still learning you' : '$hits of your last $guesses';
+}
+
+/// The answer was shaped to how this learner usually moves through an idea,
+/// learned from their own direction picks (server: the `adapted` frame,
+/// pick_prediction.approach_profile). `path` is the order it opens with.
+class AnswerShaping {
+  const AnswerShaping({required this.path, this.because = const []});
+
+  final List<String> path;
+  final List<String> because;
+
+  factory AnswerShaping.fromJson(Map<String, dynamic> json) => AnswerShaping(
+        path: [for (final p in (json['path'] as List? ?? const [])) p.toString()],
+        because: [for (final line in (json['because'] as List? ?? const [])) line.toString()],
+      );
+
+  String get headline => 'Shaped to how you explore: ${path.join(' → ')}';
+}
+
+/// One check a pattern has to pass before Versa calls it your thinking style
+/// (server: style_patterns.py) -- e.g. "topics: 3 different topics (needs >= 3)".
+class StyleGate {
+  const StyleGate({required this.name, required this.ok, required this.have, required this.need});
+
+  final String name;
+  final bool ok;
+  final String have;
+  final String need;
+
+  /// "above_cohort" -> "above cohort"
+  String get label => name.replaceAll('_', ' ');
+}
+
+/// A way this learner moves through ideas, read off their own choices
+/// (server: GET /api/learners/{id}/style-patterns). `status` is confirmed
+/// (every gate passed), emerging (clear, not yet through every gate) or
+/// fading (clear before, not lately).
+class StylePattern {
+  const StylePattern({
+    required this.kind,
+    required this.key,
+    required this.statement,
+    required this.status,
+    this.gates = const [],
+  });
+
+  final String kind;
+  final String key;
+  final String statement;
+  final String status;
+  final List<StyleGate> gates;
+
+  factory StylePattern.fromJson(Map<String, dynamic> json) => StylePattern(
+        kind: json['kind'] as String? ?? '',
+        key: json['key'] as String? ?? '',
+        statement: json['statement'] as String? ?? '',
+        status: json['status'] as String? ?? 'emerging',
+        gates: [
+          for (final e in ((json['gates'] as Map?) ?? const {}).entries)
+            StyleGate(
+              name: e.key as String,
+              ok: (e.value as Map)['ok'] == true,
+              have: (e.value as Map)['have']?.toString() ?? '',
+              need: (e.value as Map)['need']?.toString() ?? '',
+            ),
+        ],
+      );
+
+  int get gatesPassed => gates.where((g) => g.ok).length;
+}
+
 enum Role { user, tutor }
 
 /// What the person experienced for one answer, measured on the device (so it
@@ -129,6 +283,12 @@ class ChatMessage {
   /// Set on a tutor turn the sandbox-chat claim-update flow touched -- see
   /// [ClaimUpdate].
   ClaimUpdate? claimUpdate;
+
+  /// Set on the reply to a taken direction: whether Versa saw it coming.
+  DirectionGuess? guess;
+
+  /// Set when the answer was shaped to the learner's usual way into an idea.
+  AnswerShaping? adapted;
 
   /// Being rewritten at new slider levels (the text streams in place).
   bool rewriting = false;
@@ -236,6 +396,18 @@ class RegenDone extends ServerEvent {
 class RegenEnded extends ServerEvent {
   const RegenEnded(this.requestId);
   final int requestId;
+}
+
+/// The answer on its way is shaped to the learner's usual way in.
+class AdaptedEvent extends ServerEvent {
+  const AdaptedEvent(this.shaping);
+  final AnswerShaping shaping;
+}
+
+/// Whether Versa guessed the direction just taken (after `turn_start`).
+class GuessEvent extends ServerEvent {
+  const GuessEvent(this.guess);
+  final DirectionGuess guess;
 }
 
 class ClaimUpdateEvent extends ServerEvent {
@@ -357,6 +529,10 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
         reason: json['reason'] as String? ?? '',
         amount: (json['amount'] as num?)?.toInt() ?? 0,
       );
+    case 'adapted':
+      return AdaptedEvent(AnswerShaping.fromJson(json));
+    case 'guess':
+      return GuessEvent(DirectionGuess.fromJson(json));
     case 'claim_update':
       return ClaimUpdateEvent(ClaimUpdate.fromJson(json));
     case 'regen_start':

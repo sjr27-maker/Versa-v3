@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -11,22 +12,214 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// The saved sign-in isn't accepted any more.
+class SignedOut extends ApiException {
+  SignedOut() : super('Signed out -- sign in again.');
+}
+
+/// A new account needs an invite code (the server said so); [message] says
+/// what was wrong with the one given, if any.
+class InviteRequired implements Exception {
+  InviteRequired(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// The signed-in session: the Versa session token every request carries
+/// (src/versa/accounts.py). Null on a server with sign-in off.
+class AuthSession {
+  String? token;
+  final _expired = StreamController<void>.broadcast();
+
+  /// The server stopped accepting the token (it expired, or was signed out
+  /// elsewhere): the app signs out.
+  Stream<void> get expired => _expired.stream;
+
+  /// What a WebSocket offers so the server can check the token: a browser
+  /// can't put headers on one, so it rides as a subprotocol.
+  List<String>? get socketProtocols {
+    final t = token;
+    return t == null ? null : ['versa', t];
+  }
+}
+
+/// Adds the session token to every request made through it -- and so to
+/// every API in the app, since they all share [VersaApi.httpClient].
+class _AuthClient extends http.BaseClient {
+  _AuthClient(this._inner, this._session);
+
+  final http.Client _inner;
+  final AuthSession _session;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final token = _session.token;
+    if (token != null) request.headers['authorization'] = 'Bearer $token';
+    final response = await _inner.send(request);
+    if (response.statusCode == 401 && token != null && !request.url.path.startsWith('/api/auth/')) {
+      _session._expired.add(null);
+    }
+    return response;
+  }
+
+  @override
+  void close() => _inner.close();
+}
+
+/// Which sign-in the server offers (`/api/health`'s `auth`).
+class AuthConfig {
+  const AuthConfig({
+    required this.required,
+    this.firebase = false,
+    this.dev = false,
+    this.devCode = false,
+    this.invites = false,
+  });
+
+  /// False: an open server (sign-in off) -- the old name-only sign-in.
+  final bool required;
+  final bool firebase;
+  final bool dev;
+  final bool devCode;
+  final bool invites;
+
+  static const open = AuthConfig(required: false);
+
+  factory AuthConfig.fromHealth(Map<String, dynamic> health) {
+    final a = health['auth'];
+    if (a is! Map) return open;
+    return AuthConfig(
+      required: a['required'] == true,
+      firebase: a['firebase'] == true,
+      dev: a['dev'] == true,
+      devCode: a['dev_code'] == true,
+      invites: a['invites'] == true,
+    );
+  }
+}
+
+class SignInResult {
+  const SignInResult({required this.token, required this.learner, required this.profileComplete});
+  final String token;
+  final Learner learner;
+  final bool profileComplete;
+}
+
 /// The REST half of the Versa API (the chat itself is a WebSocket, see
 /// chat_transport.dart).
 class VersaApi {
-  VersaApi(this.baseUrl, {http.Client? client}) : _http = client ?? http.Client();
+  VersaApi(String baseUrl, {http.Client? client, AuthSession? session})
+      : this._(baseUrl, client ?? http.Client(), session ?? AuthSession());
+
+  VersaApi._(this.baseUrl, http.Client inner, this.session) : _http = _AuthClient(inner, session);
 
   final String baseUrl;
+  final AuthSession session;
   final http.Client _http;
   http.Client get httpClient => _http;
 
   Uri _uri(String path) => Uri.parse('$baseUrl$path');
 
-  /// `{status: ok, llm: live|stub}`.
+  static const _jsonHeaders = {'content-type': 'application/json'};
+
+  /// `{status: ok, llm: live|stub, auth: {...}}`.
   Future<Map<String, dynamic>> health() async {
     final r = await _http.get(_uri('/api/health')).timeout(const Duration(seconds: 5));
     if (r.statusCode != 200) throw ApiException('server answered ${r.statusCode}');
     return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  SignInResult _signedIn(http.Response r, String fallback) {
+    if (r.statusCode == 403) {
+      final detail = _detailObject(r);
+      if (detail is Map && detail['reason'] == 'invite') {
+        throw InviteRequired('${detail['message'] ?? 'Enter your invite code.'}');
+      }
+    }
+    if (r.statusCode != 200) throw ApiException(_detail(r, fallback));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final l = j['learner'] as Map<String, dynamic>;
+    return SignInResult(
+      token: j['token'] as String,
+      learner: Learner(id: l['id'] as String, label: l['label'] as String),
+      profileComplete: j['profile_complete'] == true,
+    );
+  }
+
+  /// Trade a Firebase ID token (Google / email) for a Versa session.
+  /// Throws [InviteRequired] for a new account without a working code.
+  Future<SignInResult> signInWithFirebase(String idToken, {String? inviteCode}) async {
+    final r = await _http
+        .post(_uri('/api/auth/firebase'),
+            headers: _jsonHeaders,
+            body: jsonEncode({
+              'id_token': idToken,
+              if (inviteCode != null && inviteCode.trim().isNotEmpty) 'invite_code': inviteCode.trim(),
+            }))
+        .timeout(const Duration(seconds: 20));
+    return _signedIn(r, 'could not sign in');
+  }
+
+  /// The Versa team's testers: a name (and, on a deployed server, a code).
+  Future<SignInResult> signInAsTester(String name, {String? code}) async {
+    final r = await _http
+        .post(_uri('/api/auth/dev'),
+            headers: _jsonHeaders, body: jsonEncode({'name': name, 'code': ?code}))
+        .timeout(const Duration(seconds: 10));
+    return _signedIn(r, 'could not sign in');
+  }
+
+  /// Whether an invite code would let a new account in; null if it would,
+  /// else why not.
+  Future<String?> checkInvite(String code) async {
+    final r = await _http
+        .get(_uri('/api/auth/invites/${Uri.encodeComponent(code.trim())}'))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not check that code'));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    return j['valid'] == true ? null : (j['message'] as String? ?? 'That code doesn\'t work.');
+  }
+
+  /// Who the saved token belongs to. Throws [ApiException] on 401.
+  Future<({Learner learner, bool profileComplete, String? email})> me() async {
+    final r = await _http.get(_uri('/api/me')).timeout(const Duration(seconds: 10));
+    if (r.statusCode == 401) throw SignedOut();
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not check your sign-in'));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final l = j['learner'] as Map<String, dynamic>;
+    return (
+      learner: Learner(id: l['id'] as String, label: l['label'] as String),
+      profileComplete: j['profile_complete'] == true,
+      email: j['email'] as String?,
+    );
+  }
+
+  /// The sign-up profile (profiles.py): null if they haven't filled it in.
+  Future<LearnerProfile?> getProfile(String learnerId) async {
+    final r = await _http.get(_uri('/api/learners/$learnerId/profile')).timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load your profile'));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    final p = j['profile'];
+    return p is Map<String, dynamic> ? LearnerProfile.fromJson(p) : null;
+  }
+
+  /// The "are you sure?" line for an age that doesn't fit, or null.
+  Future<String?> checkProfile(String learnerId, Map<String, dynamic> answers) async {
+    final r = await _http
+        .post(_uri('/api/learners/$learnerId/profile/check'), headers: _jsonHeaders, body: jsonEncode(answers))
+        .timeout(const Duration(seconds: 10));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'check your answers'));
+    return (jsonDecode(r.body) as Map<String, dynamic>)['warning'] as String?;
+  }
+
+  Future<LearnerProfile> saveProfile(String learnerId, Map<String, dynamic> answers) async {
+    final r = await _http
+        .post(_uri('/api/learners/$learnerId/profile'), headers: _jsonHeaders, body: jsonEncode(answers))
+        .timeout(const Duration(seconds: 45));
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not save your profile'));
+    final j = jsonDecode(r.body) as Map<String, dynamic>;
+    return LearnerProfile.fromJson(j['profile'] as Map<String, dynamic>);
   }
 
   /// Get-or-create a learner by name.
@@ -128,6 +321,18 @@ class VersaApi {
         .timeout(const Duration(seconds: 10));
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load thinking style'));
     return ThinkingStyleOverview.fromJson(jsonDecode(r.body) as Map<String, dynamic>);
+  }
+
+  /// How this learner moves through ideas, from their own choices; empty when
+  /// the server has nothing yet (or is older and doesn't know the route).
+  Future<List<StylePattern>> getStylePatterns(String learnerId) async {
+    final r = await _http.get(_uri('/api/learners/$learnerId/style-patterns')).timeout(const Duration(seconds: 10));
+    if (r.statusCode == 404) return const [];
+    if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load how you explore'));
+    final body = jsonDecode(r.body) as Map<String, dynamic>;
+    return [
+      for (final p in (body['patterns'] as List? ?? const [])) StylePattern.fromJson(p as Map<String, dynamic>),
+    ];
   }
 
   Future<ClaimDetail> getClaim(String claimId) async {
@@ -236,11 +441,22 @@ class VersaApi {
   }
 
   String _detail(http.Response r, String fallback) {
-    try {
-      final d = (jsonDecode(r.body) as Map<String, dynamic>)['detail'];
-      if (d is String) return d;
-    } catch (_) {}
+    final d = _detailObject(r);
+    if (d is String) return d;
+    if (d is Map && d['message'] is String) return d['message'] as String;
+    if (d is List && d.isNotEmpty && d.first is Map && (d.first as Map)['msg'] is String) {
+      // a 422 from validation: the first problem, without pydantic's prefix
+      return ((d.first as Map)['msg'] as String).replaceFirst('Value error, ', '');
+    }
     return '$fallback (${r.statusCode})';
+  }
+
+  Object? _detailObject(http.Response r) {
+    try {
+      return (jsonDecode(r.body) as Map<String, dynamic>)['detail'];
+    } catch (_) {
+      return null;
+    }
   }
 
   void close() => _http.close();

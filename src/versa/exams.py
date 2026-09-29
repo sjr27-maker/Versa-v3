@@ -24,7 +24,11 @@ Walled off. Exam prep does not read or write learner facts, claims,
 thinking styles or any other part of the personal learner model (the user's
 decision, 2026-09-26): attempts are logged here as episodic evidence only,
 the same wall as topic_signals and rooms, until the claims layer has a
-guard against counting its own nudges as evidence.
+guard against counting its own nudges as evidence. The one thing read from
+outside is the sign-up profile's board and level (profiles.py), when an exam
+is set up from a search: it is what the student SAID they study, not
+something the system concluded about them, so it can't feed back into
+itself.
 
 Audit. There is no chat session, so every model call is recorded to
 exam_generations with its node name, full input (incl. the prompt) and
@@ -49,6 +53,7 @@ import asyncpg
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from versa import profiles as _profiles
 from versa import resources as _resources
 from versa.audit import to_jsonable
 from versa.learner import LearnerStore
@@ -765,7 +770,11 @@ class ExamSyllabus:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
 
-    def prompt(self, subject: str, headings: list[str], excerpt: str) -> str:
+    def prompt(self, subject: str, headings: list[str], excerpt: str, studying: str = "") -> str:
+        """`studying` (profiles.render_exam_hint) is the board / level the
+        student SAID they study at sign-up -- so "Physics" becomes their
+        syllabus, not a generic one. Stated, not inferred; see the module
+        docstring on why nothing learned about them is read here."""
         source = ""
         if excerpt:
             heading_block = (
@@ -782,6 +791,7 @@ class ExamSyllabus:
             "A student is preparing for an exam. Split what the exam covers into "
             "syllabus units they can revise and be tested on one at a time.\n"
             f"Exam subject: {subject}\n"
+            f"{studying}"
             f"{source}"
             f"\nReturn between {_UNITS[0]} and {_UNITS[1]} units that together cover "
             "the exam without overlapping, in a sensible revision order. Each unit: "
@@ -790,8 +800,8 @@ class ExamSyllabus:
             'Respond with JSON: {"units": [{"title": "...", "summary": "..."}]}'
         )
 
-    async def run(self, subject: str, headings: list[str], excerpt: str) -> list[dict]:
-        raw = await self._llm.complete(self.prompt(subject, headings, excerpt))
+    async def run(self, subject: str, headings: list[str], excerpt: str, studying: str = "") -> list[dict]:
+        raw = await self._llm.complete(self.prompt(subject, headings, excerpt, studying))
         return parse_units((_json_object(raw) or {}).get("units"))
 
 
@@ -914,9 +924,10 @@ class ExamService:
 
     async def create_from_search(self, body: ExamIn) -> ExamOut:
         query = " ".join(body.query.split())
+        studying = _profiles.render_exam_hint(await _profiles.ProfileStore(self._pool).latest(body.learner_id))
         units = await self._generate(
             self.syllabus, learner_id=body.learner_id, exam_id=None,
-            subject=query, headings=[], excerpt="",
+            subject=query, headings=[], excerpt="", **({"studying": studying} if studying else {}),
         )
         if not units:
             raise HTTPException(status_code=502, detail="could not build a syllabus for that, try rephrasing it")

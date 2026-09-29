@@ -40,6 +40,8 @@ from versa import claims as _claims
 from versa import directions as _directions
 from versa import embeddings as _embeddings
 from versa import history_block as _history_block
+from versa import pick_prediction as _pick_prediction
+from versa import profiles as _profiles
 from versa import reference_bindings as _reference_bindings
 from versa import retrieval as _retrieval
 from versa.ablation import AblationConfig
@@ -125,6 +127,7 @@ from versa.models import (
     TurnDiagnostics,
     TurnOutcome,
 )
+from versa.profiles import ProfileStore
 from versa.reference_bindings import ReferenceBindingConfig
 from versa.retrieval import RetrievalContext
 from versa.reviews import (
@@ -203,6 +206,14 @@ _CONTINUATION: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+# This turn is a "where this could go" pick (card or fork link): the learner
+# already chose the direction, so the answer is not shaped by their usual
+# order on top of it (`SessionLoop._approach_kwargs`).
+_DIRECTION_PICK: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "versa_turn_direction_pick", default=False
+)
+
+
 def _continuation_kwargs() -> dict:
     text = _CONTINUATION.get()
     return {"continues": text} if text else {}
@@ -268,6 +279,9 @@ class SessionLoop:
         answer_version_store: AnswerVersionStore | None = None,
         lesson_hooks=None,
         direction_store: DirectionStore | None = None,
+        profile_store: ProfileStore | None = None,
+        pick_prediction_store: _pick_prediction.PredictionStore | None = None,
+        adapt_answers: bool = True,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -308,6 +322,16 @@ class SessionLoop:
         # after an answer. The server runs it; consolidation reads the
         # learner's order of approach back from the store.
         self._directions = direction_store
+        # profiles.py: what the learner said about themselves at sign-up,
+        # given to AssessAndBranch, DisambiguationOptions and FinalAnswer --
+        # only when there is one, so every other prompt is unchanged.
+        self._profiles = profile_store
+        # pick_prediction.py: how this learner usually moves through an idea,
+        # read off their own direction picks, shapes the answer once it is
+        # clear (`_approach_kwargs`). `adapt_answers=False` turns it off
+        # (VERSA_ADAPT_ANSWERS=off) for a style-off comparison.
+        self._pick_predictions = pick_prediction_store
+        self._adapt_answers = adapt_answers
         self.suggest_directions = SuggestDirections(tiers.fast)
         # The most recent AssessAndBranch-generating turn's id, if its
         # branches are still unresolved. None whenever the last turn was
@@ -516,8 +540,13 @@ class SessionLoop:
         on_event: TurnEventSink | None = None,
         defer_tail: bool = False,
         continues: str | None = None,
+        direction_pick: bool = False,
     ) -> str:
         """Run one turn and return the message to show.
+
+        `direction_pick`: the turn is a "where this could go" pick, so the
+        answer follows that direction and is not also shaped by the
+        learner's usual order (`_approach_kwargs`).
 
         `on_event` (streaming.py `turn_events`): mid-turn events a live
         client can act on -- options shown before the turn is over, those
@@ -557,6 +586,7 @@ class SessionLoop:
         steps: list | None = [] if defer_tail else None
         tail_token = _TAIL_STEPS.set(steps) if defer_tail else None
         continuation_token = _CONTINUATION.set(continues) if continues else None
+        pick_token = _DIRECTION_PICK.set(True) if direction_pick else None
         lesson_token = (
             _LESSON_CONTEXT.set(await self._lesson_hooks.contexts_for(session_id))
             if self._lesson_hooks is not None else None
@@ -572,6 +602,8 @@ class SessionLoop:
                 _LESSON_CONTEXT.reset(lesson_token)
             if continuation_token is not None:
                 _CONTINUATION.reset(continuation_token)
+            if pick_token is not None:
+                _DIRECTION_PICK.reset(pick_token)
             if tail_token is not None:
                 _TAIL_STEPS.reset(tail_token)
             if sink_token is not None:
@@ -1374,6 +1406,7 @@ class SessionLoop:
             thinking_style_hint=thinking_style_hint,
             reference_binding_hint=reference_binding_hint,
             **_lesson_kwargs(1),
+            **(await self._learner_background_kwargs(learner_id, warnings)),
         )
         node_call_counts["AssessAndBranch"] = self.assess_and_branch.last_call_count
 
@@ -1538,6 +1571,7 @@ class SessionLoop:
             learner_history_block=options_history_block,
             structural_requirement=options_structural_requirement,
             claim_constraints_block=options_claim_constraints_block,
+            **(await self._learner_background_kwargs(learner_id, warnings)),
         )
         node_call_counts["DisambiguationOptions"] = (
             self.disambiguation_options.last_call_count
@@ -2149,6 +2183,65 @@ class SessionLoop:
             )
         return message, teach_failed, history_source_ids, reference_binding_ids
 
+    async def _approach_kwargs(
+        self, learner_id: UUID, session_id: UUID, turn_index: int, question: str, warnings: list[str],
+    ) -> dict:
+        """`approach_directive=...` for FinalAnswer once this learner's usual
+        way into an idea is clear from their own direction picks
+        (pick_prediction.approach_profile), else nothing at all -- so the
+        prompt, and its node_calls input, are unchanged until then. No
+        model call. Tells the client, so the learner sees why.
+
+        The first answer to anything new is always a normal one: the answer
+        is only shaped on a FOLLOW-UP -- the same question or one directly
+        related to what they asked in the last few turns of this chat
+        (InteractionRecorder.is_follow_up). Opening a brand-new topic with
+        their usual "example first" would be wrong; once they are in it,
+        answering the way they go is what should feel like mind reading.
+        Also never on a turn they already steered (a direction pick or fork
+        continuation) or a lesson (the lesson plan sets the order there)."""
+        if (
+            not self._adapt_answers
+            or self._pick_predictions is None
+            or self._interaction_recorder is None
+            or _DIRECTION_PICK.get()
+            or _CONTINUATION.get()
+            or _LESSON_CONTEXT.get()
+        ):
+            return {}
+        try:
+            if not await self._interaction_recorder.is_follow_up(session_id, turn_index, question):
+                return {}
+            profile = await self._pick_predictions.approach_profile(learner_id)
+        except Exception as exc:  # noqa: BLE001 -- shaping must never fail a turn
+            warnings.append(f"approach profile failed: {exc!r}")
+            logger.warning("Approach profile failed for learner %s: %r", learner_id, exc)
+            return {}
+        if profile is None:
+            return {}
+        await _emit_turn_event({
+            "type": "adapted",
+            "path": [_pick_prediction.slot_label(s) for s in profile.path],
+            "because": _pick_prediction.explain_profile(profile),
+        })
+        return {"approach_directive": _pick_prediction.render_approach_directive(
+            profile, noun=self._domain_config.actor_noun)}
+
+    async def _learner_background_kwargs(self, learner_id: UUID, warnings: list[str]) -> dict:
+        """`learner_background=...` for a node call when this learner has a
+        sign-up profile (profiles.render_background), else nothing at all."""
+        if self._profiles is None:
+            return {}
+        try:
+            text = _profiles.render_background(
+                await self._profiles.latest(learner_id), noun=self._domain_config.actor_noun
+            )
+        except Exception as exc:  # noqa: BLE001 -- a profile must never fail a turn
+            warnings.append(f"profile lookup failed: {exc}")
+            logger.warning("Profile lookup failed for learner %s: %s", learner_id, exc)
+            return {}
+        return {"learner_background": text} if text else {}
+
     async def _assemble_personalization_blocks(
         self,
         learner_id: UUID,
@@ -2328,6 +2421,9 @@ class SessionLoop:
                 reference_bindings_block, reference_binding_ids = "", []
 
         knob_directive = _render_knob_directive(await self._transcript.get_knobs(session_id))
+        approach_kwargs = await self._approach_kwargs(
+            learner_id, session_id, turn_index, embed_text, warnings
+        )
 
         try:
             message = await self._call_node(
@@ -2351,8 +2447,10 @@ class SessionLoop:
                 reference_bindings_block=reference_bindings_block,
                 claim_constraints_block=claim_constraints_block,
                 knob_directive=knob_directive,
+                **approach_kwargs,
                 **_lesson_kwargs(0),
                 **_continuation_kwargs(),
+                **(await self._learner_background_kwargs(learner_id, warnings)),
             )
             node_call_counts["FinalAnswer"] = self.final_answer.last_call_count
             return message, False, history_source_ids, reference_binding_ids

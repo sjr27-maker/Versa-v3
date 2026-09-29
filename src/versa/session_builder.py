@@ -26,6 +26,7 @@ must build its loop through this function too.
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 import asyncpg
@@ -51,6 +52,8 @@ from versa.interactions import (
 )
 from versa.llm import ModelTierClients
 from versa.loop import SessionLoop
+from versa.pick_prediction import PredictionStore as PickPredictionStore
+from versa.profiles import ProfileStore
 from versa.memory import LearnerFactStore, ThinkingStyleStore
 from versa.retrieval_config import RetrievalConfig
 from versa.topics import LessonHooks
@@ -129,6 +132,12 @@ def build_session_loop(
         on_claim_update=on_claim_update,
         answer_version_store=AnswerVersionStore(pool),
         direction_store=DirectionStore(pool),
+        # Answers lean toward the learner's usual way into an idea once their
+        # own direction picks make it clear (pick_prediction.py).
+        pick_prediction_store=PickPredictionStore(pool),
+        adapt_answers=os.getenv("VERSA_ADAPT_ANSWERS", "on").lower() != "off",
+        # The sign-up profile (profiles.py), when the learner has one.
+        profile_store=ProfileStore(pool),
         # Learn-a-topic lesson chats; inert for every non-lesson session.
         lesson_hooks=LessonHooks(pool, tiers.fast, on_progress=on_lesson_progress),
         **build_interaction_pipeline_stores(pool, embedding_client),

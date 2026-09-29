@@ -116,8 +116,8 @@ class WebSocketRoomTransport implements RoomTransport {
 
   final WebSocketChannel _channel;
 
-  static Future<WebSocketRoomTransport> connect(Uri uri) async {
-    final channel = WebSocketChannel.connect(uri);
+  static Future<WebSocketRoomTransport> connect(Uri uri, [List<String>? protocols]) async {
+    final channel = WebSocketChannel.connect(uri, protocols: protocols);
     await channel.ready;
     return WebSocketRoomTransport._(channel);
   }

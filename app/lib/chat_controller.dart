@@ -42,7 +42,8 @@ class ChatController extends ChangeNotifier {
     TransportFactory? transportFactory,
     this.knobDebounce = const Duration(milliseconds: 600),
   }) : _transportFactory = transportFactory ??
-            ((sessionId) => WebSocketChatTransport.connect(api.chatUri(sessionId)));
+            ((sessionId) => WebSocketChatTransport.connect(api.chatUri(sessionId),
+                protocols: api.session.socketProtocols));
 
   final VersaApi api;
   final Learner learner;
@@ -452,6 +453,11 @@ class ChatController extends ChangeNotifier {
         final last = messages.last;
         if (last.role != Role.tutor || last.turnIndex != turnIndex || last.hasOptions) return;
         last.directions = cards;
+      case AdaptedEvent(:final shaping):
+        _current?.adapted = shaping;
+      case GuessEvent(:final guess):
+        // Heads the reply the taken direction started.
+        _current?.guess = guess;
       case ClaimUpdateEvent(:final update):
         // Fired from a background step, any time after `done` -- attach to
         // the last tutor turn regardless of whether `_current` is still

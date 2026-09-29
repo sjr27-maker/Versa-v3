@@ -1,5 +1,26 @@
 # versa
 
+## Core claim — read this first
+
+Versa's core feature is that it **learns a person's thinking style over
+time**: how they move through ideas (where they start, in what order, which
+way, within what depth/breadth limits), stable across topics, set apart from
+their mood and ability, and proven when it predicts their next unsteered
+choice. Everything else is an evidence source for that or a use of it:
+
+- **"Where this could go" (directions.py) is the primary evidence source** —
+  the person recognises the path that matches what's already in their mind
+  instead of having to write it. It stays unpersonalised (invariant 14): it
+  is the measuring instrument.
+- Also feeding it: the length/depth/breadth sliders (their own range),
+  stated preferences, the ambiguity and approach options, and Sandbox chat,
+  Learn a topic and Exam prep (exam prep is still walled off by invariant 13
+  — an open decision). Study with others does not feed it.
+
+`docs/THINKING_STYLE.md` has the agreed definition, the evidence inventory,
+the layered design and what is and isn't proven yet. Read it before
+changing anything that records, derives or uses learner evidence.
+
 ## Setup
 
 Copy `.env.example` to `.env` and fill in:
@@ -29,8 +50,13 @@ shift over time).
 Entry points: `versa chat` and the other `versa` CLI commands
 (`consolidate-session`, `migrate`, `review-claims`, `score-predictions`,
 `compare-portraits`, ...), and `versa serve` — the HTTP/WebSocket API the
-Flutter app in `app/` talks to (`src/versa/server.py`; no authentication yet,
-local only). Every entry point builds its `SessionLoop` through
+Flutter app in `app/` talks to (`src/versa/server.py`). Sign-in is ON by
+default (`src/versa/accounts.py`: Firebase Google/email tokens, invite-only
+sign-up, name-only sign-in for the testers sooraj/adithya on a laptop) and a
+guard checks that every request only touches the signed-in learner's own
+things; `VERSA_AUTH=off` gives the old open server, allowed only on
+127.0.0.1. `docs/DEPLOY.md` covers Cloud Run, Firebase, invites and the
+Android build. Every entry point builds its `SessionLoop` through
 `session_builder.build_session_loop`, the one shared assembly point.
 
 ## Invariants
@@ -384,7 +410,10 @@ delete or update rows. Concretely:
 - Walled off from the personal learner model (decided 2026-09-26):
   nothing in `exams.py` reads or writes learner facts, claims or thinking
   styles. Results are episodic evidence only, until the claims layer has a
-  guard against counting its own nudges as evidence.
+  guard against counting its own nudges as evidence. The one thing read
+  from outside is the sign-up profile's stated board and level
+  (profiles.py, invariant 18) when an exam is set up from a search -- what
+  the student said, not something concluded about them.
 - Verified by `tests/test_exams_append_only.py`, the same AST-based check
   used for invariants 1, 4, 6-12.
 
@@ -407,11 +436,17 @@ never delete or update rows. Concretely:
   offered) or passed (the learner asked their own question) -- the first
   thing they did settles it (`set_id` is UNIQUE there).
 - The set is generated from a fixed skeleton of slots and is given no
-  thinking style, claims or learner history -- only the message, the
-  answer and the learner's own depth/breadth sliders. That is what makes a
-  pick clean evidence rather than an echo of what the system already
-  believed (the circularity risk in IDEAS.md). Do not personalise the
-  skeleton or the generator's inputs without a guard for that.
+  thinking style, claims, profile or cross-session history -- only the
+  message, the answer, the learner's own depth/breadth sliders, and (from
+  2026-09-29) the directions they took earlier in THIS chat, so each set
+  builds on where they are instead of re-offering ground covered. Both
+  personal inputs are things the learner did, not things the system
+  concluded, and both apply to every slot alike. That is what makes a pick
+  clean evidence rather than an echo of what the system already believed
+  (the circularity risk in IDEAS.md). Do not personalise the skeleton or
+  add any other generator input without a guard for that -- in particular,
+  never what `pick_prediction.py` has learned (its guess and the learner's
+  way in shape the answer, never the cards).
 - The model call goes through `SessionLoop._call_node` (invariant 2).
 - Verified by `tests/test_directions_append_only.py`, the same AST-based
   check used for invariants 1, 4, 6-13.
@@ -495,3 +530,86 @@ in `src/versa/billing.py`) must never delete or update rows. Concretely:
 Why: what a student paid for, and what Versa gave them for it, has to be
 provable later -- for the student, for a refund, for a store review. An
 edited or pruned billing record can't prove anything.
+
+### 18. Accounts and the sign-up profile are append-only
+
+`AccountStore` (`learner_identities`, `learner_sign_ins`, `invites`,
+`invite_redemptions`, `invite_revocations`) and `ProfileStore`
+(`learner_profiles`, `profile_extractions`) -- migration `083_accounts.sql`,
+code in `src/versa/accounts.py` and `src/versa/profiles.py` -- must never
+delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on either store.
+- No `DELETE` or `UPDATE` SQL anywhere in `accounts.py`, `profiles.py` or
+  their migration.
+- An identity (a Firebase uid, or a tester's name) is written the first time
+  it signs in and never edited; every sign-in adds a `learner_sign_ins` row.
+- How often an invite was used is derived from `invite_redemptions`, never
+  stored; withdrawing one adds an `invite_revocations` row.
+- Editing the profile writes a new `learner_profiles` row -- the latest is
+  the profile. Each one keeps the consent given with it (version, and a
+  parent's or guardian's under 18). The model call that reads it is recorded
+  to `profile_extractions` with its prompt and output or error (invariant 2's
+  payload in accounts' own table: there is no session yet).
+- The profile is what the learner SAID, not something inferred: it is given
+  to the answer, the ambiguity check, the options, Learn-a-topic and exam
+  syllabus search, but never written into facts, claims or thinking styles,
+  and never given to "where this could go" (invariant 14).
+- Every learner-owned id a route accepts must be ownership-checked by the
+  guard (`accounts.OWNER_SQL`); `tests/test_accounts.py` fails if a route
+  gains a path parameter that is neither there nor deliberately unowned.
+- Verified by `tests/test_accounts.py`, the same AST-based check used for
+  invariants 1, 4, 6-17.
+
+Why: who could sign in as whom, who let them in, and what they agreed to
+must be provable later -- for a parent asking what their child consented
+to, for a leaked invite, for a dispute about an account. And the profile a
+learner gave at 15 is a record of what Versa was told then, not something
+to be overwritten when they're 16.
+
+### 19. Slider moves are append-only
+
+`KnobEventStore` (`knob_events`, migration `084_knob_events.sql`, code in
+`src/versa/knob_events.py`) must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `KnobEventStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `knob_events.py` or its migration.
+- One row per settled move that changed something (the app debounces a
+  drag into one PATCH): the levels before and after, and how many turns the
+  session had. `sessions` still holds only the current levels -- what the
+  next answer is written at -- and this is the history of how they got
+  there.
+- Verified by `tests/test_knob_events.py`, the same AST-based check used for
+  invariants 1, 4, 6-18.
+
+Why: a slider move is the learner setting their own range, unprompted --
+the Range lens of their thinking style (docs/THINKING_STYLE.md). With only
+the last value per session kept, every earlier move was lost, and a range
+can't be learned from a record that forgets where it has been.
+
+### 20. Pick predictions are append-only
+
+`PredictionStore` (`direction_predictions`, migration
+`085_direction_predictions.sql`, code in `src/versa/pick_prediction.py`)
+must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `PredictionStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `pick_prediction.py` or its
+  migration.
+- One guess per directions set, written BEFORE the set is sent, so it can
+  never have seen the pick. It keeps the scores per slot and the exact
+  contributions behind them (everyone else's picks, the learner's own, their
+  order of approach or how they open a chat, and what was set aside and
+  why). Whether it was right is never stored: it is derived from the set's
+  `direction_events` row, and so is the record the learner is shown.
+- The guess never changes the set: cards are generated and shuffled exactly
+  as before (invariant 14). It is only revealed after the pick.
+- Verified by `tests/test_pick_prediction.py`, the same AST-based check used
+  for invariants 1, 4, 6-19.
+
+Why: these guesses are the proof of the core claim -- if Versa is learning
+how someone thinks, they get better over time. A guess that could be edited
+after the pick, or a miss that could be pruned, would make that curve mean
+nothing. And "what contributed to what must be seen": the breakdown is kept
+with the guess, not recomputed later from data that has since grown.
+

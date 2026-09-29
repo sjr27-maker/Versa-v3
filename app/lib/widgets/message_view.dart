@@ -96,6 +96,25 @@ class MessageView extends StatelessWidget {
                       style: sans(12.5, color: Paper.accentDark, weight: FontWeight.w600)),
                   const SizedBox(height: 6),
                 ],
+                if (message.guess case final g?) ...[
+                  _WhyNote(
+                    key: const ValueKey('guess-note'),
+                    headline: '${g.headline} · ${g.record}',
+                    icon: g.hit ? Icons.check_circle_outline : Icons.auto_awesome_outlined,
+                    because: g.because,
+                    strong: g.hit,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                if (message.adapted case final a?) ...[
+                  _WhyNote(
+                    key: const ValueKey('adapted-note'),
+                    headline: a.headline,
+                    icon: Icons.route_outlined,
+                    because: a.because,
+                  ),
+                  const SizedBox(height: 8),
+                ],
                 if (message.recalled) ...[
                   Text('Oh wait, I remember what you meant.',
                       key: const ValueKey('recalled'),
@@ -185,6 +204,75 @@ class MessageView extends StatelessWidget {
     final seen = m.hasOptions ? 'options shown' : 'first words';
     final done = m.hasOptions ? '' : ' · complete ${_seconds(t.totalMs)}';
     return '$seen ${_seconds(t.firstOutputMs)}$done';
+  }
+}
+
+/// A one-line note Versa adds to a reply about how it is learning the
+/// learner -- whether it guessed the direction they took ("Versa guessed
+/// you'd pick this · 7 of your last 10"), or that the answer was shaped to
+/// their usual way in -- with what it rested on behind a tap.
+class _WhyNote extends StatefulWidget {
+  const _WhyNote({
+    super.key,
+    required this.headline,
+    required this.icon,
+    required this.because,
+    this.strong = false,
+  });
+  final String headline;
+  final IconData icon;
+  final List<String> because;
+  final bool strong;
+
+  @override
+  State<_WhyNote> createState() => _WhyNoteState();
+}
+
+class _WhyNoteState extends State<_WhyNote> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.strong ? Paper.accentDark : Paper.muted;
+    final canOpen = widget.because.isNotEmpty;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: canOpen ? () => setState(() => _open = !_open) : null,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: widget.strong ? Paper.accentSoft : Colors.transparent,
+          border: Border.all(color: widget.strong ? Paper.accentLine : Paper.border),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(widget.icon, size: 14, color: color),
+                const SizedBox(width: 6),
+                Flexible(child: Text(widget.headline, style: sans(11.5, color: color))),
+                if (canOpen) ...[
+                  const SizedBox(width: 4),
+                  Icon(_open ? Icons.expand_less : Icons.expand_more, size: 14, color: color),
+                ],
+              ],
+            ),
+            if (_open) ...[
+              const SizedBox(height: 6),
+              for (final line in widget.because)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text('• $line', style: sans(11.5, color: Paper.muted, height: 1.4)),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 

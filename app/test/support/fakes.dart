@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:versa_app/api.dart';
+import 'package:versa_app/auth/identity.dart';
 import 'package:versa_app/chat_transport.dart';
 import 'package:versa_app/models.dart';
 
@@ -89,10 +90,45 @@ class _FakeSession {
 /// reconnect reuses the same chat; also tracks each session's sidebar row and
 /// (optionally, per `historyBySession`) its resumable turn-by-turn history.
 class FakeBackend {
-  FakeBackend({this.up = true, this.llm = 'live'});
+  FakeBackend({this.up = true, this.llm = 'live', this.auth = false, this.invites = true});
 
   bool up;
   String llm;
+
+  /// Sign-in on (src/versa/accounts.py): every route but health and
+  /// /api/auth/* wants a token the fake handed out.
+  final bool auth;
+  final bool invites;
+  final Set<String> validInvites = {'GOODCODE'};
+  final Map<String, String> _tokens = {}; // token -> learner id
+  final Map<String, String> _labels = {}; // learner id -> label
+  final Set<String> _firebaseAccounts = {};
+  final Map<String, Map<String, dynamic>> profiles = {}; // learner id -> saved body
+  final List<String> unauthorized = [];
+  final List<Map<String, dynamic>> firebaseSignIns = [];
+
+  /// Pretend this learner already filled in the sign-up questions.
+  void seedProfile(String learnerId, Map<String, dynamic> answers) => profiles[learnerId] = answers;
+
+  Map<String, dynamic> _signedIn(String learnerId, String label) {
+    final token = 'tok-$learnerId';
+    _tokens[token] = learnerId;
+    _labels[learnerId] = label;
+    return {
+      'token': token,
+      'learner': {'id': learnerId, 'label': (profiles[learnerId]?['name'] as String?) ?? label},
+      'new_account': false,
+      'profile_complete': profiles.containsKey(learnerId),
+    };
+  }
+
+  Map<String, dynamic> _profileOut(Map<String, dynamic> body) => {
+        'id': 'profile-1',
+        'answers': {...body}..remove('consent'),
+        'consent': body['consent'] ?? const {},
+        'extracted': {'level': body['level'], 'education_system': body['curriculum'], 'age_fits_stage': true},
+        'created_at': DateTime.now().toIso8601String(),
+      };
   int sessionsCreated = 0;
   final List<String> learnersSeen = [];
   final List<_FakeSession> _sessions = [];
@@ -104,6 +140,9 @@ class FakeBackend {
   /// learnerId -> the raw ThinkingStyleOut-shaped body `GET .../thinking-style`
   /// returns. A test sets this directly; unset -> everything empty.
   final Map<String, Map<String, dynamic>> thinkingStyleFor = {};
+
+  /// learnerId -> the pattern rows `GET .../style-patterns` returns (unset = none).
+  final Map<String, List<Map<String, dynamic>>> stylePatternsFor = {};
 
   /// sessionId -> its knobs (unset = defaults); `patchedKnobs` logs every PATCH body.
   final Map<String, Map<String, int>> knobsBySession = {};
@@ -153,7 +192,78 @@ class FakeBackend {
     final segments = request.url.pathSegments;
 
     if (request.url.path == '/api/health') {
-      return _json({'status': 'ok', 'llm': llm});
+      return _json({
+        'status': 'ok',
+        'llm': llm,
+        'auth': auth
+            ? {'required': true, 'firebase': true, 'dev': true, 'dev_code': false, 'invites': invites}
+            : {'required': false},
+      });
+    }
+    if (auth) {
+      final path = request.url.path;
+      if (path == '/api/auth/dev') {
+        final name = ((jsonDecode(request.body) as Map)['name'] as String).trim().toLowerCase();
+        if (!{'sooraj', 'adithya'}.contains(name)) {
+          return _json({'detail': "Name-only sign-in is only for the Versa team's testers."}, 403);
+        }
+        final label = name[0].toUpperCase() + name.substring(1);
+        return _json(_signedIn('learner-$label', label));
+      }
+      if (path == '/api/auth/firebase') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        firebaseSignIns.add(body);
+        final uid = (body['id_token'] as String).replaceFirst('fb:', '');
+        if (!_firebaseAccounts.contains(uid)) {
+          final code = (body['invite_code'] as String?)?.toUpperCase();
+          if (invites && (code == null || !validInvites.contains(code))) {
+            return _json({
+              'detail': {
+                'reason': 'invite',
+                'message': code == null
+                    ? 'Versa is invite-only for now: enter your invite code.'
+                    : "That invite code isn't valid.",
+              }
+            }, 403);
+          }
+          _firebaseAccounts.add(uid);
+        }
+        final label = uid[0].toUpperCase() + uid.substring(1);
+        return _json(_signedIn('learner-$uid', label));
+      }
+      if (path.startsWith('/api/auth/invites/')) {
+        final ok = validInvites.contains(request.url.pathSegments.last.toUpperCase());
+        return _json({'valid': ok, 'message': ok ? null : "That invite code isn't valid."});
+      }
+      final header = request.headers['authorization'] ?? '';
+      final learnerId = _tokens[header.replaceFirst('Bearer ', '')];
+      if (learnerId == null) {
+        unauthorized.add(path);
+        return _json({'detail': 'sign in first'}, 401);
+      }
+      if (path == '/api/me') {
+        return _json({
+          'learner': {'id': learnerId, 'label': (profiles[learnerId]?['name'] as String?) ?? _labels[learnerId]},
+          'profile_complete': profiles.containsKey(learnerId),
+          'email': null,
+        });
+      }
+      if (segments.length == 4 && segments[1] == 'learners' && segments[3] == 'profile') {
+        if (request.method == 'GET') {
+          final p = profiles[segments[2]];
+          return _json({'complete': p != null, 'profile': p == null ? null : _profileOut(p)});
+        }
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        profiles[segments[2]] = body;
+        return _json({'profile': _profileOut(body), 'label': body['name']});
+      }
+      if (segments.length == 5 && segments[3] == 'profile' && segments[4] == 'check') {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        final age = body['age'] as int;
+        final warning =
+            body['occupation'] == 'school' && age > 22 ? "You said you're $age and at school." : null;
+        return _json({'ok': true, 'warning': warning});
+      }
     }
     if (request.url.path == '/api/learners') {
       final label = (jsonDecode(request.body) as Map)['label'] as String;
@@ -212,6 +322,13 @@ class FakeBackend {
         ..sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
       return _json([for (final s in rows) s.toJson()]);
     }
+    // GET /api/learners/{id}/style-patterns
+    if (segments.length == 4 &&
+        segments[0] == 'api' &&
+        segments[1] == 'learners' &&
+        segments[3] == 'style-patterns') {
+      return _json({'version': 'style-v1', 'patterns': stylePatternsFor[segments[2]] ?? []});
+    }
     // GET /api/learners/{id}/thinking-style
     if (segments.length == 4 &&
         segments[0] == 'api' &&
@@ -224,4 +341,38 @@ class FakeBackend {
   });
 
   VersaApi get api => VersaApi('http://test', client: client);
+}
+
+/// Google / email sign-in without Firebase: "signs in" as [googleUid].
+class FakeIdentity implements IdentityService {
+  FakeIdentity({this.googleUid = 'asha'});
+
+  String googleUid;
+  String? _current;
+  int signOuts = 0;
+
+  @override
+  bool get available => true;
+
+  @override
+  Future<String?> currentIdToken() async => _current;
+
+  @override
+  Future<String> signInWithGoogle() async => _current = 'fb:$googleUid';
+
+  @override
+  Future<String> signInWithEmail(String email, String password) async =>
+      _current = 'fb:${email.split('@').first}';
+
+  @override
+  Future<String> createAccountWithEmail(String email, String password) => signInWithEmail(email, password);
+
+  @override
+  Future<void> sendPasswordReset(String email) async {}
+
+  @override
+  Future<void> signOut() async {
+    _current = null;
+    signOuts++;
+  }
 }

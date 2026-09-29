@@ -13,7 +13,9 @@ import 'room_models.dart';
 import 'room_panels.dart';
 
 /// How a room's socket is opened. Replaceable so tests use a scripted fake.
-Future<RoomTransport> Function(Uri uri) roomSocketConnector = WebSocketRoomTransport.connect;
+/// `protocols` carries the session token (api.dart AuthSession).
+Future<RoomTransport> Function(Uri uri, List<String>? protocols) roomSocketConnector =
+    WebSocketRoomTransport.connect;
 
 /// One room: a WhatsApp-style group chat with, above it, the shared stage +
 /// board (everyone's tasks, Versa's questions) and "For you" (this person's
@@ -41,7 +43,8 @@ class _RoomScreenState extends State<RoomScreen> {
     _room = RoomController(
       code: m.code,
       memberId: m.memberId,
-      connect: (code, memberId) => roomSocketConnector(api.socketUri(code, memberId)),
+      connect: (code, memberId) =>
+          roomSocketConnector(api.socketUri(code, memberId), app.api.session.socketProtocols),
       onSeen: (seq) => _memberships.markSeen(m.code, seq),
     )..start();
   }

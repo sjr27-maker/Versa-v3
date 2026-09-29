@@ -153,7 +153,9 @@ async def _turn(ws, payload: dict) -> list[dict]:
 @pytest.mark.asyncio(loop_scope="session")
 async def test_health_reports_ok_and_the_llm_mode(live):
     async with httpx.AsyncClient(base_url=live.http) as client:
-        assert (await client.get("/api/health")).json() == {"status": "ok", "llm": "stub"}
+        assert (await client.get("/api/health")).json() == {
+            "status": "ok", "llm": "stub", "auth": {"required": False},
+        }
 
 
 @pytest.mark.asyncio(loop_scope="session")

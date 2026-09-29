@@ -1,0 +1,4 @@
+# What `gcloud builds submit` uploads (it would otherwise fall back to
+# .gitignore). Same as .dockerignore; app/config/firebase.json IS uploaded --
+# Firebase client config is public, and the web build needs it.
+#!include:.dockerignore

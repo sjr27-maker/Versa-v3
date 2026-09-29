@@ -42,6 +42,7 @@ are also called directly.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -75,6 +76,33 @@ def _row_to_halfvec_list(mapped: dict, *columns: str) -> None:
         value = mapped.get(col)
         if value is not None:
             mapped[col] = value.to_list()
+
+
+# "Is this the same thing they were just asking about?" -- on CENTRED
+# embeddings: the average of recent questions is subtracted first. Raw Gemini
+# embeddings of any two questions share a large common component (a chatty
+# "hey, can you show me..." reads alike whatever the subject), so raw cosine
+# can't tell subjects apart: in the staged run of 2026-09-29
+# (docs/verification-runs/adaptation_check_20260929.md) openers on six
+# different subjects scored 0.52-0.71 raw while consecutive turns of one chat
+# scored 0.58-1.00. Centred, different-subject openers fell to median 0.15
+# (max 0.37) and consecutive turns in a chat to median 0.46 (p10 0.28).
+# Calibrated on ONE staged run -- recheck on organic data.
+#
+# The follow-up bar sits above every different-subject pair seen: calling
+# something new a follow-up would shape its first answer, which must always
+# be a normal one, so this errs toward "new".
+CENTRED_FOLLOW_UP_THRESHOLD = 0.40
+# Too few questions on record to know what "average" looks like: then nothing
+# is judged a follow-up (every answer stays normal).
+CENTRE_MIN_QUESTIONS = 30
+CENTRE_WINDOW = 1000
+CENTRE_TTL_SECONDS = 600
+
+
+def centred_cosine(a: list[float], b: list[float], centre: list[float]) -> float:
+    return cosine_similarity([x - c for x, c in zip(a, centre, strict=True)],
+                             [y - c for y, c in zip(b, centre, strict=True)])
 
 
 class InteractionConfig(BaseModel):
@@ -116,6 +144,8 @@ STRUCTURAL_SESSION_END_VERSION = "structural-session-end"
 class InteractionStore:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
+        # (when fetched, the centre or None) -- see question_centre
+        self._centre_cache: tuple[float, list[float] | None] | None = None
 
     async def create(self, interaction: Interaction) -> Interaction:
         async with self._pool.acquire() as conn:
@@ -194,6 +224,47 @@ class InteractionStore:
                 turn_number,
             )
         return None if row is None else self._row_to_interaction(row)
+
+    async def get_recent_in_session(
+        self, session_id: UUID, turn_number: int, limit: int
+    ) -> list[Interaction]:
+        """The last `limit` interaction rows before this turn_number in this
+        session, most-recent-first."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM interactions
+                WHERE session_id = $1 AND turn_number < $2
+                ORDER BY turn_number DESC LIMIT $3
+                """,
+                session_id,
+                turn_number,
+                limit,
+            )
+        return [self._row_to_interaction(row) for row in rows]
+
+    async def question_centre(self) -> list[float] | None:
+        """The average of the most recent learners' own questions (any
+        learner), or None while there are fewer than CENTRE_MIN_QUESTIONS.
+        One small query, cached per process for CENTRE_TTL_SECONDS -- the
+        average moves slowly."""
+        now = time.monotonic()
+        cached = self._centre_cache
+        if cached is not None and now - cached[0] < CENTRE_TTL_SECONDS:
+            return cached[1]
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT count(*) AS n, AVG(question_embedding) AS centre FROM ("
+                "  SELECT question_embedding FROM interactions WHERE question_author = 'learner' "
+                "  ORDER BY created_at DESC LIMIT $1) q",
+                CENTRE_WINDOW,
+            )
+        centre = None
+        if row is not None and row["n"] >= CENTRE_MIN_QUESTIONS and row["centre"] is not None:
+            value = row["centre"]
+            centre = value.to_list() if hasattr(value, "to_list") else list(value)
+        self._centre_cache = (now, centre)
+        return centre
 
     async def has_any_in_session(self, session_id: UUID) -> bool:
         async with self._pool.acquire() as conn:
@@ -744,6 +815,35 @@ class InteractionRecorder:
         # loop.py reads this right after calling record() to decide
         # whether to fire the async classifier.
         self.last_classification_target: Interaction | None = None
+
+    async def is_follow_up(
+        self, session_id: UUID, turn_number: int, question: str, window: int = 3,
+    ) -> bool:
+        """Is this question the same as, or directly related to, one asked in
+        the last few turns of THIS chat? Compared on centred embeddings
+        against CENTRED_FOLLOW_UP_THRESHOLD (see its calibration note: raw
+        cosine -- and so entry_state's `continuing` threshold -- can't tell
+        subjects apart on real embeddings). One embedding (cached for the
+        turn -- the recorder embeds the same text later), no model call.
+        While there is no reliable centre yet, nothing is a follow-up.
+
+        A turn that resolves the previous turn's options is the FIRST answer
+        to that question, not a follow-up: the options turn is skipped, and
+        the question is compared with what came before it. The first turn
+        of a chat is never a follow-up."""
+        recent = await self._interactions.get_recent_in_session(session_id, turn_number, window)
+        if recent and recent[0].did_branch:
+            recent = recent[1:]
+        if not recent:
+            return False
+        centre = await self._interactions.question_centre()
+        if centre is None:
+            return False
+        embedding = await self._embeddings.embed(question, task_type=TASK_QUERY)
+        return any(
+            centred_cosine(embedding, list(past.question_embedding), centre) >= CENTRED_FOLLOW_UP_THRESHOLD
+            for past in recent
+        )
 
     async def record(
         self,

@@ -21,12 +21,15 @@ class ThinkingStyleScreen extends StatefulWidget {
 
 class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
   late Future<ThinkingStyleOverview> _future;
+  late Future<List<StylePattern>> _patterns;
   bool _showArchived = false;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    final app = context.read<AppState>();
+    _patterns = app.api.getStylePatterns(app.learner!.id);
   }
 
   Future<ThinkingStyleOverview> _load() {
@@ -62,6 +65,7 @@ class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
               const SizedBox(height: 4),
               Text('What I have noticed about how you think', style: serif(28)),
               const SizedBox(height: 20),
+              _ExploreSection(patterns: _patterns),
               FutureBuilder<ThinkingStyleOverview>(
                 future: _future,
                 builder: (context, snap) {
@@ -120,6 +124,97 @@ class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
                   );
                 },
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "How you explore" -- the patterns in your own choices (the cards you take
+/// after an answer, the depth and breadth you set), each with the checks it
+/// has to pass before Versa calls it your style. Tap one for the checks.
+class _ExploreSection extends StatelessWidget {
+  const _ExploreSection({required this.patterns});
+  final Future<List<StylePattern>> patterns;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<StylePattern>>(
+      future: patterns,
+      builder: (context, snap) {
+        if (snap.connectionState != ConnectionState.done || snap.hasError) return const SizedBox.shrink();
+        final found = snap.data ?? const [];
+        return _Section(
+          title: 'How you explore',
+          empty: 'Nothing clear yet. This comes from the "where this could go" steps you take and the '
+              'depth you set, across different topics \u2014 never from a single chat.',
+          children: [for (final p in found) _PatternCard(pattern: p)],
+        );
+      },
+    );
+  }
+}
+
+class _PatternCard extends StatefulWidget {
+  const _PatternCard({required this.pattern});
+  final StylePattern pattern;
+
+  @override
+  State<_PatternCard> createState() => _PatternCardState();
+}
+
+class _PatternCardState extends State<_PatternCard> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.pattern;
+    final (label, color) = switch (p.status) {
+      'confirmed' => ('Confirmed', Paper.olive),
+      'fading' => ('Fading', Paper.warn),
+      _ => ('Emerging \u00b7 ${p.gatesPassed} of ${p.gates.length} checks', Paper.muted),
+    };
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: InkWell(
+        key: ValueKey('pattern-${p.kind}-${p.key}'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => setState(() => _open = !_open),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Paper.card,
+            border: Border.all(color: Paper.border),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label.toUpperCase(), style: mono(10.5).copyWith(color: color)),
+              const SizedBox(height: 6),
+              Text(p.statement, style: sans(14.5, height: 1.5)),
+              if (_open) ...[
+                const SizedBox(height: 10),
+                for (final g in p.gates)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(g.ok ? Icons.check_rounded : Icons.remove_rounded,
+                            size: 15, color: g.ok ? Paper.olive : Paper.faint),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text('${g.label}: ${g.have} (needs ${g.need})',
+                              style: sans(12.5, color: Paper.muted, height: 1.4)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
             ],
           ),
         ),

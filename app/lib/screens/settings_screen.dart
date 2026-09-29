@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../billing/sparks_widgets.dart';
+import '../models.dart';
+import 'profile_screen.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
@@ -73,7 +75,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         Text(learner?.label ?? '', key: const ValueKey('settings-name'),
                             style: serif(21)),
                         const SizedBox(height: 2),
-                        Text('Memory is kept under this name.',
+                        Text(
+                            (app.authConfig?.required ?? false)
+                                ? (app.email ?? 'Signed in')
+                                : 'Memory is kept under this name.',
                             style: sans(12.5, color: Paper.muted)),
                       ],
                     ),
@@ -90,10 +95,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       shape:
                           RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
                     ),
-                    child: const Text('Switch learner'),
+                    child: Text((app.authConfig?.required ?? false) ? 'Sign out' : 'Switch learner'),
                   ),
                 ]),
               ]),
+              if ((app.authConfig?.required ?? false) && learner != null)
+                card([_ProfileCard(learnerId: learner.id)]),
               const SparksPlanCard(),
               card([
                 Text('Connection', style: serif(19)),
@@ -198,4 +205,60 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+}
+
+
+/// What the learner told Versa at sign-up (profiles.py), and a way to change it.
+class _ProfileCard extends StatefulWidget {
+  const _ProfileCard({required this.learnerId});
+  final String learnerId;
+
+  @override
+  State<_ProfileCard> createState() => _ProfileCardState();
+}
+
+class _ProfileCardState extends State<_ProfileCard> {
+  late Future<LearnerProfile?> _profile;
+
+  @override
+  void initState() {
+    super.initState();
+    _profile = context.read<AppState>().api.getProfile(widget.learnerId);
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<LearnerProfile?>(
+        future: _profile,
+        builder: (context, snap) {
+          final profile = snap.data;
+          final summary = profile?.summary ?? '';
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              Expanded(child: Text('Your profile', style: serif(19))),
+              TextButton(
+                key: const ValueKey('edit-profile'),
+                onPressed: snap.connectionState != ConnectionState.done
+                    ? null
+                    : () async {
+                        final saved = await Navigator.of(context).push<LearnerProfile>(MaterialPageRoute(
+                          builder: (_) => ProfileScreen(editing: true, initial: profile),
+                        ));
+                        if (saved != null && mounted) setState(() => _profile = Future.value(saved));
+                      },
+                child: const Text('Edit'),
+              ),
+            ]),
+            const SizedBox(height: 6),
+            Text(
+              snap.connectionState != ConnectionState.done
+                  ? 'Loading…'
+                  : summary.isEmpty
+                      ? 'Versa uses this to start at your level.'
+                      : summary,
+              key: const ValueKey('profile-summary'),
+              style: sans(13.5, color: Paper.muted, height: 1.4),
+            ),
+          ]);
+        },
+      );
 }

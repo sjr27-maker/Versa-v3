@@ -179,6 +179,36 @@ void main() {
       expect(find.textContaining('5 independent sessions'), findsOneWidget);
     });
 
+    testWidgets('Thinking style shows how you explore, with its checks on tap', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      backend.stylePatternsFor[backend.learnerIdFor('Asha')] = [
+        {
+          'kind': 'way_in', 'key': 'example', 'status': 'confirmed',
+          'statement': 'On a question of their own, goes first to "work through one concrete example".',
+          'gates': {
+            'topics': {'ok': true, 'have': '4 different topics', 'need': '>= 3'},
+            'predicts': {'ok': true, 'have': '5 of 6 later picks', 'need': '>= 3 and >= 35% right'},
+          },
+        },
+        {
+          'kind': 'range', 'key': 'depth', 'status': 'emerging', 'statement': 'Sets depth around 80/100.',
+          'gates': {'sessions': {'ok': false, 'have': 'set it in 2 sessions', 'need': '>= 3'}},
+        },
+      ];
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byKey(const ValueKey('nav-Thinking style')));
+      await tester.pumpAndSettle();
+      expect(find.text('How you explore'), findsOneWidget);
+      expect(find.text('CONFIRMED'), findsOneWidget);
+      expect(find.text('EMERGING · 0 OF 1 CHECKS'), findsOneWidget);
+      expect(find.textContaining('4 different topics'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('pattern-way_in-example')));
+      await tester.pumpAndSettle();
+      expect(find.text('topics: 4 different topics (needs >= 3)'), findsOneWidget);
+      expect(find.textContaining('5 of 6 later picks'), findsOneWidget);
+    });
+
     testWidgets('Home can start the Sandbox chat', (tester) async {
       _size(tester, 1400, 900);
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
@@ -615,6 +645,71 @@ void main() {
           turnIndex: 1, kind: 'answer', text: 'Think of the needle on a speedometer...', firstOutputMs: 1, totalMs: 2));
       await tester.pumpAndSettle();
       expect(find.text('Think of the needle on a speedometer...'), findsOneWidget);
+    });
+
+    testWidgets('after a pick, Versa says whether it saw it coming, and why on tap', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [DirectionCard(id: 'd1', text: 'Where is it used?')]));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('direction-d1')));
+      await tester.pump(const Duration(milliseconds: 20));
+
+      transport.emit(const GuessEvent(DirectionGuess(
+        hit: true, predicted: 'where it is used', picked: 'where it is used', hits: 7, guesses: 10, picksSeen: 14,
+        because: ['You took “where it is used” 9 of your 14 picks so far.'],
+      )));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.text("Versa guessed you'd pick this · 7 of your last 10"), findsOneWidget);
+      expect(find.textContaining('9 of your 14 picks'), findsNothing, reason: 'the reasons wait for a tap');
+
+      await tester.tap(find.byKey(const ValueKey('guess-note')));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(find.textContaining('9 of your 14 picks'), findsOneWidget);
+    });
+
+    testWidgets('an answer shaped to their way in says so above it, and why on tap', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is an integral?');
+      transport.emit(const AdaptedEvent(AnswerShaping(
+        path: ['work through one concrete example', 'where it is used'],
+        because: ['After an answer to your own question, you went to example first 5 of 6 times.'],
+      )));
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'Take x from 0 to 2...', firstOutputMs: 1, totalMs: 2));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('adapted-note')), findsOneWidget);
+      expect(find.textContaining('Shaped to how you explore: work through one concrete example'), findsOneWidget);
+      expect(find.textContaining('5 of 6 times'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('adapted-note')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('5 of 6 times'), findsOneWidget);
+    });
+
+    testWidgets('a miss says what Versa expected, and early on that it is still learning', (tester) async {
+      const miss = DirectionGuess(
+          hit: false, predicted: 'why it works', picked: 'see it simply', hits: 0, guesses: 1, picksSeen: 0);
+      expect(miss.headline, 'Versa expected “why it works” — you surprised it');
+      expect(miss.record, 'still learning you');
+      final parsed = DirectionGuess.fromJson({
+        'hit': true, 'predicted': 'x', 'picked': 'x', 'hits': 3, 'guesses': 4, 'picks_seen': 6,
+        'because': ['a', 'b'],
+      });
+      expect(parsed.record, '3 of your last 4');
+      expect(parsed.because, ['a', 'b']);
     });
 
     testWidgets('switched to cards, the directions sit below the answer and a tap asks anew', (tester) async {

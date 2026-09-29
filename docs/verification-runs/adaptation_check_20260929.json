@@ -1,0 +1,970 @@
+[
+ {
+  "topic": "how compound interest works (you just opened a savings account)",
+  "session_id": "e3345282-c1b5-4336-9db5-7c26522196ed",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! I just opened my first savings account and want to learn how compound interest actually works. Can you show me a quick example with some real numbers so I can see how the math plays out?",
+    "answer_words": 126,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Give me a simple analogy like a rolling snowball",
+     "How does compound interest affect credit card debt",
+     "Show me the compound interest formula with monthly compounding",
+     "Explain why the exponential growth curve accelerates over time",
+     "Explain how the Rule of 72 estimates doubling time",
+     "Show me a comparison between simple and compound interest"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How does compound interest affect credit card debt",
+    "answer_words": 127,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 0,
+     "guesses": 2,
+     "picks_seen": 1,
+     "because": [
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "You took \u201cwork through one concrete example\u201d 1 of your 1 picks so far."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain how balance transfers and 0% APR promo periods work",
+     "Show me the exact mathematical formula for daily compounding",
+     "Explain daily compounding mechanics vs APR",
+     "Calculate a $1,000 balance with 20% interest over 6 months",
+     "How credit card payoff strategies like Avalanche work in practice",
+     "Give me a simple metaphor for a debt snowball"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate a $1,000 balance with 20% interest over 6 months",
+    "options": [
+     "Would you like to see the breakdown with monthly payments included?",
+     "Are you assuming no monthly payments are made over those 6 months?"
+    ]
+   },
+   {
+    "kind": "clicked_option",
+    "text": "Would you like to see the breakdown with monthly payments included?",
+    "answer_words": 489,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Explain the math behind why interest drops each month with fixed paym\u2026",
+     "Explore how keeping a high balance impacts my credit score",
+     "Calculate how many months it takes to pay it off completely at $100",
+     "Compare the debt avalanche and debt snowball strategies in real life",
+     "Show me an analogy for how paying principal shrinks interest",
+     "Show me how daily compounding interest changes the total amount owed"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate how many months it takes to pay it off completely at $100",
+    "answer_words": 203,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 1,
+     "guesses": 4,
+     "picks_seen": 3,
+     "because": [
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "You took \u201cwork through one concrete example\u201d 2 of your 3 picks so far."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how credit card minimum payment traps are designed",
+     "Picture paying off debt like walking up a moving escalator",
+     "Calculate how fast it pays off if I pay $150 a month",
+     "Show the logarithmic formula used to calculate payoff time",
+     "Compare paying off this debt versus investing that money",
+     "Explain why paying extra early reduces total interest so much"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate how fast it pays off if I pay $150 a month",
+    "answer_words": 230,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 2,
+     "guesses": 5,
+     "picks_seen": 4,
+     "because": [
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "You took \u201cwork through one concrete example\u201d 3 of your 4 picks so far.",
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 1 of 1 times."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "How do zero percent balance transfer offers affect payoff speed",
+     "Give me an analogy for how extra payments shrink interest faster",
+     "Explain why early payments reduce total interest more than late ones",
+     "Show how this applies to choosing between debt snowball and avalanche",
+     "Show me the mathematical formula used to calculate payoff months",
+     "Calculate what happens if I increase my payment to $200 a month"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "photosynthesis (biology homework)",
+  "session_id": "ce637a07-3de5-4e03-bd98-edd278e6e9c0",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! I'm working on my biology homework about photosynthesis. Can you show me the actual chemical equation with the exact numbers of molecules involved?",
+    "answer_words": 120,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show the two main stages: light dependent and dark reactions",
+     "Count up all the atoms on both sides step by step",
+     "Explain why chemical equations must be balanced like this",
+     "Look at the cellular respiration equation next",
+     "How plants use the glucose created in this reaction",
+     "Give me a simple recipe analogy for this reaction"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How plants use the glucose created in this reaction",
+    "answer_words": 212,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 3,
+     "guesses": 7,
+     "picks_seen": 6,
+     "because": [
+      "You took \u201cwork through one concrete example\u201d 5 of your 6 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "You opened a chat with \u201cwork through one concrete example\u201d 0 of 1 times."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "How humans make use of plant starch and cellulose in daily life",
+     "Walk through how a specific plant like a potato uses glucose",
+     "How plants convert glucose into amino acids and lipids chemically",
+     "Explain why glucose solubility forces plants to store it as starch",
+     "Look at cellular respiration and how plants release energy",
+     "Give me a simple analogy for how plants store and use glucose"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through how a specific plant like a potato uses glucose",
+    "answer_words": 283,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 4,
+     "guesses": 8,
+     "picks_seen": 7,
+     "because": [
+      "You took \u201cwork through one concrete example\u201d 5 of your 7 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 1 of 1 times."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "How do enzymes break stored starch back down into glucose in spring",
+     "Explain the chemical structure difference between sucrose and starch",
+     "How do humans extract and use potato starch in cooking and industry",
+     "Walk me through how a carrot stores its sugar compared to a potato",
+     "Explain why starch doesn't draw water into cells like glucose does",
+     "Give me a simple analogy for turning glucose into starch"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How do humans extract and use potato starch in cooking and industry",
+    "answer_words": 302,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 4,
+     "guesses": 9,
+     "picks_seen": 8,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 3 times.",
+      "You took \u201cwork through one concrete example\u201d 6 of your 8 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain the molecular mechanism of gelatinization when heated",
+     "Show how potato starch is turned into biodegradable bioplastics",
+     "Explore how human enzymes break starch back down into glucose",
+     "Compare chemical modifications of native versus modified starch",
+     "Picture starch gelatinization like tiny water balloons bursting",
+     "Walk through making a shiny stir-fry sauce with potato starch"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through making a shiny stir-fry sauce with potato starch",
+    "answer_words": 332,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 9,
+     "because": [
+      "You took \u201cwork through one concrete example\u201d 6 of your 9 picks so far.",
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 2 of 2 times.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how commercial food brands use starch for glossy coatings",
+     "Explain retrogradation and why starch sauces break when cooled",
+     "Walk through fixing a stir-fry sauce that turned out too thick",
+     "Compare how potato starch and tapioca starch behave in sauces",
+     "Explain why potato starch makes sauces glossier than cornstarch",
+     "Give me a simple analogy for starch gelatinization in a sauce"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Explain why potato starch makes sauces glossier than cornstarch",
+    "answer_words": 184,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "why it works",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 10,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 4 times.",
+      "You took \u201cwork through one concrete example\u201d 7 of your 10 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain the chemistry of why amylopectin traps water so efficiently",
+     "Show how commercial fruit fillings use modified starches for clarity",
+     "Compare tapioca starch to potato starch for sauce texture and gloss",
+     "Compare how potato starch and cornstarch look in a lemon curd recipe",
+     "Give me a simple analogy for how starches scatter or transmit light",
+     "Explain retrogradation and why potato starch sauces break when cold"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "recursion in programming (you're learning Python)",
+  "session_id": "965e027c-60be-4458-a7c1-da8ca6947842",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! Can you show me a simple Python recursion example with actual numbers? I just want to see a concrete case of it working.",
+    "answer_words": 310,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Compare recursion with standard for and while loops",
+     "Trace a countdown function step by step with numbers",
+     "Give me a simple real-world analogy for recursion",
+     "Show how recursion is used to search folder structures",
+     "Explain how the call stack handles these paused functions",
+     "Explain tail recursion and how to prevent stack overflow"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how recursion is used to search folder structures",
+    "answer_words": 391,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 12,
+     "because": [
+      "You took \u201cwhere it is used\u201d 3 of your 12 picks so far.",
+      "You opened a chat with \u201cwhere it is used\u201d 2 of 2 times.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Walk through searching a three level deep mock folder tree",
+     "Show how build tools use recursive file searches",
+     "Explain how the call stack keeps track of parent folders",
+     "Compare recursive folder search to iterative breadh first search",
+     "Give me a simple analogy for navigating nested folders",
+     "How to handle infinite loops caused by symbolic links"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through searching a three level deep mock folder tree",
+    "answer_words": 387,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 13,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 3 of 3 times.",
+      "You took \u201cwork through one concrete example\u201d 8 of your 13 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Trace what happens step by step when the file is not found",
+     "Compare depth first and breadth first folder traversal",
+     "Explain how the call stack remembers where paused loops left off",
+     "Pass the matching file path back up through the return statements",
+     "See how web crawlers use recursion to index web pages",
+     "Picture searching through nested cardboard boxes within boxes"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Pass the matching file path back up through the return statements",
+    "answer_words": 171,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "what comes next",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 14,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 5 times.",
+      "You took \u201cwork through one concrete example\u201d 9 of your 14 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 1 tap on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "How to return multiple matching file paths instead of just the first",
+     "Picture this path bubbling up like a pass-the-parcel game",
+     "Show how file system search algorithms like find use this return logic",
+     "Modify this recursive search to handle permission errors gracefully",
+     "Explain why forgetting to return the recursive call returns None",
+     "Trace python code that stops a search loop once a path is returned"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Trace python code that stops a search loop once a path is returned",
+    "answer_words": 317,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 15,
+     "because": [
+      "You took \u201cwork through one concrete example\u201d 9 of your 15 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 1 tap on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain why remaining loop iterations in Call 2 get skipped",
+     "Modify this recursion to search using breadth first order",
+     "How would this return logic change if we wanted all matches",
+     "Trace an example where a folder search fails and returns None",
+     "Show how early exit stops unnecessary disk access in real OSs",
+     "Give me an analogy for breaking out of nested calls early"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Explain why remaining loop iterations in Call 2 get skipped",
+    "answer_words": 132,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "why it works",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 16,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 6 times.",
+      "You took \u201cwork through one concrete example\u201d 10 of your 16 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 1 tap on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain what happens if we forget to return the recursive result",
+     "Give me an everyday analogy for early exit in nested tasks",
+     "Show how to search folders using breadth-first search instead",
+     "Show how early return in loops speeds up real search engines",
+     "Explain how the call stack handles memory when a function returns",
+     "Trace what Call 1 does right after Call 2 returns a path"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "supply and demand (economics class)",
+  "session_id": "db21ac99-0b77-40cb-81a9-f7469ba29b30",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "Hey! Can we start with a concrete, real-life example of supply and demand with actual numbers? I'd love to see how the math actually works out first.",
+    "answer_words": 181,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Show how ride-sharing apps use dynamic pricing in real time",
+     "Explain what causes supply or demand curves to shift",
+     "Walk through another example using a lemonade stand",
+     "Explain why people naturally buy less when prices go up",
+     "Give me a simple metaphor like a tug-of-war for equilibrium",
+     "Show me the actual algebraic equations for supply and demand"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how ride-sharing apps use dynamic pricing in real time",
+    "answer_words": 306,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 18,
+     "because": [
+      "You took \u201cwhere it is used\u201d 4 of your 18 picks so far.",
+      "You opened a chat with \u201cwhere it is used\u201d 3 of 3 times.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 2 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explore algorithmic bias and legal fairness in surge pricing",
+     "Show how airlines or hotels use this same strategy",
+     "Explain price elasticity of demand in dynamic pricing",
+     "Walk through a step-by-step calculation with driver payouts",
+     "Give me an everyday analogy for surge pricing",
+     "Explain the algorithm signals that trigger price changes"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through a step-by-step calculation with driver payouts",
+    "answer_words": 211,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 19,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 4 of 4 times.",
+      "You took \u201cwork through one concrete example\u201d 11 of your 19 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 3 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Give me a simple picture of how drivers react to payout spikes",
+     "Calculate payouts with flat surge fees instead of multipliers",
+     "Explain why platforms use variable commission rates during surge",
+     "Explore how surge pricing affects passenger demand elasticity",
+     "Show how delivery apps calculate driver pay during peak hours",
+     "Analyze driver opportunity costs and traffic delays on surge earnings"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how delivery apps calculate driver pay during peak hours",
+    "answer_words": 319,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 20,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 7 times.",
+      "You took \u201cwork through one concrete example\u201d 12 of your 20 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 3 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show how grocery apps like Instacart handle peak batch earnings",
+     "Give me a simple analogy for dynamic peak pay incentives",
+     "Calculate a delivery payout using a 1.5x boost multiplier",
+     "Look at driver batching and multi-order earnings formulas",
+     "Explore how algorithmic surge pricing balances supply and demand",
+     "Explain why platforms use peak pay instead of base rate raises"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate a delivery payout using a 1.5x boost multiplier",
+    "answer_words": 101,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 21,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 5 of 5 times.",
+      "You took \u201cwork through one concrete example\u201d 12 of your 21 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 3 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate payout when a flat bonus stacks on top of a boost",
+     "Compare delivery boost multipliers with rideshare surge pricing",
+     "Explain why boosts apply to base pay rather than tips",
+     "Picture the boost as a temporary surge tax paid to drivers",
+     "Calculate payout with a $2 base, 2.0x boost, and $5 tip",
+     "Show how delivery apps use boost zones to manage courier supply"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate payout when a flat bonus stacks on top of a boost",
+    "answer_words": 113,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "go further",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 22,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 8 times.",
+      "You took \u201cwork through one concrete example\u201d 13 of your 22 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 3 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate earnings when driver pay is reduced by platform fees",
+     "Compare earnings under guaranteed minimum pay vs stacked promotions",
+     "Calculate payout with a 2x boost plus a $5 flat bonus on a $4 base",
+     "Think of it like buying discounted items with a flat coupon at checko\u2026",
+     "Explain why boosts multiply base pay instead of the total payout",
+     "See how apps use stacked bonuses to attract drivers to busy areas"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "how vaccines train the immune system (you're curious)",
+  "session_id": "e35c6d75-d3b8-4cc4-8ab1-cb0a32ffeffe",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "hey! i want to learn how vaccines actually train our immune system. can you show me a real example of what is inside a specific vaccine and what exactly happens when it enters the body?",
+    "options": [
+     "Would you like to focus on an mRNA vaccine, such as the Pfizer COVID-19 vaccine, to see how genetic instructions prompt cells to build proteins?",
+     "Would you prefer to focus on a traditional vaccine, such as the Flu or Hepatitis B shot, to see how introduced viral proteins trigger an immune response?"
+    ]
+   },
+   {
+    "kind": "clicked_option",
+    "text": "Would you like to focus on an mRNA vaccine, such as the Pfizer COVID-19 vaccine, to see how genetic instructions prompt cells to build proteins?",
+    "answer_words": 392,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "Give me a simple analogy for how lipid nanoparticles work",
+     "Explain how the immune system creates antibodies after this",
+     "Walk through the exact steps of protein creation by ribosomes",
+     "Explain the biochemical structure of the lipid nanoparticle bubble",
+     "Show how this mRNA delivery tech is used for cancer therapies",
+     "Explain why the mRNA cannot cross into the cell nucleus"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show how this mRNA delivery tech is used for cancer therapies",
+    "answer_words": 231,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 24,
+     "because": [
+      "You opened a chat with \u201cwhere it is used\u201d 4 of 4 times.",
+      "You took \u201cwhere it is used\u201d 7 of your 24 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 4 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain why LNPs target immune cells versus tumor cells",
+     "Explore how mRNA therapies can be combined with checkpoint inhibitors",
+     "Show real clinical trials where mRNA cancer therapies are being tested",
+     "Explain how neoantigens are identified using DNA sequencing",
+     "Give me an analogy for hot versus cold tumors",
+     "Walk through a step by step example of a personalized cancer vaccine"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through a step by step example of a personalized cancer vaccine",
+    "answer_words": 358,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 25,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 6 of 6 times.",
+      "You took \u201cwork through one concrete example\u201d 13 of your 25 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 4 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Walk through how algorithms select which mutations to target",
+     "Give me a simple analogy for how neoantigens act like wanted posters",
+     "Explain how T-cells train to hunt down and destroy the tumor cells",
+     "How do tumors mutate or evolve to evade these targeted mRNA vaccines",
+     "Explain combining personalized vaccines with immune checkpoint inhibi\u2026",
+     "Show clinical trials testing personalized vaccines for pancreatic can\u2026"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Show clinical trials testing personalized vaccines for pancreatic can\u2026",
+    "answer_words": 300,
+    "guess": {
+     "hit": false,
+     "predicted": "work through one concrete example",
+     "picked": "where it is used",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 26,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 3 of 9 times.",
+      "You took \u201cwork through one concrete example\u201d 14 of your 26 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 4 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Walk through a specific patient case from the BioNTech trial",
+     "Show what Phase II trials need to prove for FDA approval",
+     "Give me an analogy for how custom vaccines train T-cells",
+     "Explain why checkpoint inhibitors are added to the vaccine",
+     "Dive deeper into how neoantigens are selected from tumor DNA",
+     "Show how this approach is being tested for melanoma treatment"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Walk through a specific patient case from the BioNTech trial",
+    "answer_words": 357,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 27,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 7 of 7 times.",
+      "You took \u201cwork through one concrete example\u201d 14 of your 27 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 4 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Show what happened to this patient's T-cells long-term",
+     "Look at combining personalized vaccines with standard chemotherapy",
+     "Why pancreatic cancer specifically needs 19 different neoantigens",
+     "Explain how checkpoint inhibitors cut the immune system brakes",
+     "See how personalized mRNA vaccines are used in melanoma trials",
+     "Analyze the immune evasion mechanisms when vaccines fail"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ },
+ {
+  "topic": "the Pythagorean theorem (maths class)",
+  "session_id": "760a5463-0e28-472d-8a7d-10784fb34e6f",
+  "turns": [
+   {
+    "kind": "new_topic",
+    "text": "hey! we're doing the pythagorean theorem in math. can you show me a real example with actual numbers first?",
+    "answer_words": 172,
+    "guess": null,
+    "adapted": null,
+    "cards": [
+     "How does this formula work in 3D space like finding a box diagonal",
+     "How do construction workers or painters use this in real life",
+     "Try an example where the hypotenuse is not a whole number",
+     "Give me a simple visual picture of squaring the sides",
+     "Show me a geometric proof of why a squared plus b squared equals c sq\u2026",
+     "How do we find distance between two points on a coordinate plane"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "How do construction workers or painters use this in real life",
+    "answer_words": 177,
+    "guess": {
+     "hit": true,
+     "predicted": "where it is used",
+     "picked": "where it is used",
+     "hits": 5,
+     "guesses": 10,
+     "picks_seen": 29,
+     "because": [
+      "You opened a chat with \u201cwhere it is used\u201d 5 of 5 times.",
+      "You took \u201cwhere it is used\u201d 9 of your 29 picks so far.",
+      "Other learners take \u201cwhere it is used\u201d 31% of the time.",
+      "Counted for less: 6 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Picture a stretching triangle made of rubber bands",
+     "Try a case where the sides are not nice whole numbers",
+     "Check a 6 by 8 corner using a 10 foot tape measure",
+     "See how navigators or sailors use right triangles at sea",
+     "Show me how to find the distance between two points on a grid",
+     "Explain why the 3-4-5 rule actually forces a right angle"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Check a 6 by 8 corner using a 10 foot tape measure",
+    "answer_words": 137,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 30,
+     "because": [
+      "Right after \u201cwhere it is used\u201d, you went to \u201cwork through one concrete example\u201d 8 of 8 times.",
+      "You took \u201cwork through one concrete example\u201d 16 of your 30 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 6 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "How landscapers use stakes and string lines to lay out garden beds",
+     "Picture stretching a string diagonally across a rectangular room",
+     "Show me why the Pythagorean theorem $a^2 + b^2 = c^2$ holds true geom\u2026",
+     "How to check if a 3D box frame is square using diagonal measurements",
+     "How to check for square when your tape measure is too short",
+     "Calculate the diagonal for a 5-foot by 12-foot wall corner"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate the diagonal for a 5-foot by 12-foot wall corner",
+    "answer_words": 117,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 6,
+     "guesses": 10,
+     "picks_seen": 31,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 4 of 11 times.",
+      "You took \u201cwork through one concrete example\u201d 17 of your 31 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 6 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Explain why the Pythagorean theorem works geometrically",
+     "How to square a large deck frame using the 3-4-5 rule",
+     "Calculate the diagonal when lengths are not whole numbers",
+     "Find the diagonal distance across a 3D rectangular room",
+     "Picture forming a square grid to visualize squared numbers",
+     "Calculate the diagonal for an 8-foot by 15-foot corner"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate the diagonal for an 8-foot by 15-foot corner",
+    "answer_words": 96,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 7,
+     "guesses": 10,
+     "picks_seen": 32,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 5 of 12 times.",
+      "You took \u201cwork through one concrete example\u201d 18 of your 32 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 6 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Calculate the diagonal for a non-integer size like 4 by 5 feet",
+     "Show me why the sum of squares of the legs equals the hypotenuse",
+     "Learn how to find a diagonal in three dimensions for a box",
+     "Picture right triangles as stretched ropes anchored at three corners",
+     "Explore how to generate any Pythagorean triple using algebra",
+     "See how architects use these triples to design roof trusses"
+    ],
+    "repeats_taken": [],
+    "error": null
+   },
+   {
+    "kind": "picked_card",
+    "text": "Calculate the diagonal for a non-integer size like 4 by 5 feet",
+    "answer_words": 140,
+    "guess": {
+     "hit": true,
+     "predicted": "work through one concrete example",
+     "picked": "work through one concrete example",
+     "hits": 8,
+     "guesses": 10,
+     "picks_seen": 33,
+     "because": [
+      "Right after \u201cwork through one concrete example\u201d, you went to \u201cwork through one concrete example\u201d 6 of 13 times.",
+      "You took \u201cwork through one concrete example\u201d 19 of your 33 picks so far.",
+      "Other learners take \u201cwork through one concrete example\u201d 23% of the time.",
+      "Counted for less: 6 taps on the first card shown."
+     ]
+    },
+    "adapted": null,
+    "cards": [
+     "Find a missing side length when you already know the diagonal",
+     "Picture rounding fractions to the nearest mark on a tape measure",
+     "Show why decimals like 0.8 feet equal 9.6 inches",
+     "Calculate the exact diagonal for a room using decimals",
+     "Calculate the diagonal for a 3 by 4.5 foot frame",
+     "See how tile setters use non-integer diagonals for layout"
+    ],
+    "repeats_taken": [],
+    "error": null
+   }
+  ]
+ }
+]

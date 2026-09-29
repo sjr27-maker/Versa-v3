@@ -38,8 +38,9 @@ class WebSocketChatTransport implements ChatTransport {
 
   final WebSocketChannel _channel;
 
-  static Future<WebSocketChatTransport> connect(Uri uri) async {
-    final channel = WebSocketChannel.connect(uri);
+  /// `protocols`: the session token as a subprotocol (api.dart AuthSession).
+  static Future<WebSocketChatTransport> connect(Uri uri, {List<String>? protocols}) async {
+    final channel = WebSocketChannel.connect(uri, protocols: protocols);
     await channel.ready;
     return WebSocketChatTransport._(channel);
   }

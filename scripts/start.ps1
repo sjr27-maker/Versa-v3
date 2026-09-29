@@ -11,7 +11,7 @@
   .\scripts\start.ps1              # real Gemini (needs GEMINI_API_KEY in .env)
   .\scripts\start.ps1 -Stub        # no key, no cost: canned model answers
   .\scripts\start.ps1 -Rebuild     # rebuild the web app first (after changing app/lib)
-  .\scripts\start.ps1 -Lan         # also reachable from a phone on the same Wi-Fi (NO login: trusted networks only)
+  .\scripts\start.ps1 -Lan         # also reachable from a phone on the same Wi-Fi (sign-in on; needs VERSA_SESSION_SECRET in .env)
 #>
 param(
     [switch]$Stub,

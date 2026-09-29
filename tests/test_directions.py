@@ -147,10 +147,15 @@ async def test_answer_then_directions_pick_pass_and_order_of_approach(clean_pool
             assert [(e["kind"], e["slot"], e["next_turn_index"]) for e in events] == [
                 ("picked", "why", 1), ("passed", None, 2)]
             assert all(e["elapsed_ms"] >= 0 for e in events)
-            # the generator never saw the learner model: only these inputs
+            # the generator never saw the learner model: only these inputs --
+            # and, once they have taken one, the directions taken in this chat
             inputs = await conn.fetch(
-                "SELECT input_json FROM node_calls WHERE session_id = $1 AND node_name = 'SuggestDirections'", sid)
-            assert inputs and all(set(r["input_json"]) == {"message", "answer", "depth", "breadth"} for r in inputs)
+                "SELECT input_json FROM node_calls WHERE session_id = $1 AND node_name = 'SuggestDirections' "
+                "ORDER BY turn_index", sid)
+            assert [set(r["input_json"]) - {"message", "answer", "depth", "breadth"} for r in inputs] == [
+                set(), {"path_so_far"}, {"path_so_far"}]
+            assert inputs[1]["input_json"]["path_so_far"] == [_CARDS["why"]]
+            assert inputs[2]["input_json"]["path_so_far"] == [_CARDS["why"]]  # a pass adds nothing
 
         # the order of approach reaches session-end consolidation
         await live.loop.consolidate_session(UUID(sid))
@@ -308,3 +313,16 @@ async def test_nothing_to_go_from_offers_no_strip_and_records_nothing(clean_pool
                 "SELECT output_json FROM node_calls WHERE node_name = 'SuggestDirections'") == {}
     finally:
         await _stop(live)
+
+
+def test_later_sets_build_on_the_path_taken_and_the_first_is_unchanged():
+    from versa.directions import directions_prompt
+    from versa.session_knobs import SessionKnobs
+
+    first = directions_prompt("what is a derivative?", "a rate of change", SessionKnobs())
+    assert "already taken" not in first
+    assert directions_prompt("what is a derivative?", "a rate of change", SessionKnobs(), []) == first
+    later = directions_prompt("what is a derivative?", "a rate of change", SessionKnobs(),
+                              ["Show me with a speedometer", "Work one out: x^3"])
+    assert '"Show me with a speedometer" -> "Work one out: x^3"' in later
+    assert "never re-offer" in later and "same for every slot" in later
