@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -42,8 +43,17 @@ class StagePainter extends CustomPainter {
   StagePainter(this.engine) : super(repaint: engine);
   final StageEngine engine;
 
+  /// Words asked for while painting a thing, drawn after everything else
+  /// (with the transform they were asked for under), so no object, the
+  /// slime or a later prop can cover them.
+  final List<(Float64List, void Function(Canvas))> _words = [];
+
+  void _later(Canvas canvas, void Function(Canvas) draw) => _words.add((canvas.getTransform(), draw));
+
   @override
   void paint(Canvas canvas, Size size) {
+    _words.clear();
+    final base = canvas.getTransform();
     final t = engine.time;
     final groundY = kGroundY * size.height;
     final room = engine.worldT;
@@ -110,6 +120,15 @@ class StagePainter extends CustomPainter {
       if (p.kind == PropKind.link) _paintLink(canvas, size, p, t);
     }
     _paintParticles(canvas, size, t);
+    // back to each word's own transform, from the one the frame started in
+    final undo = Matrix4.fromFloat64List(base)..invert();
+    for (final (m, draw) in _words) {
+      canvas.save();
+      canvas.transform((undo.clone()..multiply(Matrix4.fromFloat64List(m))).storage);
+      draw(canvas);
+      canvas.restore();
+    }
+    _words.clear();
   }
 
   // ------------------------------------------------------------- 3D world
@@ -1086,7 +1105,7 @@ class StagePainter extends CustomPainter {
         canvas.drawLine(c, hand(step, r * 0.72), _stroke(Paper.accent.withValues(alpha: alpha), 2.2));
         canvas.drawCircle(c, r * 0.07, Paint()..color = ink);
         _label(canvas, watch ? '${reading.toStringAsFixed(1)} s' : _clockText(reading), c + Offset(0, r * 0.42),
-            r * 0.24, ink, alpha, bold: true);
+            r * 0.24, ink, alpha, bold: true, inline: true);
         if (tag != null) _caption(canvas, tag, const Offset(0, 14), alpha, t - p.shakeUntil);
 
       case PropKind.counter:
@@ -1103,10 +1122,10 @@ class StagePainter extends CustomPainter {
         canvas.clipRRect(screen);
         final unit = p.label == null ? '' : ' ${p.label}';
         final digits = const Color(0xFF9EF0A8);
-        _label(canvas, '$n$unit', Offset(0, -h / 2 + (1 - roll) * h * 0.35), h * 0.42, digits, alpha * roll, bold: true);
+        _label(canvas, '$n$unit', Offset(0, -h / 2 + (1 - roll) * h * 0.35), h * 0.42, digits, alpha * roll, bold: true, inline: true);
         if (roll < 1) {
           _label(canvas, '${n - 1}$unit', Offset(0, -h / 2 - roll * h * 0.35), h * 0.42, digits, alpha * (1 - roll),
-              bold: true);
+              bold: true, inline: true);
         }
         canvas.restore();
         if (tag != null) _caption(canvas, tag, const Offset(0, 14), alpha, t - p.shakeUntil);
@@ -1247,7 +1266,10 @@ class StagePainter extends CustomPainter {
   }
 
   /// A little tag under an emoji, that flashes when it changes.
-  void _caption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) {
+  void _caption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) =>
+      _later(canvas, (c) => _drawCaption(c, text, center, alpha, sinceChange));
+
+  void _drawCaption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -1322,21 +1344,39 @@ class StagePainter extends CustomPainter {
     return path.shift(Offset(0, -r));
   }
 
+  /// A word on or beside a thing. Drawn last, ringed by a halo in the
+  /// opposite tone so it reads over whatever is behind it. `inline`: a
+  /// reading shown IN an instrument (a counter's screen, a clock face),
+  /// drawn in place, under the instrument's own clip.
   void _label(Canvas canvas, String text, Offset center, double fontSize, Color color, double alpha,
-      {bool bold = false, bool box = false}) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          fontSize: fontSize.clamp(9.0, 22.0),
-          color: color.withValues(alpha: alpha),
-          fontWeight: bold || box ? FontWeight.w700 : FontWeight.w500,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-      textAlign: TextAlign.center,
-    )..layout(maxWidth: 160);
-    tp.paint(canvas, center - Offset(tp.width / 2, tp.height / 2));
+      {bool bold = false, bool box = false, bool inline = false}) {
+    TextPainter painter(TextStyle style) => TextPainter(
+          text: TextSpan(text: text, style: style),
+          textDirection: TextDirection.ltr,
+          textAlign: TextAlign.center,
+        )..layout(maxWidth: 160);
+    final style = TextStyle(
+      fontSize: fontSize.clamp(9.0, 22.0),
+      fontWeight: bold || box ? FontWeight.w700 : FontWeight.w500,
+    );
+    final tp = painter(style.copyWith(color: color.withValues(alpha: alpha)));
+    final at = center - Offset(tp.width / 2, tp.height / 2);
+    if (inline) {
+      tp.paint(canvas, at);
+      return;
+    }
+    final light = color.computeLuminance() > 0.5;
+    final halo = painter(style.copyWith(
+      foreground: Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.2
+        ..strokeJoin = StrokeJoin.round
+        ..color = (light ? Paper.ink : Paper.surface).withValues(alpha: alpha * (light ? 0.55 : 0.92)),
+    ));
+    _later(canvas, (c) {
+      halo.paint(c, at);
+      tp.paint(c, at);
+    });
   }
 
   // ----------------------------------------------------------------- blob

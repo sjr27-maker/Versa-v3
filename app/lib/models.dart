@@ -200,6 +200,97 @@ class StyleGate {
 /// (server: GET /api/learners/{id}/style-patterns). `status` is confirmed
 /// (every gate passed), emerging (clear, not yet through every gate) or
 /// fading (clear before, not lately).
+/// Experimenting on a miss (server: style_patterns.miss_follow_through):
+/// how often the cards missed and the learner asked their own question, how
+/// many of those read as one of the ways out, and whether that way was taken
+/// when a later hand offered it -- and taken again in a later chat.
+class MissFollowThrough {
+  const MissFollowThrough({
+    this.misses = 0,
+    this.read = 0,
+    this.inHand = 0,
+    this.offeredLater = 0,
+    this.taken = 0,
+    this.held = 0,
+  });
+
+  final int misses, read, inHand, offeredLater, taken, held;
+
+  factory MissFollowThrough.fromJson(Map<String, dynamic> j) => MissFollowThrough(
+        misses: (j['misses'] as num?)?.toInt() ?? 0,
+        read: (j['read'] as num?)?.toInt() ?? 0,
+        inHand: (j['in_hand'] as num?)?.toInt() ?? 0,
+        offeredLater: (j['offered_later'] as num?)?.toInt() ?? 0,
+        taken: (j['taken'] as num?)?.toInt() ?? 0,
+        held: (j['held'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// A move this learner asked for that no card type covers (server:
+/// StyleReader.learner_moves) -- a way of thinking the cards don't offer yet.
+class NewMove {
+  const NewMove({required this.label, this.times = 0, this.chats = 0, this.others = 0});
+  final String label;
+  final int times, chats, others;
+
+  factory NewMove.fromJson(Map<String, dynamic> j) => NewMove(
+        label: j['label'] as String? ?? '',
+        times: (j['times'] as num?)?.toInt() ?? 0,
+        chats: (j['chats'] as num?)?.toInt() ?? 0,
+        others: (j['others'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// Everything `GET .../style-patterns` returns.
+class StyleReport {
+  const StyleReport({
+    this.patterns = const [],
+    this.misses = const MissFollowThrough(),
+    this.newMoves = const [],
+  });
+  final List<StylePattern> patterns;
+  final MissFollowThrough misses;
+  final List<NewMove> newMoves;
+}
+
+/// Where a card type sits in the space (server: directions.COORDS): its
+/// family and its place on four axes -- concrete, depth, breadth, practical.
+class SpacePoint {
+  const SpacePoint({required this.family, required this.coords, required this.label});
+  final String family;
+  final List<double> coords;
+  final String label;
+
+  double get concrete => coords.isNotEmpty ? coords[0] : 0;
+  double get depth => coords.length > 1 ? coords[1] : 0;
+  double get breadth => coords.length > 2 ? coords[2] : 0;
+
+  factory SpacePoint.fromJson(Map<String, dynamic> json) => SpacePoint(
+        family: json['family'] as String? ?? '',
+        coords: [for (final c in (json['coords'] as List? ?? const [])) (c as num).toDouble()],
+        label: json['label'] as String? ?? '',
+      );
+}
+
+/// One thing a pattern rests on: a pick (the card taken, the hand, whether
+/// it supports the pattern, which chat) or, for a range, a session's level.
+class StyleEvidence {
+  const StyleEvidence({this.card, this.offered = const [], this.supports = false, this.session, this.value});
+  final String? card;
+  final List<String> offered;
+  final bool supports;
+  final String? session;
+  final int? value;
+
+  factory StyleEvidence.fromJson(Map<String, dynamic> json) => StyleEvidence(
+        card: json['card'] as String?,
+        offered: [for (final o in (json['offered'] as List? ?? const [])) o.toString()],
+        supports: json['supports'] == true,
+        session: json['session'] as String?,
+        value: (json['value'] as num?)?.toInt(),
+      );
+}
+
 class StylePattern {
   const StylePattern({
     required this.kind,
@@ -207,6 +298,12 @@ class StylePattern {
     required this.statement,
     required this.status,
     this.gates = const [],
+    this.evidence = const [],
+    this.space = const {},
+    this.hits = 0,
+    this.trials = 0,
+    this.rate,
+    this.facetOf,
   });
 
   final String kind;
@@ -215,7 +312,37 @@ class StylePattern {
   final String status;
   final List<StyleGate> gates;
 
-  factory StylePattern.fromJson(Map<String, dynamic> json) => StylePattern(
+  /// What it rests on, oldest first -- drawn as a sky when it is opened.
+  final List<StyleEvidence> evidence;
+
+  /// Where every card type sits (shared by all patterns of one response).
+  final Map<String, SpacePoint> space;
+
+  /// Later picks guessed from earlier ones, and how many were right.
+  final int hits;
+  final int trials;
+
+  /// A lean's signed value on its axis (+ concrete / deeper / wider /
+  /// practical); for other kinds, how often it was taken when offered.
+  final double? rate;
+
+  /// Set when this is a facet of a stronger fact pointing the same way:
+  /// that fact's [id]. Null for a fact of its own.
+  final String? facetOf;
+
+  /// "<kind>:<key>" -- what a facet points back to.
+  String get id => '$kind:$key';
+
+  factory StylePattern.fromJson(Map<String, dynamic> json, {Map<String, SpacePoint> space = const {}}) =>
+      StylePattern(
+        space: space,
+        hits: (json['hits'] as num?)?.toInt() ?? 0,
+        trials: (json['trials'] as num?)?.toInt() ?? 0,
+        rate: (json['rate'] as num?)?.toDouble(),
+        facetOf: json['facet_of'] as String?,
+        evidence: [
+          for (final e in (json['evidence'] as List? ?? const [])) StyleEvidence.fromJson(e as Map<String, dynamic>),
+        ],
         kind: json['kind'] as String? ?? '',
         key: json['key'] as String? ?? '',
         statement: json['statement'] as String? ?? '',
@@ -290,6 +417,9 @@ class ChatMessage {
   /// Set when the answer was shaped to the learner's usual way into an idea.
   AnswerShaping? adapted;
 
+  /// A short reply to chatter ("ok", "thanks"): no turn behind it.
+  bool chatter = false;
+
   /// Being rewritten at new slider levels (the text streams in place).
   bool rewriting = false;
 
@@ -309,6 +439,16 @@ class ChatMessage {
   /// Cleared once the learner moves on (picks one or asks their own).
   List<DirectionCard> directions = const [];
 
+  /// The hand those directions are (server: a set dealt from a pool) --
+  /// what "other directions" asks to replace.
+  String? directionsSetId;
+
+  /// "Other directions" was asked for and the next hand hasn't come yet.
+  bool moreDirectionsPending = false;
+
+  /// The server has no other directions left for this answer.
+  bool directionsExhausted = false;
+
   /// This reply continues the one before it: the learner took the fork
   /// link with this text (shown as a small "->" heading, no user bubble).
   String? continuationOf;
@@ -324,9 +464,13 @@ class ChatMessage {
 
 /// One card of a "where this could go" strip.
 class DirectionCard {
-  const DirectionCard({required this.id, required this.text});
+  const DirectionCard({required this.id, required this.text, this.family});
   final String id;
   final String text;
+
+  /// real / deeper / simpler / wider (server: directions.FAMILY_OF) -- where
+  /// the card sits on the compass. Null from an older server.
+  final String? family;
 }
 
 // --------------------------------------------------------- server events
@@ -370,6 +514,14 @@ class Done extends ServerEvent {
 class ErrorEvent extends ServerEvent {
   const ErrorEvent(this.message);
   final String message;
+}
+
+/// "ok", "thanks!", "haha": a reaction, not a question (server chatter.py).
+/// A short reply with no turn behind it -- nothing was analysed or stored,
+/// and whatever cards or options were open are still open.
+class ChatterEvent extends ServerEvent {
+  const ChatterEvent(this.text);
+  final String text;
 }
 
 /// Live rewrite of the latest answer at new slider levels. Every frame
@@ -448,9 +600,19 @@ class StageEnd extends ServerEvent {
 /// ChatController.progressEvents.
 /// The directions offered under an answered turn (after its `done`).
 class DirectionsEvent extends ServerEvent {
-  const DirectionsEvent(this.turnIndex, this.cards);
+  const DirectionsEvent(this.turnIndex, this.cards, {this.setId});
   final int turnIndex;
   final List<DirectionCard> cards;
+
+  /// The hand's id: "other directions" names it. Null from an older server.
+  final String? setId;
+}
+
+/// No other directions are left for this answer ("other directions" asked
+/// once the server had nothing more to deal).
+class DirectionsExhaustedEvent extends ServerEvent {
+  const DirectionsExhaustedEvent(this.turnIndex);
+  final int turnIndex;
 }
 
 class ProgressEvent extends ServerEvent {
@@ -517,6 +679,8 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
       );
     case 'error':
       return ErrorEvent(json['message'] as String? ?? 'something went wrong');
+    case 'chatter':
+      return ChatterEvent(json['text'] as String? ?? '');
     case 'paywall':
       return PaywallEvent(json);
     case 'sparks':
@@ -559,9 +723,12 @@ ServerEvent? parseServerEvent(Map<String, dynamic> json) {
         (json['turn_index'] as num?)?.toInt() ?? -1,
         [
           for (final c in (json['cards'] as List? ?? const []))
-            DirectionCard(id: c['id'] as String, text: c['text'] as String),
+            DirectionCard(id: c['id'] as String, text: c['text'] as String, family: c['family'] as String?),
         ],
+        setId: json['set_id'] as String?,
       );
+    case 'directions_exhausted':
+      return DirectionsExhaustedEvent((json['turn_index'] as num?)?.toInt() ?? -1);
     case 'progress':
       return ProgressEvent(
         lessonId: json['lesson_id'] as String? ?? '',

@@ -17,7 +17,8 @@ def test_directions_module_never_deletes_or_updates():
 
 def test_directions_migrations_have_no_delete_or_update():
     base = Path(directions_module.__file__).resolve().parent / "migrations"
-    for name in ("078_directions.sql", "079_direction_presentation.sql"):
+    for name in ("078_directions.sql", "079_direction_presentation.sql", "086_card_library.sql", "087_compass.sql",
+                 "088_direction_misses.sql", "089_direction_miss_readings.sql"):
         code = "\n".join(line.split("--", 1)[0] for line in (base / name).read_text(encoding="utf-8").splitlines())
         assert not re.search(r"\bDELETE\b", code, re.IGNORECASE), name
         assert not re.search(r"\bUPDATE\b", code, re.IGNORECASE), name

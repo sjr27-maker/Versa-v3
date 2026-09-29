@@ -93,7 +93,8 @@ import pytest
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_the_reader_splits_real_rows_and_flags_a_pick_after_a_wrong_check(transcript, clean_pool, learner_id):
-    from versa.directions import SLOTS, DirectionStore, shuffled_positions
+    from versa.directions import CLASSIC_SLOTS as SLOTS
+    from versa.directions import DirectionStore, shuffled_positions
     from versa.knob_events import KnobEventStore
     from versa.pick_prediction import PredictionStore
     from versa.session_knobs import SessionKnobs

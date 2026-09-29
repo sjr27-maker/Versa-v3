@@ -144,8 +144,9 @@ async def test_overview_shows_every_status_and_hides_archived_by_default(
     async with httpx.AsyncClient(base_url=live.http) as client:
         out = (await client.get(f"/api/learners/{lid}/thinking-style")).json()
     assert out["promotion_threshold"] == 5
-    assert [c["id"] for c in out["confirmed"]] == [str(confirmed.id)]
-    assert [c["id"] for c in out["retired"]] == [str(retired_c.id)]
+    # the retired detector's candidates stay on record but are not shown
+    assert out["confirmed"] == [] and out["emerging"] == [] and out["retired"] == []
+    assert confirmed.id and retired_c.id
     assert [c["id"] for c in out["claims"]] == [str(claim.id)]
 
     async with httpx.AsyncClient(base_url=live.http) as client:

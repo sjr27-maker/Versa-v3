@@ -8,6 +8,7 @@ import '../stage/engine.dart';
 import '../stage/script.dart';
 import '../stage/stage_view.dart';
 import '../theme.dart';
+import 'directions_compass.dart';
 
 /// The stage: the slime character that acts out the conversation (usable
 /// in any mode via the "Animations" knob -- see AppState.showStagePanel).
@@ -124,6 +125,7 @@ class _StagePanelState extends State<StagePanel> {
       case StageStart(:final turnIndex):
         // One animation of the whole explanation, starting with the answer.
         _turn = turnIndex;
+        _live = true; // the compass waits until the performance is over
         _recording = [];
         _engine.beginLive();
         // the answer just started: perk up at once, before the director's
@@ -139,6 +141,7 @@ class _StagePanelState extends State<StagePanel> {
         _engine.enqueue(StageAction.fromJson(action));
       case StageEnd():
         _engine.endLive();
+        _live = false;
         if (_recording.isNotEmpty) {
           setState(() {
             _lastPerformance = List.unmodifiable(_recording);
@@ -264,6 +267,17 @@ class _StagePanelState extends State<StagePanel> {
 
   bool get _canReplay => _lastPerformance.isNotEmpty;
 
+  /// A performance is streaming in (stage_start seen, stage_end not yet).
+  bool _live = false;
+
+  /// The latest answer, when it has directions to show as a compass.
+  ChatMessage? get _compassMessage {
+    final chat = widget.chat;
+    if (chat == null || chat.directionsStyle != 'compass' || chat.messages.isEmpty) return null;
+    final last = chat.messages.last;
+    return last.role == Role.tutor && last.directions.isNotEmpty ? last : null;
+  }
+
   /// Play the last answer's performance again from the top -- or, while a
   /// skit is playing, stop it. Notes already pinned aren't pinned twice.
   void _replayOrStop() {
@@ -326,7 +340,42 @@ class _StagePanelState extends State<StagePanel> {
       // The engine too: a skit's own ask makes choices clickable without the
       // chat changing at all.
       listenable: Listenable.merge([_engine, ?widget.chat]),
-      builder: (context, _) => StageView(engine: _engine, onChoice: _canChoose ? _onChoice : null),
+      builder: (context, _) => Stack(children: [
+        Positioned.fill(child: StageView(engine: _engine, onChoice: _canChoose ? _onChoice : null)),
+        // "Where next" as a compass: only once the performance is over (it
+        // must not cover the animation -- 2026-09-30), fading in over a soft
+        // wash so the finished scene stays visible behind it; a replay hides
+        // it again until the replay ends.
+        if (!compact && _compassMessage != null && !_live && !_engine.running) ...[
+          Positioned.fill(
+            child: IgnorePointer(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: 1),
+                duration: const Duration(milliseconds: 450),
+                builder: (context, t, _) => ColoredBox(color: Paper.page.withValues(alpha: .62 * t)),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: Align(
+              alignment: Alignment.topCenter,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: DirectionsCompass(
+                    key: const ValueKey('stage-compass'),
+                    cards: _compassMessage!.directions,
+                    enabled: widget.chat!.canSend,
+                    onPick: (c) => widget.chat!.pickDirection(_compassMessage!, c),
+                    onStage: true,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ]),
     ));
 
     final panel = Container(

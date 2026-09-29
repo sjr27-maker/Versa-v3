@@ -175,7 +175,14 @@ class ChatController extends ChangeNotifier {
   /// finished answer (not a set of options, not an error).
   ChatMessage? get _rewritable {
     if (messages.isEmpty) return null;
-    final last = messages.last;
+    // chatter ("ok" -> "Great.") after an answer doesn't replace it: the
+    // answer is still the latest thing a rewrite can change
+    var i = messages.length - 1;
+    while (i > 0 && messages[i].chatter && messages[i - 1].role == Role.user) {
+      i -= 2;
+    }
+    if (i < 0) return null;
+    final last = messages[i];
     if (last.role != Role.tutor || last.hasOptions || last.isError || last.pending) return null;
     if (last.text.isEmpty) return null;
     return last;
@@ -255,6 +262,7 @@ class ChatController extends ChangeNotifier {
   void send(String text) {
     final trimmed = text.trim();
     if (!canSend || trimmed.isEmpty) return;
+    _parkOpenChoices();
     _invalidateStaleOptions();
     _closeDirections(); // asking their own question passes the strip
     messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed));
@@ -299,6 +307,30 @@ class ChatController extends ChangeNotifier {
     if (fork) _current!.continuationOf = card.text;
     _transport!.pickDirection(card.id, stage: stageEnabled, directions: directionsStyle, continueAnswer: fork);
     _notify();
+  }
+
+  /// "Other directions": none of these matched, deal another hand. The
+  /// cards stay until the new ones arrive (or the server has no more).
+  void moreDirections(ChatMessage message) {
+    final setId = message.directionsSetId;
+    if (!canSend || setId == null || message.moreDirectionsPending || !identical(messages.last, message)) return;
+    message.moreDirectionsPending = true;
+    _transport!.moreDirections(setId);
+    _notify();
+  }
+
+  /// What was still open under the latest reply when they typed: if the
+  /// server answers with chatter (an "ok" is not a question), it comes back.
+  ChatMessage? _parkedFrom;
+  List<DirectionCard> _parkedCards = const [];
+  String? _parkedSetId;
+  bool _parkedOptionsOpen = false;
+
+  void _parkOpenChoices() {
+    _parkedFrom = messages.isNotEmpty && messages.last.role == Role.tutor ? messages.last : null;
+    _parkedCards = _parkedFrom?.directions ?? const [];
+    _parkedSetId = _parkedFrom?.directionsSetId;
+    _parkedOptionsOpen = _parkedFrom != null && _parkedFrom!.hasOptions && _parkedFrom!.optionsOpen;
   }
 
   void _closeDirections() {
@@ -446,13 +478,21 @@ class ChatController extends ChangeNotifier {
       case RegenEnded(:final requestId):
         if (requestId != _activeRegenId) return;
         _endRewrite(restore: true);
-      case DirectionsEvent(:final turnIndex, :final cards):
+      case DirectionsExhaustedEvent(:final turnIndex):
+        if (messages.isEmpty) return;
+        final last = messages.last;
+        if (last.role != Role.tutor || last.turnIndex != turnIndex) return;
+        last.moreDirectionsPending = false;
+        last.directionsExhausted = true;
+      case DirectionsEvent(:final turnIndex, :final cards, :final setId):
         // Only under the answer it follows, and only while that answer is
         // still the latest thing in the chat.
         if (messages.isEmpty) return;
         final last = messages.last;
         if (last.role != Role.tutor || last.turnIndex != turnIndex || last.hasOptions) return;
         last.directions = cards;
+        last.directionsSetId = setId;
+        last.moreDirectionsPending = false;
       case AdaptedEvent(:final shaping):
         _current?.adapted = shaping;
       case GuessEvent(:final guess):
@@ -468,6 +508,24 @@ class ChatController extends ChangeNotifier {
             break;
           }
         }
+      case ChatterEvent(:final text):
+        final m = _current;
+        if (m == null) return;
+        m.pending = false;
+        m.streaming = false;
+        m.chatter = true;
+        m.text = text;
+        final from = _parkedFrom;
+        if (from != null) {
+          // nothing was passed: the cards move down under the reply, still
+          // takeable, and the readings they typed past are open again
+          m.turnIndex = from.turnIndex;
+          m.directions = _parkedCards;
+          m.directionsSetId = _parkedSetId;
+          if (_parkedOptionsOpen) from.optionsOpen = true;
+        }
+        _parkedFrom = null;
+        _finishTurn();
       case ErrorEvent(:final message):
         final m = _current;
         if (m != null) {

@@ -175,8 +175,32 @@ void main() {
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
       await tester.tap(find.byKey(const ValueKey('nav-Thinking style')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('Nothing confirmed yet'), findsOneWidget);
-      expect(find.textContaining('5 independent sessions'), findsOneWidget);
+      expect(find.textContaining('Nothing clear yet'), findsOneWidget);
+      expect(find.textContaining('Nothing observed yet'), findsOneWidget);
+    });
+
+    testWidgets('Thinking style says what happened when the cards missed', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final id = backend.learnerIdFor('Asha');
+      backend.stylePatternsFor[id] = [
+        {'kind': 'asks_for', 'key': 'why', 'status': 'emerging', 'gates': {},
+         'statement': 'When the cards miss, asks for “why it works” (3 of 4 times).'},
+      ];
+      backend.missesFor[id] = {'misses': 5, 'read': 4, 'in_hand': 1, 'offered_later': 2, 'taken': 1, 'held': 1};
+      backend.newMovesFor[id] = [
+        {'label': 'where the rule stops working', 'times': 3, 'chats': 2, 'others': 0},
+      ];
+      await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byKey(const ValueKey('nav-Thinking style')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('miss-note')), findsOneWidget);
+      expect(find.textContaining('pointed to a way out 4 times'), findsOneWidget);
+      expect(find.textContaining('you took it 1 of 2 times, and 1 of those held in a later chat'), findsOneWidget);
+      // their own ways of thinking the cards don't offer yet
+      expect(find.byKey(const ValueKey('new-moves')), findsOneWidget);
+      expect(find.textContaining('where the rule stops working'), findsOneWidget);
+      expect(find.textContaining('3 times in 2 chats'), findsOneWidget);
     });
 
     testWidgets('Thinking style shows how you explore, with its checks on tap', (tester) async {
@@ -196,17 +220,29 @@ void main() {
           'gates': {'sessions': {'ok': false, 'have': 'set it in 2 sessions', 'need': '>= 3'}},
         },
       ];
+      backend.stylePatternsFor[backend.learnerIdFor('Asha')]!.add({
+        'kind': 'lean', 'key': 'concrete', 'status': 'confirmed', 'facet_of': 'way_in:example',
+        'statement': 'Takes the more concrete card on offer (lean +0.55).', 'gates': {},
+      });
       await _boot(tester, backend: backend, prefs: {'learner_label': 'Asha'});
       await tester.tap(find.byKey(const ValueKey('nav-Thinking style')));
       await tester.pumpAndSettle();
       expect(find.text('How you explore'), findsOneWidget);
+      // a facet is folded into its fact: one card, "also seen as"
+      expect(find.text('Takes the more concrete card on offer (lean +0.55).'), findsNothing);
+      expect(find.byKey(const ValueKey('facets-way_in-example')), findsOneWidget);
       expect(find.text('CONFIRMED'), findsOneWidget);
       expect(find.text('EMERGING · 0 OF 1 CHECKS'), findsOneWidget);
       expect(find.textContaining('4 different topics'), findsNothing);
+      // tapping a fact opens it drawn as a sky, with its checks beneath
       await tester.tap(find.byKey(const ValueKey('pattern-way_in-example')));
       await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('pattern-sky')), findsOneWidget);
+      expect(find.byKey(const ValueKey('sky-paint')), findsOneWidget);
       expect(find.text('topics: 4 different topics (needs >= 3)'), findsOneWidget);
       expect(find.textContaining('5 of 6 later picks'), findsOneWidget);
+      expect(find.text('Also seen as'), findsOneWidget);
+      expect(find.textContaining('Takes the more concrete card on offer'), findsOneWidget);
     });
 
     testWidgets('Home can start the Sandbox chat', (tester) async {
@@ -710,6 +746,151 @@ void main() {
       });
       expect(parsed.record, '3 of your last 4');
       expect(parsed.because, ['a', 'b']);
+    });
+
+    testWidgets('other directions deals a new hand in place, and hides once none are left', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'Show me with a speedometer'),
+        DirectionCard(id: 'd2', text: 'Work one out: x^3'),
+        DirectionCard(id: 'd3', text: 'Why a limit'),
+      ], setId: 'set-1'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('more-directions')));
+      await tester.pump();
+      expect(transport.sent.last, {'type': 'more_directions', 'set_id': 'set-1'});
+      expect(find.text('dealing…'), findsOneWidget);
+      expect(find.text('Work one out: x^3'), findsOneWidget, reason: 'the old hand stays until the new one lands');
+
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd4', text: 'Where engineers use it'),
+        DirectionCard(id: 'd5', text: 'The one-line version'),
+        DirectionCard(id: 'd6', text: 'Same idea in physics'),
+      ], setId: 'set-2'));
+      await tester.pumpAndSettle();
+      expect(find.text('Where engineers use it'), findsOneWidget);
+      expect(find.text('Work one out: x^3'), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('more-directions')));
+      await tester.pump();
+      expect(transport.sent.last, {'type': 'more_directions', 'set_id': 'set-2'});
+      transport.emit(const DirectionsExhaustedEvent(0));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('more-directions')), findsNothing);
+      expect(find.text('Where engineers use it'), findsOneWidget, reason: 'the last hand stays');
+    });
+
+    testWidgets('the compass puts one card per family around the answer, and a tap takes it', (tester) async {
+      _size(tester, 1400, 900);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport,
+          prefs: {'learner_label': 'Asha', 'directions_style': 'compass'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      expect(transport.sent.last['directions'], 'compass');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'The formal limit definition', family: 'deeper'),
+        DirectionCard(id: 'd2', text: 'Work one out: x^3', family: 'real'),
+        DirectionCard(id: 'd3', text: 'What comes next: the integral', family: 'wider'),
+        DirectionCard(id: 'd4', text: 'The speedometer picture', family: 'simpler'),
+      ], setId: 's1'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('directions-compass')), findsOneWidget);
+      final up = tester.getCenter(find.text('The formal limit definition'));
+      final left = tester.getCenter(find.text('Work one out: x^3'));
+      final right = tester.getCenter(find.text('What comes next: the integral'));
+      final down = tester.getCenter(find.text('The speedometer picture'));
+      expect(up.dy < left.dy && left.dy < down.dy, isTrue, reason: 'deeper above, simpler below');
+      expect(left.dx < right.dx, isTrue, reason: 'real on the left, wider on the right');
+      expect(find.text('GO DEEPER'), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('direction-d2')));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(transport.sent.last, {'type': 'direction', 'card_id': 'd2', 'directions': 'compass'});
+    });
+
+    testWidgets('on the stage the compass waits until the performance is over', (tester) async {
+      _size(tester, 1400, 900);
+      final transport = FakeTransport();
+      await _boot(tester, backend: FakeBackend(), transport: transport,
+          prefs: {'learner_label': 'Asha', 'directions_style': 'compass', 'show_stage_panel': true});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'how fast does a satellite orbit?');
+      transport.emit(const StageStart(0));
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'About 7.7 km/s.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'Why speed falls with height', family: 'deeper'),
+        DirectionCard(id: 'd2', text: 'Geostationary TV satellites', family: 'real'),
+      ], setId: 's1'));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const ValueKey('stage-compass')), findsNothing, reason: 'the animation is still playing');
+
+      // (Once it ends and the engine has played its last beat it shows -- the
+      // test binding doesn't run the stage's clock, so that half is covered
+      // by "with the stage open beside the chat" with no performance at all.)
+      transport.emit(const StageEnd(0));
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const ValueKey('stage-compass')), findsNothing, reason: 'its last beats are still playing');
+    });
+
+    testWidgets('a hand dealt before switching to the compass still shows every card', (tester) async {
+      _size(tester, 1400, 900);
+      final transport = FakeTransport();
+      await _boot(tester, backend: FakeBackend(), transport: transport,
+          prefs: {'learner_label': 'Asha', 'directions_style': 'compass'});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+      await _type(tester, 'truss forces?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'Loads split.', firstOutputMs: 1, totalMs: 2));
+      // a three-card hand with two "make it real" cards: none may be dropped
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'Real numbers for a Warren truss', family: 'real'),
+        DirectionCard(id: 'd2', text: 'Where bridges use it', family: 'real'),
+        DirectionCard(id: 'd3', text: 'Prove triangles are rigid', family: 'deeper'),
+      ], setId: 's1'));
+      await tester.pumpAndSettle();
+      for (final text in ['Real numbers for a Warren truss', 'Where bridges use it', 'Prove triangles are rigid']) {
+        expect(find.text(text), findsOneWidget);
+      }
+    });
+
+    testWidgets('with the stage open beside the chat, the compass sits on the stage instead', (tester) async {
+      _size(tester, 1400, 900);
+      final transport = FakeTransport();
+      await _boot(tester, backend: FakeBackend(), transport: transport,
+          prefs: {'learner_label': 'Asha', 'directions_style': 'compass', 'show_stage_panel': true});
+      await _openSandbox(tester);
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+      transport.emit(const DirectionsEvent(0, [
+        DirectionCard(id: 'd1', text: 'The formal limit definition', family: 'deeper'),
+        DirectionCard(id: 'd2', text: 'Work one out: x^3', family: 'real'),
+      ], setId: 's1'));
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.byKey(const ValueKey('stage-compass')), findsOneWidget);
+      expect(find.byKey(const ValueKey('directions-compass')), findsOneWidget, reason: 'only once, on the stage');
+      await tester.tap(find.byKey(const ValueKey('direction-d1')));
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(transport.sent.last['card_id'], 'd1');
     });
 
     testWidgets('switched to cards, the directions sit below the answer and a tap asks anew', (tester) async {

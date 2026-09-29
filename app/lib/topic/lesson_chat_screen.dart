@@ -291,6 +291,7 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
                             canPickOption: chat.canSend,
                             onPickOption: (o) => chat.pickOption(m, o),
                             onPickDirection: (c) => chat.pickDirection(m, c),
+                            onMoreDirections: () => chat.moreDirections(m),
                             directionsStyle: app.directionsStyle,
                           );
                         },

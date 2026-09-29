@@ -69,6 +69,7 @@ class SandboxScreen extends StatelessWidget {
                     showStageToggle: showStagePanel && !wide,
                     stageCollapsed: shell.stagePanelCollapsed,
                     optionsOnStage: showStagePanel && !shell.stagePanelCollapsed,
+                    compassOnStage: wide && showStagePanel && !shell.stagePanelCollapsed,
                   ),
                 ),
               ],
@@ -96,6 +97,7 @@ class _ChatColumn extends StatefulWidget {
     this.showStageToggle = false,
     this.stageCollapsed = false,
     this.optionsOnStage = false,
+    this.compassOnStage = false,
   });
   final ChatController chat;
   final ShellState shell;
@@ -110,6 +112,10 @@ class _ChatColumn extends StatefulWidget {
   /// turn then leaves the message list entirely. Minimizing the stage brings
   /// it back inline.
   final bool optionsOnStage;
+
+  /// The stage stands beside the chat (a desktop) and is open: the compass
+  /// shows around the character there instead of under the answer.
+  final bool compassOnStage;
 
   @override
   State<_ChatColumn> createState() => _ChatColumnState();
@@ -217,7 +223,10 @@ class _ChatColumnState extends State<_ChatColumn> {
                               canPickOption: chat.canSend,
                               onPickOption: (o) => chat.pickOption(m, o),
                               onPickDirection: (c) => chat.pickDirection(m, c),
+                            onMoreDirections: () => chat.moreDirections(m),
                               directionsStyle: app.directionsStyle,
+                              // the open stage shows the compass around the character
+                              compassOnStage: widget.compassOnStage,
                               onViewClaimUpdate: (u) => showItemDetail(
                                 context, kind: 'claim', id: u.claimId, onChanged: () {},
                               ),
@@ -556,6 +565,8 @@ class _KnobsRail extends StatelessWidget {
                     segments: const [
                       ButtonSegment(value: 'fork', label: Text('Fork'), tooltip: 'Links the answer ends with'),
                       ButtonSegment(value: 'strip', label: Text('Cards'), tooltip: 'Cards below the answer'),
+                      ButtonSegment(
+                          value: 'compass', label: Text('Compass'), tooltip: 'Four ways out of the answer'),
                     ],
                     selected: {app.directionsStyle},
                     onSelectionChanged: (v) => app.setDirectionsStyle(v.first),

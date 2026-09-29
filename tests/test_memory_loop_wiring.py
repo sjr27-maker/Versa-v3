@@ -67,9 +67,10 @@ def _vec(x: float = 0.0) -> list[float]:
 
 def _make_loop(
     transcript, node_calls, disambiguation_store, llm=None, diagnostics_store=None,
-    learner_fact_store=None, thinking_style_store=None, embedding_client=None,
+    learner_fact_store=None, thinking_style_store=None, embedding_client=None, style_pool=None,
 ):
     return SessionLoop(
+        style_pool=style_pool,
         transcript=transcript,
         node_calls=node_calls,
         llm=llm or StubLLMClient(),
@@ -497,143 +498,32 @@ async def test_no_memory_stores_configured_behaves_exactly_as_before(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_thinking_style_only_increments_on_explicit_confirmation(
+async def test_session_end_no_longer_writes_a_free_text_thinking_style(
     transcript, node_calls, clean_pool, learner_id, disambiguation_store,
     learner_fact_store, thinking_style_store, embedding_client,
 ):
-    """consolidate_session must never grow confirmation_count/session_ids
-    off similarity alone -- only CONFIRM:THINKING_STYLE saying yes."""
-    session_a = await transcript.create_session(learner_id)
-    turn_a = await transcript.record_turn(session_a, 0, "turn a")
+    """The old detector (SummarizeSessionPath -> ConfirmThinkingStyleMatch
+    -> thinking_style_candidates) is retired: the thinking style is read
+    from the learner's own choices (style_patterns.py). Consolidation writes
+    no candidate and makes neither call."""
+    session_id = await transcript.create_session(learner_id)
+    turn = await transcript.record_turn(session_id, 0, "turn a")
     await learner_fact_store.add(
         LearnerFact(
-            learner_id=learner_id, session_id=session_a, turn_index=0,
+            learner_id=learner_id, session_id=session_id, turn_index=0,
             fact_type=LearnerFactType.DIRECT_ANSWER, situation="s", resolution="r",
-            embedding=_vec(1.0), source_turn_id=turn_a,
+            embedding=_vec(1.0), source_turn_id=turn,
         )
     )
-    shared_summary_vector = _vec(1.0)
-    embedding_client.canned["same structure, worded differently"] = shared_summary_vector
-    existing = await thinking_style_store.create_candidate(
-        learner_id, uuid4(), "concrete example before abstract rule", shared_summary_vector
-    )
-
-    llm = StubLLMClient(
-        canned={
-            "SUMMARIZE:PATH": json.dumps({"summary": "same structure, worded differently"}),
-            "CONFIRM:THINKING_STYLE": json.dumps({"confirms": False}),
-        }
-    )
+    llm = StubLLMClient(canned={"SUMMARIZE:PATH": json.dumps({"summary": "a labeled path"})})
     loop = _make_loop(
         transcript, node_calls, disambiguation_store, llm=llm,
-        learner_fact_store=learner_fact_store,
-        thinking_style_store=thinking_style_store, embedding_client=embedding_client,
+        learner_fact_store=learner_fact_store, thinking_style_store=thinking_style_store,
+        embedding_client=embedding_client,
     )
-
-    result = await loop.consolidate_session(session_a)
-
-    unchanged = await thinking_style_store.get(existing.id)
-    assert unchanged.confirmation_count == 1
-    assert unchanged.session_ids == existing.session_ids
-    assert result.id != existing.id
-    assert result.confirmation_count == 1
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_thinking_style_confirms_and_grows_when_llm_agrees(
-    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
-    learner_fact_store, thinking_style_store, embedding_client,
-):
-    session_a = await transcript.create_session(learner_id)
-    turn_a = await transcript.record_turn(session_a, 0, "turn a")
-    await learner_fact_store.add(
-        LearnerFact(
-            learner_id=learner_id, session_id=session_a, turn_index=0,
-            fact_type=LearnerFactType.DIRECT_ANSWER, situation="s", resolution="r",
-            embedding=_vec(1.0), source_turn_id=turn_a,
-        )
-    )
-    shared_summary_vector = _vec(1.0)
-    embedding_client.canned["same structure, worded differently"] = shared_summary_vector
-    existing = await thinking_style_store.create_candidate(
-        learner_id, uuid4(), "concrete example before abstract rule", shared_summary_vector
-    )
-
-    llm = StubLLMClient(
-        canned={
-            "SUMMARIZE:PATH": json.dumps({"summary": "same structure, worded differently"}),
-            "CONFIRM:THINKING_STYLE": json.dumps({"confirms": True}),
-        }
-    )
-    loop = _make_loop(
-        transcript, node_calls, disambiguation_store, llm=llm,
-        learner_fact_store=learner_fact_store,
-        thinking_style_store=thinking_style_store, embedding_client=embedding_client,
-    )
-
-    result = await loop.consolidate_session(session_a)
-    assert result.id == existing.id
-    assert result.confirmation_count == 2
-    assert session_a in result.session_ids
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_candidate_below_threshold_never_appears_in_a_live_prompt(
-    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
-    diagnostics_store, thinking_style_store,
-):
-    below_threshold = await thinking_style_store.create_candidate(
-        learner_id, uuid4(), "wants a concrete example before any abstract rule", _vec(1.0)
-    )
-    for sid in [uuid4(), uuid4()]:  # count=3, still below default 5
-        below_threshold = await thinking_style_store.confirm(
-            below_threshold.id, sid,
-            promotion_threshold=MemoryConfig().thinking_style_promotion_threshold,
-        )
-    assert below_threshold.confirmation_count == 3
-
-    llm = StubLLMClient(canned={"ASSESS:BRANCH": _NOT_AMBIGUOUS, "FINAL:ANSWER": "answer"})
-    session_id = await transcript.create_session(learner_id)
-    loop = _make_loop(
-        transcript, node_calls, disambiguation_store, llm=llm,
-        diagnostics_store=diagnostics_store,
-        thinking_style_store=thinking_style_store,
-    )
-
-    await loop.handle_turn(session_id, 0, "hello")
-
-    assess_call = await node_calls.get_call_for_turn(session_id, 0, "AssessAndBranch")
-    assert assess_call.input_json["thinking_style_hint"] == ""
-    assert "concrete example" not in json.dumps(assess_call.input_json)
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_promoted_candidate_appears_in_the_live_prompt(
-    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
-    diagnostics_store, thinking_style_store,
-):
-    promoted = await thinking_style_store.create_candidate(
-        learner_id, uuid4(), "wants a concrete example before any abstract rule", _vec(1.0)
-    )
-    for sid in [uuid4(), uuid4(), uuid4(), uuid4()]:  # count reaches 5
-        promoted = await thinking_style_store.confirm(
-            promoted.id, sid,
-            promotion_threshold=MemoryConfig().thinking_style_promotion_threshold,
-        )
-    assert promoted.confirmation_count == 5
-
-    llm = StubLLMClient(canned={"ASSESS:BRANCH": _NOT_AMBIGUOUS, "FINAL:ANSWER": "answer"})
-    session_id = await transcript.create_session(learner_id)
-    loop = _make_loop(
-        transcript, node_calls, disambiguation_store, llm=llm,
-        diagnostics_store=diagnostics_store,
-        thinking_style_store=thinking_style_store,
-    )
-
-    await loop.handle_turn(session_id, 0, "hello")
-
-    assess_call = await node_calls.get_call_for_turn(session_id, 0, "AssessAndBranch")
-    assert "concrete example before any abstract rule" in assess_call.input_json["thinking_style_hint"]
+    assert await loop.consolidate_session(session_id) is None
+    assert await thinking_style_store.list_by_learner(learner_id) == []
+    assert not [p for p in llm.prompts if p.startswith(("SUMMARIZE:PATH", "CONFIRM:THINKING"))]
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -730,3 +620,35 @@ async def test_memory_that_finds_nothing_leaves_early_options_alone(
     assert result == "Which of these did you mean?"
     assert len(await loop.pending_options(session_id)) == 2
     assert await node_calls.get_call_for_turn(session_id, 0, "FinalAnswer") is None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_confirmed_style_from_layer_3_is_what_the_ambiguity_check_gets(
+    transcript, node_calls, clean_pool, learner_id, disambiguation_store,
+    diagnostics_store, thinking_style_store, monkeypatch,
+):
+    from versa import style_patterns
+
+    old = await thinking_style_store.create_candidate(learner_id, uuid4(), "an old free-text reading", _vec(1.0))
+    for sid in [uuid4(), uuid4(), uuid4(), uuid4()]:
+        old = await thinking_style_store.confirm(
+            old.id, sid, promotion_threshold=MemoryConfig().thinking_style_promotion_threshold)
+    confirmed: list[str] = ["On a question of their own, goes first to making it real."]
+
+    async def fake_confirmed(pool, lid):
+        return list(confirmed)
+
+    monkeypatch.setattr(style_patterns, "confirmed_statements", fake_confirmed)
+    llm = StubLLMClient(canned={"ASSESS:BRANCH": _NOT_AMBIGUOUS, "FINAL:ANSWER": "answer"})
+    session_id = await transcript.create_session(learner_id)
+    loop = _make_loop(transcript, node_calls, disambiguation_store, llm=llm, diagnostics_store=diagnostics_store,
+                      thinking_style_store=thinking_style_store, style_pool=clean_pool)
+
+    await loop.handle_turn(session_id, 0, "hello")
+    hint = (await node_calls.get_call_for_turn(session_id, 0, "AssessAndBranch")).input_json["thinking_style_hint"]
+    assert hint == "On a question of their own, goes first to making it real."  # the new style, alone
+
+    confirmed.clear()  # no confirmed pattern: nothing -- the retired detector's reading is not used
+    await loop.handle_turn(session_id, 1, "and another")
+    hint = (await node_calls.get_call_for_turn(session_id, 1, "AssessAndBranch")).input_json["thinking_style_hint"]
+    assert hint == ""

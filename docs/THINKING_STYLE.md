@@ -234,7 +234,88 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
    "tap for why" breakdown. `versa observations --learner X` prints the
    ledger by lens, what counts for less, the guess record and the way in.
    Not yet read: topic-tree signals, lesson tasks, exam prep (invariant 13).
-7. ✅ Layers 2–3 (2026-09-29).
+7. ✅ **A bigger space** (2026-09-29, migration 086): a library of 16 card
+   types in four families (make it real / go deeper / make it simpler /
+   go wider) with coordinates on four axes; each answer writes a pool (two
+   per family + a random two-step path + one wild card, tagged to its
+   nearest type by embedding); the learner sees a hand of 3, one per
+   family, and "↻ other directions" deals the next (a `more` event: nothing
+   matched). Every pick is read against the hand it came from
+   (`choice.py`, Plackett–Luce) — the guess is always one of the cards on
+   offer, and layer 3 rates are "taken when offered" against chance.
+   Layer 3 gained family-level patterns (a family is in 3 of 4 hands, so it
+   firms up fast) and `lean` patterns (which way picks lean on each axis).
+   **The proof is now a real test**: at each pick the guess comes from
+   earlier picks only, and the hits must beat other learners at p < 0.05,
+   Bonferroni-corrected for every candidate tried. Measured on simulated
+   learners: before the fix 10–22% of random choosers were told they had a
+   style; after, 0–4%. A broad style (goes "make it real" 80%, or takes the
+   most concrete card 70%) is confirmed in ~92–94% of cases by 10 chats and
+   ~100% by 20; a preference for one single card type out of 16 takes far
+   longer (it is in few hands) — that is the cost of the bigger space.
+8. ✅ **Everything wired to one thinking style** (2026-09-29):
+   - *In:* direction picks, passes and "other directions" (Sandbox and
+     Learn-a-topic lesson chats); slider moves; **the Learn-a-topic tree**
+     — how deep they expand and how much of a course they keep — as range
+     patterns (`explore_depth`, `explore_breadth`); stuck / wrong-check /
+     rushed as discounts. Not in, by design: stated preferences (said, not
+     shown), ambiguity-option clicks (about meaning), Study with others.
+     Not in, pending your call: exam prep (invariant 13).
+   - *Out:* the confirmed layer-3 patterns are now what the ambiguity check,
+     the options and Learn-a-topic (course building, lesson tutoring) are
+     given — never the direction cards (invariant 14). The old free-text
+     detector's confirmed styles are used only while a learner has no
+     confirmed layer-3 pattern (a transition). Answer shaping falls back to
+     the family level ("starts by making it real") when no single card
+     type is clear — with random hands of 16 types it otherwise would
+     rarely fire.
+9. ✅ **No self-confirming shaping** (2026-09-29): a pick made under an
+   answer that was shaped to the learner's way in is marked `steered` (the
+   answer's FinalAnswer call carried an approach_directive) and left out of
+   the style patterns and the answer's way in -- it would only confirm the
+   shaping. It still helps the guess, which only predicts. Also fixed: the
+   time from cards shown to tap was the app server's clock minus the
+   database's, so a clock skew could turn a read-and-chosen pick into a
+   "quick tap"; both ends are now the database's clock.
+10. ✅ **The second layer** (2026-09-30; your words: "we still haven't
+    found anything that is unique, it's all the top layer stuff").
+    - *One fact, not four:* patterns pointing the same way in the card space
+      merge -- the strongest is the fact, the rest are facets ("also seen
+      as"). On sooraj's (simulated) data, 7 patterns became 1 fact. Only
+      facts reach the prompts.
+    - *Conditional facts:* the same way out split by situation -- a topic
+      new to them vs one they've met before, stuck vs going fine, opening a
+      chat vs further in. Confirmed only when each side passes every gate on
+      its own (Bonferroni over all six sides) AND the family taken differs
+      by at least 25 points between them. Simulated: stuck/fine and
+      opening/later found 65-100% by 15-30 chats; new/familiar needs many
+      topics (87% at ~50 chats over 25 topics); a learner who is the same
+      everywhere, and a random one, never got one (0 of 60).
+    - *The shape of a chat* (`shape`): how picks move as a chat goes on,
+      on the depth and concrete axes (later picks minus the opening two,
+      each read against its own hand), e.g. "their picks get deeper as a
+      chat goes on (they start simpler)". Proven by guessing later chats
+      from earlier ones: the opening as the card furthest one way, later
+      picks as the card furthest the other. Simulated: found by 15 chats.
+    - *What they pass over* (`passes_over`): a card or family taken at
+      most half as often as chance, where others take it at least twice as
+      often, and rarer than luck on later offers. Read with their clear
+      favourite set aside (its whole family, at card level) -- otherwise
+      someone who always goes to "make it real" would "pass over"
+      everything else, which is their way in again. Simulated: a learner
+      who skips one card out of 16 is found 60% of the time by 30 chats,
+      every time by 50 (a single card is rarely on offer).
+    - *Speed* (`speed`): which way out they choose fastest or slowest
+      against their other picks, on a log scale; quick taps and rushed
+      chats left out. Speed isn't a choice, so it is proven by a
+      significance test (Bonferroni over the four families) and holding in
+      both halves rather than by predicting a pick. Simulated (3x faster
+      on "go deeper"): found in 93% by 15 chats.
+    - Controls: 100 random learners got none of these three (0 of 100);
+      an always-"make it real" learner got no extra shape or pass facts
+      (0 of 30). They're compared with other learners' own chats, orders
+      and timings (`StyleReader._cohort_style_picks`).
+11. ✅ Layers 2–3 (2026-09-29).
    - **Layer 2** (`observations.read_sessions`): one reading per session —
      picks, passes, quick-tap share, rushed, stuck turns, checks right/
      wrong, help levels, slider moves. The discounts come from it.
@@ -276,9 +357,66 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
      sessions, 16 of 21 later picks right out of sample; "then 'work
      through one concrete example'": 6 topics, 8 of 11). Guesses over the
      whole account: 32 of 58. Staged: a model playing a persona.
-   - Not yet: the old free-text detector (`thinking_style_candidates`)
-     still runs alongside and still feeds the ambiguity check's hint; retire
-     it once layer 3 has organic data behind it.
-8. Randomised experiments on a miss.
-9. Decide invariant 13 (exam prep as evidence — only learner-initiated
-   choices, never scores the system set?).
+   - The old free-text detector (`thinking_style_candidates`) was retired
+     on 2026-09-30 (IDEAS.md decisions log): nothing writes it, nothing
+     reads it into a prompt.
+8. ✅ **Experimenting on a miss** (2026-09-30, migration 088). A miss is a
+   hand passed by asking their own question -- the one time Versa sees
+   what was in their mind when no card matched.
+   - *Read, not guessed:* the question is kept (`direction_misses`, one row
+     per passed set, append-only) with the card type it is nearest to by
+     embedding against the library descriptions -- no model call, nothing
+     about the learner -- and whether it stayed on the same subject (a new
+     subject is an interest, not a way out; "can't tell yet" is kept as
+     unknown). Only a clear match counts: similarity >= 0.84 and 0.02 ahead
+     of the next type. Calibrated on real Gemini embeddings (16 typical
+     follow-ups, 3 non-ones): 14 of 16 kept, all read right; none of the 3
+     kept. Both top similarities are on every row, to recalibrate later.
+   - *Randomised experiment:* the next answer's first hand in that chat is
+     widened -- an extra (path or wild card, which one at random) swapped in
+     for certain, logged as `direction_sets.experiment = 'after_miss'`.
+     Never chosen from what Versa believes (invariant 14); "other
+     directions" keeps dealing new hands as before.
+   - *Does it persist* (`miss_follow_through`): for each read miss, the
+     first later hand that offered that way -- taken (a match found)? --
+     and taken again in a later chat (it held)? Shown on the Thinking-style
+     page, in the API (`misses`) and in `versa observations`.
+   - *A new fact, `asks_for`:* "When the cards miss, asks for why it works
+     (7 of 10 times)" -- their misses keep asking for the same way, more
+     than other learners' misses do (1.5x), over 3 chats and 3 topics, in
+     both halves, and it predicts their later misses (Bonferroni over all
+     20 card and family targets). Simulated: a learner whose misses ask for
+     one way 70% of the time is confirmed by 12 chats; scattered misses
+     were confirmed at most 2 of 40 times; what everyone asks for is never a
+     fact about them.
+   - *Misses the library can't place* (migration 089, 2026-09-30): when the
+     embedding can't put a missed question on a type, one fast model call
+     (`ReadMiss`, recorded in node_calls; given the question and the one
+     before it, nothing about the learner) reads the kind of move it makes
+     -- a topic-free phrase ("where the rule stops working") -- and whether
+     that is one of the 16 after all. Checked live: the first prompt forced
+     most new moves onto near types ("where it stops being true" -> "go
+     further", "who decides" -> "the story"); the strict prompt (read-miss-v2)
+     read 7 of 9 off-library questions as new moves, kept "why does it work"
+     as `why`, and flagged the off-subject one.
+   - *Discovering styles outside the library:* new moves are grouped across
+     learners by their phrase's embedding (`discover_moves`, cosine >= 0.80:
+     live, same-group phrases >= 0.808, different groups <= 0.795). A group
+     asked for >= 5 times by >= 3 learners is a **candidate card type**,
+     listed by `versa discovered-moves` for a person to add to the next
+     library -- never added on its own (the library is the instrument). The
+     same command lists cards whose wording missed (someone typed the very
+     move a card on screen offered).
+   - *A new fact, `asks_beyond`:* "When the cards miss, keeps asking for
+     something they don't offer: 'where the rule stops working'" -- the same
+     checks as `asks_for`, over every group of new moves.
+9. Decide invariant 13 -- exam prep as evidence. Direction agreed
+   2026-09-30: exam prep is the PRESSURE condition. Only choices the student
+   makes (which unit first, order of revision, what they do after a wrong
+   answer), never scores; every observation tagged with its pressure
+   (days to the exam, timed or not, after a miss, late in a long session);
+   facts are "under pressure" conditionals that never change the relaxed
+   style; per-unit scores used only as a control, to tell pressure from
+   struggling. Waiting on your go to change invariant 13.
+10. The interest layer -- parked (IDEAS.md), in step with the thinking
+    style and for teaching, not drifting.

@@ -22,6 +22,10 @@ abstract class ChatTransport {
   /// it was a fork link, so the answer carries on instead of starting over.
   void pickDirection(String cardId, {bool stage = false, String? directions, bool continueAnswer = false});
 
+  /// "Other directions": nothing in hand [setId] matched; the server deals
+  /// the next hand (or says there are none left).
+  void moreDirections(String setId);
+
   /// Rewrite the latest answer at the chat's current slider levels (and,
   /// with [directions], re-offer the directions for the new window).
   void regenerate(int requestId, {String? directions});
@@ -73,6 +77,10 @@ class WebSocketChatTransport implements ChatTransport {
         'directions': ?directions,
         if (continueAnswer) 'continue': true,
       }));
+
+  @override
+  void moreDirections(String setId) =>
+      _channel.sink.add(jsonEncode({'type': 'more_directions', 'set_id': setId}));
 
   @override
   void sendStageCheck(Map<String, Object?> check) =>

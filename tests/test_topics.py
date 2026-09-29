@@ -15,8 +15,6 @@ from tests.test_resources import make_pdf
 from tests.test_server import _ANSWER, _FACT, _NOT_AMBIGUOUS, _start, _stop, _turn
 from versa import resources
 from versa.llm import StubLLMClient
-from versa.memory import ThinkingStyleStore
-from versa.reviews import ReviewStore
 from versa.topics import (
     NodeRow,
     build_selection,
@@ -284,7 +282,15 @@ async def test_sandbox_prompts_and_node_inputs_carry_no_lesson_context(clean_poo
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_what_is_known_about_the_learner_shapes_generation(clean_pool, embedding_client):
+async def test_what_is_known_about_the_learner_shapes_generation(clean_pool, embedding_client, monkeypatch):
+    from uuid import UUID
+
+    from versa import style_patterns
+
+    async def confirmed(pool, learner_id):  # a thinking style confirmed from their own choices
+        return ["wants the big picture before any detail"]
+
+    monkeypatch.setattr(style_patterns, "confirmed_statements", confirmed)
     llm = _llm()
     live = await _start(clean_pool, llm, embedding_client)
     try:
@@ -292,11 +298,6 @@ async def test_what_is_known_about_the_learner_shapes_generation(clean_pool, emb
             lid = (await client.post("/api/learners", json={"label": "known"})).json()["id"]
             sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
             await client.patch(f"/api/sessions/{sid}/knobs", json={"answer_length": 20, "depth": 85})
-        from uuid import UUID
-        style = await ThinkingStyleStore(clean_pool).create_candidate(
-            UUID(lid), UUID(sid), "wants the big picture before any detail", [0.1] * 768,
-        )
-        await ReviewStore(clean_pool).add(thinking_style_candidate_id=style.id, review_type="approve")
 
         async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
             ex = (await client.post("/api/topic-explorations", json={"learner_id": lid, "query": "genetics"})).json()
@@ -306,7 +307,7 @@ async def test_what_is_known_about_the_learner_shapes_generation(clean_pool, emb
             lesson = (await client.get(f"/api/lessons/{topic['chapters'][0]['lessons'][0]['id']}")).json()
         branches_prompt = next(p for p in llm.prompts if p.startswith("TOPIC:BRANCHES"))
         assert "About this student" in branches_prompt
-        assert "wants the big picture before any detail (student confirmed)" in branches_prompt
+        assert "wants the big picture before any detail" in branches_prompt
         assert "length 20/100, depth 85/100" in branches_prompt
         plan_prompt = next(p for p in llm.prompts if p.startswith("TOPIC:LESSONS"))
         assert "wants the big picture" in plan_prompt

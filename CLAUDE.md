@@ -310,6 +310,10 @@ invariant 8 protects, just for a different architecture.
   `session_ids` only ever grow, via `ThinkingStyleStore.confirm()`.
 - Verified by the same AST-based check used for invariants 1, 4, 6, 7,
   8, and 9.
+- (2026-09-30) The free-text thinking-style detector that wrote
+  `thinking_style_candidates` is retired: nothing writes the table and
+  nothing reads it into a prompt (the thinking style is `style_patterns.py`,
+  derived on read). Its rows stay, as this invariant requires.
 
 This is a separate invariant from the others, not a restatement of
 any of them: the memory layer (`memory.py`) is a derived, searchable
@@ -435,7 +439,30 @@ never delete or update rows. Concretely:
   `direction_events` row -- picked (which card, how many ms after it was
   offered) or passed (the learner asked their own question) -- the first
   thing they did settles it (`set_id` is UNIQUE there).
-- The set is generated from a fixed skeleton of slots and is given no
+- (From 2026-09-29, migration 086, directions.py lib-v2.) There is no fixed
+  skeleton any more: each answer's cards are written for a POOL drawn at
+  random from a library of 16 card types (two per family), plus a random
+  two-step path card and one wild card (tagged afterwards to its nearest
+  type by embedding); the learner sees a HAND of three dealt at random from
+  the pool, one per family, and "other directions" deals the next hand
+  (a `more` event). The draw, the path and the tagging never take anything
+  about the learner; the whole pool is kept (`direction_pools`), and every
+  pick is read against the hand it was taken from (choice.py), which is
+  what keeps random hands comparable.
+- (From 2026-09-30, migration 088.) A pass is a MISS: the question they
+  asked instead is kept once in `direction_misses` (set_id UNIQUE), read
+  against the library by embedding (never a model call, never anything
+  about the learner), and the next answer's first hand in that chat is
+  widened at random (`direction_sets.experiment = 'after_miss'`). What the
+  widening reads is only that this chat's last set was passed -- something
+  the learner did -- and which extra goes in is random.
+- (Migration 089.) A miss the embedding can't place is read by one fast
+  model call (`ReadMiss`, via `_call_node`), given only the question and the
+  one before it, into `direction_miss_readings` (set_id UNIQUE, written
+  once). A reading that is none of the library's types is a new move; groups
+  of them are candidate card types for a PERSON to add to the library --
+  nothing changes the cards on its own.
+- The set is given no
   thinking style, claims, profile or cross-session history -- only the
   message, the answer, the learner's own depth/breadth sliders, and (from
   2026-09-29) the directions they took earlier in THIS chat, so each set

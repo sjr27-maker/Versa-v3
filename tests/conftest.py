@@ -61,7 +61,8 @@ async def pool():
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS stage_checks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS knob_events CASCADE")
-        for table in ("direction_predictions", "direction_events", "direction_cards", "direction_sets"):
+        for table in ("direction_miss_readings", "direction_misses", "direction_predictions", "direction_events",
+                      "direction_cards", "direction_sets", "direction_pools"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         for table in ("exam_plan_item_events", "exam_plan_items", "exam_plans",
                       "exam_answers", "exam_submissions", "exam_questions", "exam_quizzes",
@@ -174,7 +175,8 @@ async def clean_pool(pool):
             "room_node_calls, room_option_picks, room_options, room_option_sets, "
             "room_task_events, room_tasks, room_messages, room_members, rooms, "
             "stage_checks, knob_events, "
-            "direction_predictions, direction_events, direction_cards, direction_sets, "
+            "direction_miss_readings, direction_misses, direction_predictions, direction_events, direction_cards, "
+            "direction_sets, direction_pools, "
             "exam_plan_item_events, exam_plan_items, exam_plans, "
             "exam_answers, exam_submissions, exam_questions, exam_quizzes, exam_generations, "
             "exam_units, exams, "

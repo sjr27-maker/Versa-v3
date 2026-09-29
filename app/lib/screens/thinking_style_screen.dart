@@ -7,6 +7,7 @@ import '../api.dart';
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'pattern_sky_screen.dart';
 
 /// What Versa has actually stored about this learner: confirmed patterns,
 /// ones still forming, retired ones, and observed preferences (claims) --
@@ -21,7 +22,7 @@ class ThinkingStyleScreen extends StatefulWidget {
 
 class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
   late Future<ThinkingStyleOverview> _future;
-  late Future<List<StylePattern>> _patterns;
+  late Future<StyleReport> _patterns;
   bool _showArchived = false;
 
   @override
@@ -83,35 +84,6 @@ class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _Section(
-                        title: 'Confirmed patterns',
-                        empty: 'Nothing confirmed yet — it takes ${data.promotionThreshold} '
-                            'independent sessions agreeing before Versa will name a pattern.',
-                        children: [
-                          for (final item in data.confirmed)
-                            _ItemCard(kind: 'thinking_style', item: item, onChanged: _refresh),
-                        ],
-                      ),
-                      _Section(
-                        title: 'Emerging',
-                        empty: 'Nothing forming yet.',
-                        children: [
-                          for (final item in data.emerging)
-                            _ItemCard(
-                              kind: 'thinking_style', item: item, onChanged: _refresh,
-                              progressOf: data.promotionThreshold,
-                            ),
-                        ],
-                      ),
-                      if (data.retired.isNotEmpty)
-                        _Section(
-                          title: 'Retired',
-                          empty: '',
-                          children: [
-                            for (final item in data.retired)
-                              _ItemCard(kind: 'thinking_style', item: item, onChanged: _refresh),
-                          ],
-                        ),
-                      _Section(
                         title: 'Preferences we\'ve noticed',
                         empty: 'Nothing observed yet — this fills in from surprising moments in '
                             'your chats, not from a survey.',
@@ -137,36 +109,103 @@ class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
 /// has to pass before Versa calls it your style. Tap one for the checks.
 class _ExploreSection extends StatelessWidget {
   const _ExploreSection({required this.patterns});
-  final Future<List<StylePattern>> patterns;
+  final Future<StyleReport> patterns;
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<StylePattern>>(
+    return FutureBuilder<StyleReport>(
       future: patterns,
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done || snap.hasError) return const SizedBox.shrink();
-        final found = snap.data ?? const [];
+        final found = snap.data?.patterns ?? const <StylePattern>[];
+        final misses = snap.data?.misses ?? const MissFollowThrough();
+        final moves = snap.data?.newMoves ?? const <NewMove>[];
         return _Section(
           title: 'How you explore',
           empty: 'Nothing clear yet. This comes from the "where this could go" steps you take and the '
               'depth you set, across different topics \u2014 never from a single chat.',
-          children: [for (final p in found) _PatternCard(pattern: p)],
+          // one card per fact; patterns pointing the same way are its facets
+          children: [
+            for (final p in found)
+              if (p.facetOf == null) _PatternCard(pattern: p, facets: [for (final f in found) if (f.facetOf == p.id) f]),
+            if (misses.read > 0) _MissNote(misses: misses),
+            if (moves.isNotEmpty) _NewMoves(moves: moves),
+          ],
         );
       },
     );
   }
 }
 
+/// What they asked for that no card offers -- their own ways of thinking the
+/// cards don't have yet.
+class _NewMoves extends StatelessWidget {
+  const _NewMoves({required this.moves});
+  final List<NewMove> moves;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      key: const ValueKey('new-moves'),
+      padding: const EdgeInsets.only(top: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('What you asked for that the cards don\'t offer yet', style: serif(16)),
+          const SizedBox(height: 6),
+          for (final m in moves.take(5))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '\u2022 \u201c${m.label}\u201d \u2014 ${m.times} ${m.times == 1 ? 'time' : 'times'}'
+                '${m.chats > 1 ? ' in ${m.chats} chats' : ''}',
+                style: sans(13, color: Paper.body, height: 1.4),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// When the cards missed: what Versa did about it (experimenting on a miss).
+class _MissNote extends StatelessWidget {
+  const _MissNote({required this.misses});
+  final MissFollowThrough misses;
+
+  @override
+  Widget build(BuildContext context) {
+    final m = misses;
+    final times = m.read == 1 ? 'once' : '${m.read} times';
+    final after = m.offeredLater == 0
+        ? 'Versa keeps dealing new hands until one of them offers it.'
+        : 'When a later hand offered it, you took it ${m.taken} of ${m.offeredLater} '
+            '${m.offeredLater == 1 ? 'time' : 'times'}'
+            '${m.held > 0 ? ', and ${m.held} of those held in a later chat' : ''}.';
+    return Padding(
+      key: const ValueKey('miss-note'),
+      padding: const EdgeInsets.only(top: 10),
+      child: Text(
+        'When none of the cards matched, the question you asked instead pointed to a way out '
+        '$times. $after',
+        style: sans(13, color: Paper.body, height: 1.45),
+      ),
+    );
+  }
+}
+
 class _PatternCard extends StatefulWidget {
-  const _PatternCard({required this.pattern});
+  const _PatternCard({required this.pattern, this.facets = const []});
   final StylePattern pattern;
+
+  /// Weaker patterns pointing the same way: this fact seen from other angles.
+  final List<StylePattern> facets;
 
   @override
   State<_PatternCard> createState() => _PatternCardState();
 }
 
 class _PatternCardState extends State<_PatternCard> {
-  bool _open = false;
 
   @override
   Widget build(BuildContext context) {
@@ -181,7 +220,8 @@ class _PatternCardState extends State<_PatternCard> {
       child: InkWell(
         key: ValueKey('pattern-${p.kind}-${p.key}'),
         borderRadius: BorderRadius.circular(10),
-        onTap: () => setState(() => _open = !_open),
+        onTap: () => Navigator.of(context)
+            .push(MaterialPageRoute<void>(builder: (_) => PatternSkyScreen(pattern: p, facets: widget.facets))),
         child: Container(
           width: double.infinity,
           padding: const EdgeInsets.all(14),
@@ -196,25 +236,21 @@ class _PatternCardState extends State<_PatternCard> {
               Text(label.toUpperCase(), style: mono(10.5).copyWith(color: color)),
               const SizedBox(height: 6),
               Text(p.statement, style: sans(14.5, height: 1.5)),
-              if (_open) ...[
-                const SizedBox(height: 10),
-                for (final g in p.gates)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(g.ok ? Icons.check_rounded : Icons.remove_rounded,
-                            size: 15, color: g.ok ? Paper.olive : Paper.faint),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text('${g.label}: ${g.have} (needs ${g.need})',
-                              style: sans(12.5, color: Paper.muted, height: 1.4)),
-                        ),
-                      ],
-                    ),
-                  ),
+              if (widget.facets.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Also seen as ${widget.facets.length} other '
+                  '${widget.facets.length == 1 ? 'pattern' : 'patterns'} pointing the same way',
+                  key: ValueKey('facets-${p.kind}-${p.key}'),
+                  style: sans(12, color: Paper.muted),
+                ),
               ],
+              const SizedBox(height: 6),
+              Row(children: [
+                const Icon(Icons.auto_awesome_outlined, size: 13, color: Paper.faint),
+                const SizedBox(width: 5),
+                Text('See it drawn from your picks', style: sans(12, color: Paper.faint)),
+              ]),
             ],
           ),
         ),
@@ -249,11 +285,10 @@ class _Section extends StatelessWidget {
 }
 
 class _ItemCard extends StatelessWidget {
-  const _ItemCard({required this.kind, required this.item, required this.onChanged, this.progressOf});
+  const _ItemCard({required this.kind, required this.item, required this.onChanged});
   final String kind; // "claim" | "thinking_style"
   final ThinkingStyleItem item;
   final VoidCallback onChanged;
-  final int? progressOf;
 
   @override
   Widget build(BuildContext context) {
@@ -298,20 +333,6 @@ class _ItemCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (progressOf != null) ...[
-              const SizedBox(height: 8),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(4),
-                child: LinearProgressIndicator(
-                  value: item.confirmations / progressOf!,
-                  minHeight: 5,
-                  backgroundColor: Paper.border,
-                  color: Paper.accent,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text('${item.confirmations} of $progressOf sessions', style: sans(10.5, color: Paper.faint)),
-            ],
           ],
         ),
       ),

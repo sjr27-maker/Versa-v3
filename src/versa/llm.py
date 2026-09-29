@@ -126,6 +126,11 @@ def _stub_room_director(prompt: str) -> str:
     return json.dumps({"reason": "stub", "actions": actions[:3]})
 
 
+DIRECTION_CARD_KEYS: tuple[str, ...] = (
+    "intuition", "example", "why", "use", "deeper", "next", "try_it", "real_data", "prove_it", "mistake",
+    "visualise", "story", "summary", "compare", "connect", "debate", "path", "wild",
+)
+
 _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
     # rooms.RoomDirector: reacts to the events in the prompt (see above).
     "ROOM:DIRECT": _stub_room_director,
@@ -328,7 +333,12 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
             "age_fits_stage": True, "note": None,
         }
     ),
-    # directions.py: one card per slot of the standard skeleton.
+    # directions.py ReadMiss: a missed question the library can't place.
+    "DIRECTIONS:READ_MISS": json.dumps(
+        {"same_subject": True, "type": "none", "move": "where the rule stops working"}
+    ),
+    # directions.py: a card for every library type (the pool takes the ones
+    # it drew), plus the path and wild extras.
     "DIRECTIONS:SUGGEST": json.dumps(
         {
             "cards": {
@@ -338,6 +348,18 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
                 "use": "Where is this used for real",
                 "deeper": "Take it one level deeper",
                 "next": "What should I learn after this",
+                "try_it": "Let me try one myself",
+                "real_data": "Show me real numbers for this",
+                "prove_it": "Prove that it has to be true",
+                "mistake": "What do people usually get wrong",
+                "visualise": "Draw me a picture of it",
+                "story": "Who figured this out first",
+                "summary": "Give me the one-line version",
+                "compare": "How is it different from similar ideas",
+                "connect": "Show the same idea in another subject",
+                "debate": "Where do people still disagree",
+                "path": "Work one out, then see where it is used",
+                "wild": "Surprise me with an unexpected angle",
             }
         }
     ),
@@ -932,16 +954,32 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         },
         "required": ["lessons"],
     },
+    # A card for EVERY library type is required (directions.py lib-v2); the
+    # random draw then picks which of them make the pool. The schema is fixed
+    # per prompt, so it can't require just the drawn ones -- and with none
+    # required Gemini wrote only two or three cards, while requiring the
+    # original six forced exactly those six whatever the prompt asked (both
+    # found live, 2026-09-30). path / wild stay optional (asked for when
+    # drawn). A test keeps this list in step with directions.SLOTS.
     "DIRECTIONS:SUGGEST": {
         "type": "OBJECT",
         "properties": {"cards": {
             "type": "OBJECT",
             "nullable": True,
-            "properties": {slot: {"type": "STRING"} for slot in
-                           ("intuition", "example", "why", "use", "deeper", "next")},
-            "required": ["intuition", "example", "why", "use", "deeper", "next"],
+            "properties": {slot: {"type": "STRING"} for slot in DIRECTION_CARD_KEYS},
+            "required": [slot for slot in DIRECTION_CARD_KEYS if slot not in ("path", "wild")],
         }},
         "required": ["cards"],
+    },
+    "DIRECTIONS:READ_MISS": {
+        "type": "OBJECT",
+        "properties": {
+            "same_subject": {"type": "BOOLEAN"},
+            "type": {"type": "STRING", "enum": [*[k for k in DIRECTION_CARD_KEYS if k not in ("path", "wild")],
+                                                "none"]},
+            "move": {"type": "STRING"},
+        },
+        "required": ["same_subject", "type", "move"],
     },
     "PROFILE:EXTRACT": {
         "type": "OBJECT",

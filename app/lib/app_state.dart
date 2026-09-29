@@ -107,7 +107,11 @@ class AppState extends ChangeNotifier {
     _prefs ??= await SharedPreferences.getInstance();
     showTiming = _prefs!.getBool(_kTiming) ?? true;
     showStagePanel = _prefs!.getBool(_kStagePanel) ?? false;
-    directionsStyle = _prefs!.getString(_kDirections) == 'strip' ? 'strip' : 'fork';
+    directionsStyle = switch (_prefs!.getString(_kDirections)) {
+      'strip' => 'strip',
+      'compass' => 'compass',
+      _ => 'fork',
+    };
     _expiry ??= api.session.expired.listen((_) {
       if (learner != null) signOut();
     });
@@ -256,7 +260,7 @@ class AppState extends ChangeNotifier {
   }
 
   void setDirectionsStyle(String value) {
-    directionsStyle = value == 'strip' ? 'strip' : 'fork';
+    directionsStyle = value == 'strip' || value == 'compass' ? value : 'fork';
     _prefs?.setString(_kDirections, directionsStyle);
     notifyListeners();
   }

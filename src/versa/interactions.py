@@ -845,6 +845,14 @@ class InteractionRecorder:
             for past in recent
         )
 
+    async def same_subject(self, session_id: UUID, turn_number: int, question: str) -> bool | None:
+        """`is_follow_up`, but None when it can't be told yet (no reliable
+        centre): for a miss, "unknown" is kept as unknown rather than read as
+        a new subject."""
+        if await self._interactions.question_centre() is None:
+            return None
+        return await self.is_follow_up(session_id, turn_number, question)
+
     async def record(
         self,
         *,

@@ -71,8 +71,8 @@ from versa.embeddings import EmbeddingClient
 from versa.interactions import StatedPreferenceStore
 from versa.learner import LearnerStore
 from versa.llm import LLMClient
-from versa.memory import LearnerFactStore, ThinkingStyleStore
-from versa.models import ClaimStatus, ThinkingStyleStatus
+from versa.memory import LearnerFactStore
+from versa.models import ClaimStatus
 from versa.reviews import ReviewStore, apply_reviews_overlay
 from versa.session_knobs import SessionKnobs, render_knob_directive
 
@@ -783,22 +783,16 @@ async def build_learner_profile(
         logger.warning("profile: sign-up profile failed for %s: %s", learner_id, exc)
 
     try:
-        styles = await ThinkingStyleStore(pool).list_by_learner(learner_id)
-        style_lines = []
-        for c in styles:
-            rs = await reviews.list_for_thinking_style(c.id)
-            overlay = apply_reviews_overlay(c.path_summary, rs)
-            approved = any(r.review_type == "approve" for r in rs)
-            if overlay.archived:
-                continue
-            if c.status is ThinkingStyleStatus.CONFIRMED or approved:
-                why = "student confirmed" if approved else f"seen in {len(set(c.session_ids))} sessions"
-                style_lines.append(f"{overlay.statement} ({why})")
-        if style_lines:
-            lines.append("How they tend to move through material: " + "; ".join(style_lines))
-            used["thinking_styles"] = len(style_lines)
+        # The thinking style as layer 3 confirms it (style_patterns.py).
+        from versa.style_patterns import confirmed_statements
+
+        confirmed = await confirmed_statements(pool, learner_id)
+        if confirmed:
+            lines.append("How they move through ideas, from their own choices: " + "; ".join(confirmed))
+            used["thinking_styles"] = len(confirmed)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("profile: thinking styles failed for %s: %s", learner_id, exc)
+        logger.warning("profile: style patterns failed for %s: %s", learner_id, exc)
+        confirmed = []
 
     try:
         claim_store = ClaimStore(pool)

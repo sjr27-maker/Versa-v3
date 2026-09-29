@@ -135,6 +135,8 @@ def build_session_loop(
         # Answers lean toward the learner's usual way into an idea once their
         # own direction picks make it clear (pick_prediction.py).
         pick_prediction_store=PickPredictionStore(pool),
+        # the thinking style the ambiguity check and options are given
+        style_pool=pool,
         adapt_answers=os.getenv("VERSA_ADAPT_ANSWERS", "on").lower() != "off",
         # The sign-up profile (profiles.py), when the learner has one.
         profile_store=ProfileStore(pool),

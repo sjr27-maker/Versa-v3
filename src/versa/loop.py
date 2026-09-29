@@ -37,7 +37,6 @@ from uuid import UUID
 import asyncpg
 
 from versa import claims as _claims
-from versa import directions as _directions
 from versa import embeddings as _embeddings
 from versa import history_block as _history_block
 from versa import pick_prediction as _pick_prediction
@@ -55,7 +54,7 @@ from versa.claims import (
     ExtractionConfig,
 )
 from versa.diagnostics import TurnDiagnosticsStore
-from versa.directions import DirectionStore, SuggestDirections
+from versa.directions import DirectionStore, ReadMiss, SuggestDirections
 from versa.disambiguate import (
     REASON_CONFIRM_NO_TEXT,
     REASON_CONFIRM_YES_TEXT,
@@ -97,11 +96,9 @@ from versa.llm import LLMClient, ModelTierClients
 from versa.memory import (
     ConfirmFactMatch,
     ConfirmReasonRelevance,
-    ConfirmThinkingStyleMatch,
     EmbedAndSearchFacts,
     LearnerFactStore,
     MemoryConfig,
-    SummarizeSessionPath,
     ThinkingStyleStore,
     WriteLearnerFact,
 )
@@ -282,6 +279,7 @@ class SessionLoop:
         profile_store: ProfileStore | None = None,
         pick_prediction_store: _pick_prediction.PredictionStore | None = None,
         adapt_answers: bool = True,
+        style_pool: asyncpg.Pool | None = None,
     ) -> None:
         # Tiering (fast/capable/best -> real Gemini models, see
         # model_config.py) is opt-in via model_tier_clients. Omitting it
@@ -332,7 +330,13 @@ class SessionLoop:
         # (VERSA_ADAPT_ANSWERS=off) for a style-off comparison.
         self._pick_predictions = pick_prediction_store
         self._adapt_answers = adapt_answers
+        # style_patterns.py: the thinking style as layer 3 confirms it -- what
+        # `_build_thinking_style_hint` gives the ambiguity check and options.
+        self._style_pool = style_pool
         self.suggest_directions = SuggestDirections(tiers.fast)
+        # A missed question the library can't place, read by the model
+        # (directions.ReadMiss; server._keep_miss runs it in the background).
+        self.read_miss = ReadMiss(tiers.fast)
         # The most recent AssessAndBranch-generating turn's id, if its
         # branches are still unresolved. None whenever the last turn was
         # a click resolution, a direct answer, or has already been
@@ -373,18 +377,6 @@ class SessionLoop:
             self.confirm_fact_match = None
             self.confirm_reason_relevance = None
             self.write_learner_fact = None
-        # Background-only (see consolidate_session) — needs the fact
-        # store, the thinking-style store, and an embedding client.
-        if (
-            learner_fact_store is not None
-            and thinking_style_store is not None
-            and embedding_client is not None
-        ):
-            self.summarize_session_path = SummarizeSessionPath(tiers.fast)
-            self.confirm_thinking_style_match = ConfirmThinkingStyleMatch(tiers.fast)
-        else:
-            self.summarize_session_path = None
-            self.confirm_thinking_style_match = None
 
         # The interaction/retrieval pipeline (interactions.py,
         # retrieval.py) — additive on top of minimal_branch, never
@@ -2473,13 +2465,23 @@ class SessionLoop:
         read it is allowed to use (`list_confirmed_for_prompt`
         structurally excludes anything not yet `confirmed`). Empty
         string whenever this layer is off or nothing has been promoted
-        yet for this learner."""
-        if self._thinking_styles is None:
+        yet for this learner.
+
+        The thinking style is layer 3's (style_patterns.py): only facts that
+        passed every gate, including the out-of-sample test. (The old
+        free-text detector was retired on 2026-09-30; its candidates are no
+        longer read.) The ambiguity check still runs on every turn -- this
+        only tells it how the learner tends to move, so fewer questions need
+        asking as their style becomes clear."""
+        if self._style_pool is None:
             return ""
-        confirmed = await self._thinking_styles.list_confirmed_for_prompt(learner_id)
-        if not confirmed:
+        try:
+            from versa import style_patterns as _style_patterns
+
+            return "; ".join(await _style_patterns.confirmed_statements(self._style_pool, learner_id))
+        except Exception as exc:  # noqa: BLE001 -- a style read must never fail a turn
+            logger.warning("Style patterns failed for learner %s: %r", learner_id, exc)
             return ""
-        return "; ".join(c.path_summary for c in confirmed)
 
     async def consolidate_session(self, session_id: UUID):
         """Steps 6-8 of memory.py's flow — background-only, by design
@@ -2587,66 +2589,11 @@ class SessionLoop:
                     "Claim restatement failed for learner %s: %s", learner_id, exc, exc_info=True,
                 )
 
-        if (
-            self.summarize_session_path is None
-            or self.confirm_thinking_style_match is None
-            or self._learner_facts is None
-            or self._thinking_styles is None
-            or self._embedding_client is None
-        ):
-            return None
-
-        facts = await self._learner_facts.list_by_session(session_id)
-        if not facts:
-            return None
-
-        turns = await self._transcript.list_turns(session_id)
-        last_turn_index = max((t.turn_index for t in turns), default=0)
-
-        # The order they chose to explore in (directions.py), when they
-        # picked any direction at all -- passed only then, so a session
-        # without picks runs exactly the prompt it always did.
-        path_kwargs = {}
-        if self._directions is not None:
-            order = _directions.render_path(await self._directions.session_path(session_id))
-            if order:
-                path_kwargs["direction_path"] = order
-        path_summary = await self._call_node(
-            self.summarize_session_path, session_id, last_turn_index, facts=facts, **path_kwargs,
-        )
-        # Symmetric compare: this session's path summary against other
-        # sessions' path summaries — same kind of text on both sides, so
-        # SEMANTIC_SIMILARITY, not the QUERY/DOCUMENT asymmetry the
-        # fact search uses.
-        embedding = await self._embedding_client.embed(
-            path_summary.summary, task_type=_embeddings.TASK_SIMILARITY
-        )
-
-        nearest = await self._thinking_styles.search_similar(learner_id, embedding, limit=1)
-        if nearest:
-            candidate, similarity = nearest[0]
-            if similarity >= self._memory_config.thinking_style_similarity_threshold:
-                confirmation = await self._call_node(
-                    self.confirm_thinking_style_match,
-                    session_id,
-                    last_turn_index,
-                    existing_path_summary=candidate.path_summary,
-                    new_path_summary=path_summary.summary,
-                )
-                if confirmation.confirms:
-                    return await self._thinking_styles.confirm(
-                        candidate.id,
-                        session_id,
-                        promotion_threshold=self._memory_config.thinking_style_promotion_threshold,
-                    )
-
-        # No existing candidate was even worth asking about, or the
-        # confirmation call said the resemblance was only superficial --
-        # either way, this session's own labeled path becomes a brand
-        # new candidate (confirmation_count=1).
-        return await self._thinking_styles.create_candidate(
-            learner_id, session_id, path_summary.summary, embedding,
-        )
+        # The old free-text thinking-style detector (SummarizeSessionPath ->
+        # ConfirmThinkingStyleMatch -> thinking_style_candidates) was retired
+        # on 2026-09-30: the thinking style is read from the learner's own
+        # choices (style_patterns.py), derived on read, so nothing is written
+        # here. Its past rows stay in thinking_style_candidates (invariant 10).
 
     async def _build_disambiguation_history(
         self, session_id: UUID, turn_index: int

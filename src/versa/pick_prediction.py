@@ -13,11 +13,13 @@ back -- "what contributes to what must be seen". Nothing here changes the
 cards: the set is generated and shuffled exactly as before (invariant 14),
 so a pick stays clean evidence; the guess is only revealed after it.
 
-v1 blends, per slot:
-  - everyone else's picks (the default for "people like them" -- for now,
+v2 (the card library, lib-v2): every pick is read against the hand it was
+taken from, and the guess is always one of the cards about to be shown
+(choice.py's preference weights). It blends:
+  - everyone else's choices (the default for "people like them" -- for now,
     all other learners);
-  - this learner's own picks, recent ones counting more;
-  - their order of approach: what they took after the slot they just took;
+  - this learner's own choices, recent ones counting more;
+  - their order of approach: what they took after the card they just took;
   - how they open a chat: their first pick in a session.
 Each of their own sources is trusted in proportion to how much of it there
 is. Picks that say less about how they think count for less, by name: a tap
@@ -38,10 +40,11 @@ from uuid import UUID, uuid4
 import asyncpg
 from pydantic import BaseModel
 
-from versa.directions import SLOTS
+from versa.choice import Shown, among, luce_fit, win_rate, win_stats
+from versa.directions import CLASSIC_SLOTS, FAMILIES, FAMILY_OF, SLOTS
 from versa.observations import QUICK_TAP_MS, ObservationReader
 
-PREDICTOR_VERSION = "v1"
+PREDICTOR_VERSION = "v2"
 _SLOTS: tuple[str, ...] = tuple(SLOTS)  # canonical order breaks ties, so a guess is reproducible
 
 # QUICK_TAP_MS (observations.py): a pick this soon was probably not read.
@@ -63,8 +66,20 @@ CONTEXT_K = 3.0
 RECORD_WINDOW = 10
 
 
+_FAMILY_WORDS = {
+    "real": "making it real",
+    "deeper": "going deeper",
+    "simpler": "making it simpler",
+    "wider": "going wider",
+}
+
+
 def slot_label(slot: str) -> str:
-    return SLOTS[slot].split(" -- ")[0]
+    if slot.startswith("family:"):
+        return _FAMILY_WORDS.get(slot.removeprefix("family:"), slot)
+    if slot in SLOTS:
+        return SLOTS[slot].split(" -- ")[0]
+    return {"wild": "a surprise direction", "path": "a two-step path"}.get(slot, slot)
 
 
 @dataclass(frozen=True)
@@ -85,6 +100,12 @@ class PastPick:
     rushed: bool = False
     # when they took it (layer 3 reads patterns over time)
     at: datetime | None = None
+    # the hand it was taken from (the original six for sets before lib-v2)
+    offered: tuple[str, ...] = CLASSIC_SLOTS
+    # the answer these cards followed was shaped to the learner's way in:
+    # the pick is partly Versa's steering, so it is no evidence of style
+    # (it still helps the guess, which only predicts)
+    steered: bool = False
 
 
 class Prediction(BaseModel):
@@ -93,13 +114,6 @@ class Prediction(BaseModel):
     contributions: dict
     evidence_count: int
     predictor_version: str = PREDICTOR_VERSION
-
-
-def _normalise(counts: dict[str, float]) -> dict[str, float]:
-    """Counts -> a distribution over every slot, with one pseudo-pick each so
-    an unseen slot is unlikely, never impossible."""
-    total = sum(counts.values()) + len(_SLOTS)
-    return {s: (counts.get(s, 0.0) + 1.0) / total for s in _SLOTS}
 
 
 def _pick_weight(pick: PastPick) -> tuple[float, list[str]]:
@@ -119,77 +133,80 @@ def _pick_weight(pick: PastPick) -> tuple[float, list[str]]:
     return weight, why
 
 
+def _shown(pick: PastPick, weight: float) -> Shown:
+    return Shown(offered=tuple(pick.offered), chosen=pick.slot, weight=weight)
+
+
 def predict(
-    past: list[PastPick], population: dict[str, int], *, prev_slot: str | None, first_in_session: bool,
+    past: list[PastPick], population: list[Shown], *, offered: list[str] | tuple[str, ...],
+    prev_slot: str | None, first_in_session: bool,
 ) -> Prediction:
     """Pure: the same inputs always give the same guess and the same
-    breakdown. `past` is this learner's picks, oldest first; `population`
-    is everyone else's pick counts per slot."""
+    breakdown. `past` is this learner's picks, oldest first, each with the
+    hand it was taken from; `population` is everyone else's choices;
+    `offered` the hand about to be shown. The guess is always one of the
+    offered cards (choice.py)."""
+    offered = tuple(offered)
     n = len(past)
-    own: dict[str, float] = {}
-    after: dict[str, float] = {}
-    opening: dict[str, float] = {}
     set_aside = {"quick_tap": 0, "first_card": 0, "stuck": 0, "rushed": 0}
-    raw_own: dict[str, int] = {}
-    raw_after: dict[str, int] = {}
-    raw_opening: dict[str, int] = {}
+    own: list[Shown] = []
+    after: list[Shown] = []
+    opening: list[Shown] = []
     for i, pick in enumerate(past):
         weight, why = _pick_weight(pick)
         for reason in why:
             set_aside[reason] += 1
         weight *= 0.5 ** ((n - 1 - i) / RECENCY_HALF_LIFE)
-        own[pick.slot] = own.get(pick.slot, 0.0) + weight
-        raw_own[pick.slot] = raw_own.get(pick.slot, 0) + 1
+        shown = _shown(pick, weight)
+        own.append(shown)
         if prev_slot is not None and pick.prev_slot == prev_slot:
-            after[pick.slot] = after.get(pick.slot, 0.0) + weight
-            raw_after[pick.slot] = raw_after.get(pick.slot, 0) + 1
+            after.append(shown)
         if first_in_session and pick.first_in_session:
-            opening[pick.slot] = opening.get(pick.slot, 0.0) + weight
-            raw_opening[pick.slot] = raw_opening.get(pick.slot, 0) + 1
+            opening.append(shown)
 
-    # Everyone else's picks are the prior, worth OWN_PICKS_K picks; the
-    # learner's own (weighted) picks are added on top. So after K picks
+    # Everyone else's choices are the prior, worth OWN_PICKS_K choices; the
+    # learner's own (weighted) choices are fitted on top. So after K picks
     # their own choices outweigh the crowd, however large the crowd is.
-    everyone = _normalise({s: float(c) for s, c in population.items()})
-    own_total = sum(own.values())
-    blend = {s: (own.get(s, 0.0) + OWN_PICKS_K * everyone[s]) / (own_total + OWN_PICKS_K) for s in _SLOTS}
+    everyone = luce_fit(population, _SLOTS)
+    own_total = sum(c.weight for c in own)
+    weights = luce_fit(own, _SLOTS, prior=everyone, prior_strength=OWN_PICKS_K)
     w_own = own_total / (own_total + OWN_PICKS_K)
 
-    # Then the situation they're in -- right after a slot, or opening a
-    # chat -- the same way, with the blend above as its prior.
-    context_name, context, context_raw = None, {}, {}
-    if prev_slot is not None and raw_after:
-        context_name, context, context_raw = "order", after, raw_after
-    elif first_in_session and raw_opening:
-        context_name, context, context_raw = "opening", opening, raw_opening
+    # Then the situation they are in -- right after a card, or opening a
+    # chat -- the same way, with the weights above as its prior.
+    context_name, context = None, []
+    if prev_slot is not None and after:
+        context_name, context = "order", after
+    elif first_in_session and opening:
+        context_name, context = "opening", opening
     w_ctx = 0.0
     if context_name is not None:
-        ctx_total = sum(context.values())
+        ctx_total = sum(c.weight for c in context)
         w_ctx = ctx_total / (ctx_total + CONTEXT_K)
-        blend = {s: (context.get(s, 0.0) + CONTEXT_K * blend[s]) / (ctx_total + CONTEXT_K) for s in _SLOTS}
+        weights = luce_fit(context, _SLOTS, prior=weights, prior_strength=CONTEXT_K)
 
-    predicted = max(_SLOTS, key=lambda s: (blend[s], -_SLOTS.index(s)))
+    probs = among(weights, offered)
+    predicted = max(offered, key=lambda s: (probs[s], -_SLOTS.index(s) if s in _SLOTS else 0))
+
+    def tally(choices: list[Shown]) -> dict[str, dict[str, int]]:
+        return {slot: {"offered": sum(1 for c in choices if slot in c.offered),
+                       "taken": sum(1 for c in choices if c.chosen == slot)} for slot in offered}
+
     contributions = {
-        "everyone": {
-            "weight": round((1 - w_own) * (1 - w_ctx), 4),
-            "counts": {s: population.get(s, 0) for s in _SLOTS},
-        },
-        "your_picks": {
-            "weight": round(w_own * (1 - w_ctx), 4),
-            "counts": {s: raw_own.get(s, 0) for s in _SLOTS},
-            "picks": n,
-        },
+        "offered": list(offered),
+        "everyone": {"weight": round((1 - w_own) * (1 - w_ctx), 4), "tally": tally(population)},
+        "your_picks": {"weight": round(w_own * (1 - w_ctx), 4), "tally": tally(own), "picks": n},
         "context": None if context_name is None else {
             "kind": context_name,
             "after_slot": prev_slot if context_name == "order" else None,
             "weight": round(w_ctx, 4),
-            "counts": {s: context_raw.get(s, 0) for s in _SLOTS},
+            "tally": tally(context),
         },
         "set_aside": set_aside,
     }
     return Prediction(
         predicted_slot=predicted,
-        scores={s: round(blend[s], 4) for s in _SLOTS},
+        scores={s: round(probs[s], 4) for s in offered},
         contributions=contributions,
         evidence_count=n,
     )
@@ -203,30 +220,31 @@ def explain(prediction: Prediction) -> list[str]:
     label = slot_label(slot)
     lines: list[tuple[float, str]] = []
     own = c["your_picks"]
-    if own["picks"]:
-        lines.append((own["weight"],
-                      f"You took “{label}” {own['counts'][slot]} of your {own['picks']} picks so far."))
-    else:
+    mine = own["tally"].get(slot, {"offered": 0, "taken": 0})
+    if not own["picks"]:
         lines.append((0.0, "Versa hasn't seen you pick yet, so this is its starting guess."))
+    elif mine["offered"]:
+        lines.append((own["weight"], (f"When \u201c{label}\u201d was on offer, you took it "
+                                     f"{mine['taken']} of {mine['offered']} times.")))
+    else:
+        lines.append((own["weight"], (f"You haven't had \u201c{label}\u201d on offer before -- "
+                                     "this rests on the rest of your picks.")))
     ctx = c.get("context")
     if ctx:
-        total = sum(ctx["counts"].values())
-        if ctx["kind"] == "order":
-            lines.append((ctx["weight"], (
-                f"Right after “{slot_label(ctx['after_slot'])}”, you went to "
-                f"“{label}” {ctx['counts'][slot]} of {total} times."
-            )))
-        else:
-            lines.append((ctx["weight"],
-                          f"You opened a chat with “{label}” {ctx['counts'][slot]} of {total} times."))
-    everyone = c["everyone"]
-    total_everyone = sum(everyone["counts"].values())
-    if total_everyone:
-        share = round(100 * everyone["counts"][slot] / total_everyone)
-        lines.append((everyone["weight"], f"Other learners take “{label}” {share}% of the time."))
+        t = ctx["tally"].get(slot, {"offered": 0, "taken": 0})
+        if t["offered"]:
+            where = (f"Right after \u201c{slot_label(ctx['after_slot'])}\u201d" if ctx["kind"] == "order"
+                     else "Opening a chat")
+            lines.append((ctx["weight"], (f"{where}, with \u201c{label}\u201d on offer, you took it "
+                                         f"{t['taken']} of {t['offered']} times.")))
+    every = c["everyone"]["tally"].get(slot, {"offered": 0, "taken": 0})
+    if every["offered"]:
+        share = round(100 * every["taken"] / every["offered"])
+        lines.append((c["everyone"]["weight"],
+                      f"Other learners take \u201c{label}\u201d {share}% of the times it's offered."))
     lines.sort(key=lambda pair: -pair[0])
     out = [text for _, text in lines]
-    if not own["picks"]:  # say first that this is a starting guess
+    if not own["picks"]:
         out.sort(key=lambda line: not line.startswith("Versa hasn't"))
     aside = c["set_aside"]
     parts = []
@@ -249,14 +267,16 @@ def explain(prediction: Prediction) -> list[str]:
 
 # Answers lean toward a learner's usual way into an idea only once it is
 # clear: enough fresh starts (the first card they took after a question of
-# their own), and one way in well above chance (1 in 6) among them.
+# their own), and one way in taken well above chance whenever it was offered.
 PROFILE_MIN_STARTS = 4
+PROFILE_MIN_OFFERED = 2
 PROFILE_MIN_SHARE = 0.35
+PROFILE_CHANCE_LIFT = 1.5
 # ... and a second step only when they took it after the first most times.
 PROFILE_MIN_FOLLOWS = 2
 PROFILE_MIN_FOLLOW_SHARE = 0.5
 
-# What each slot asks of an answer, as a part of it.
+# What each card type asks of an answer, as a part of it.
 _ANSWER_PART = {
     "intuition": "a simple everyday picture or analogy of the idea",
     "example": "one small, concrete worked example",
@@ -264,60 +284,130 @@ _ANSWER_PART = {
     "use": "where it is actually used",
     "deeper": "a more rigorous version",
     "next": "the related idea it leads to",
+    "try_it": "a small thing to try or calculate themselves",
+    "real_data": "the idea in real numbers or data",
+    "prove_it": "a short argument for why it must be so",
+    "mistake": "the common mistake people make with it",
+    "visualise": "a picture of how it looks",
+    "story": "the story of who figured it out",
+    "summary": "the whole idea in one sentence",
+    "compare": "how it differs from a similar idea",
+    "connect": "the same idea in another subject",
+    "debate": "where people disagree about it",
+    # the family level: used when their way in is clear as a direction but
+    # not yet as one card type
+    "family:real": "something concrete -- a small worked example or where it is actually used",
+    "family:deeper": "why it works -- the mechanism or reasoning underneath",
+    "family:simpler": "the simple picture first -- an everyday analogy or the idea in one line",
+    "family:wider": "how it connects -- what it leads to or where else the same idea shows up",
 }
 
 
 class ApproachProfile(BaseModel):
-    """How a learner usually moves through an idea, read off their own picks:
-    where they go first, and (when clear) where they go after that."""
+    """How a learner usually moves through an idea, read off their own picks
+    against what was offered: where they go first, and (when clear) where
+    they go after that."""
 
     path: list[str]
-    # fresh starts it rests on, and how many took each way in
+    # fresh starts it rests on; for the way in, how often it was on offer
+    # and taken then, and its rate (pulled toward chance)
     starts: int
     first_share: float
-    counts: dict[str, int]
-    # what they took right after path[0]
-    follows: dict[str, int]
+    first_offered: int
+    first_taken: int
+    # after path[0]: how often the second step was on offer and taken
+    follows_offered: int = 0
+    follows_taken: int = 0
+
+
+def _best(choices: list[Shown], min_offered: int,
+          universe: tuple[str, ...] = _SLOTS) -> tuple[str, float, float, float, float] | None:
+    """The card (or family) taken most above chance when offered: (slot,
+    rate, chance, taken, offered), or None."""
+    best = None
+    for slot in universe:
+        taken, offered_n, chance = win_stats(choices, slot)
+        if offered_n < min_offered:
+            continue
+        rate = win_rate(taken, offered_n, chance)
+        key = (rate / chance if chance else 0.0, -universe.index(slot))
+        if best is None or key > best[0]:
+            best = (key, (slot, rate, chance, taken, offered_n))
+    return best[1] if best else None
+
+
+_FAMILY_KEYS: tuple[str, ...] = tuple(f"family:{f}" for f in FAMILIES)
+
+
+def _as_family(c: Shown) -> Shown | None:
+    """The same choice one level up: the family taken, from the families on
+    offer -- None for a card with no family."""
+    if c.chosen not in FAMILY_OF or any(s not in FAMILY_OF for s in c.offered):
+        return None
+    offered = tuple(dict.fromkeys(f"family:{FAMILY_OF[s]}" for s in c.offered))
+    return Shown(offered=offered, chosen=f"family:{FAMILY_OF[c.chosen]}", weight=c.weight)
 
 
 def approach_profile(past: list[PastPick]) -> ApproachProfile | None:
     """Pure. None until the learner's way in is clear enough to act on -- an
     answer is never shaped from a hunch. The way in is read only from fresh
     starts (a pick with no pick just before it: the first move after a
-    question of their own), since that is what an answer to a new question
-    should open with; the second step from what they took right after it.
-    Same weighting as the guess (quick taps and first-card taps count for
-    less, recent picks more), so the answer and the guess rest on the same
+    question of their own), against the cards that were on offer each time
+    (choice.py); the second step from what they took right after it. Same
+    weighting as the guess (quick taps and first-card taps count for less,
+    recent picks more), so the answer and the guess rest on the same
     reading."""
-    starts = [(i, p) for i, p in enumerate(past) if p.prev_slot is None]
+    # a pick after a shaped answer would only confirm the shaping
+    starts = [(i, p) for i, p in enumerate(past) if p.prev_slot is None and not p.steered]
     if len(starts) < PROFILE_MIN_STARTS:
         return None
     n = len(past)
-    weighted: dict[str, float] = {}
-    counts: dict[str, int] = {}
-    for i, pick in starts:
-        weight, _ = _pick_weight(pick)
-        weight *= 0.5 ** ((n - 1 - i) / RECENCY_HALF_LIFE)
-        weighted[pick.slot] = weighted.get(pick.slot, 0.0) + weight
-        counts[pick.slot] = counts.get(pick.slot, 0) + 1
-    shares = _normalise(weighted)
-    first = max(_SLOTS, key=lambda s: (shares[s], -_SLOTS.index(s)))
-    if shares[first] < PROFILE_MIN_SHARE:
-        return None
-    follows: dict[str, int] = {}
-    for pick in past:
-        if pick.prev_slot == first:
-            follows[pick.slot] = follows.get(pick.slot, 0) + 1
+    start_choices = [
+        _shown(p, _pick_weight(p)[0] * 0.5 ** ((n - 1 - i) / RECENCY_HALF_LIFE)) for i, p in starts
+    ]
+    found = _best(start_choices, PROFILE_MIN_OFFERED)
+    if found is not None and found[1] < max(PROFILE_MIN_SHARE, PROFILE_CHANCE_LIFT * found[2]):
+        found = None
+    if found is None:
+        # With random hands from 16 card types, one type is on offer rarely;
+        # the family (three of four are in every hand) is clear much sooner.
+        return _family_profile(starts, start_choices)
+    first, rate, _chance, _, _ = found
+    raw_offered = sum(1 for _, p in starts if first in p.offered)
+    raw_taken = sum(1 for _, p in starts if p.slot == first)
     path = [first]
-    if follows:
-        second = max(follows, key=lambda s: (follows[s], -_SLOTS.index(s)))
-        total = sum(follows.values())
-        if (second != first and follows[second] >= PROFILE_MIN_FOLLOWS
-                and follows[second] / total >= PROFILE_MIN_FOLLOW_SHARE):
-            path.append(second)
+    after = [_shown(p, 1.0) for p in past if p.prev_slot == first and not p.steered]
+    f_offered = f_taken = 0
+    second = _best(after, PROFILE_MIN_FOLLOWS)
+    if second is not None:
+        slot2, rate2, chance2, taken2, offered2 = second
+        if (slot2 != first and taken2 >= PROFILE_MIN_FOLLOWS
+                and rate2 >= max(PROFILE_MIN_FOLLOW_SHARE, PROFILE_CHANCE_LIFT * chance2)):
+            path.append(slot2)
+            f_offered, f_taken = int(offered2), int(taken2)
     return ApproachProfile(
-        path=path, starts=len(starts), first_share=round(shares[first], 4),
-        counts={s: counts.get(s, 0) for s in _SLOTS}, follows={s: follows.get(s, 0) for s in _SLOTS},
+        path=path, starts=len(starts), first_share=round(rate, 4),
+        first_offered=raw_offered, first_taken=raw_taken,
+        follows_offered=f_offered, follows_taken=f_taken,
+    )
+
+
+def _family_profile(starts: list[tuple[int, PastPick]], start_choices: list[Shown]) -> ApproachProfile | None:
+    """The way in as a family ("making it real"), when no single card type
+    is clear yet -- same gates, one level up."""
+    fam_choices = [f for c in start_choices if (f := _as_family(c)) is not None]
+    found = _best(fam_choices, PROFILE_MIN_OFFERED, _FAMILY_KEYS)
+    if found is None:
+        return None
+    first, rate, chance, _, _ = found
+    if rate < max(PROFILE_MIN_SHARE, PROFILE_CHANCE_LIFT * chance):
+        return None
+    fam = first.removeprefix("family:")
+    raw = [p for _, p in starts if p.slot in FAMILY_OF and all(s in FAMILY_OF for s in p.offered)]
+    return ApproachProfile(
+        path=[first], starts=len(starts), first_share=round(rate, 4),
+        first_offered=sum(1 for p in raw if any(FAMILY_OF[s] == fam for s in p.offered)),
+        first_taken=sum(1 for p in raw if FAMILY_OF[p.slot] == fam),
     )
 
 
@@ -331,8 +421,8 @@ def render_approach_directive(profile: ApproachProfile | None, noun: str = "stud
     return (
         f"\nHow this {noun} likes to move through an idea -- learned from {profile.starts} of their "
         "own choices of where to go after an answer, not from anything they said: shape this "
-        f"answer so it starts with {order}. Keep it natural and still answer exactly what they asked; do not "
-        "mention that you are doing this.\n"
+        f"answer so it starts with {order}. Keep it natural and still answer exactly what they asked; "
+        "do not mention that you are doing this.\n"
     )
 
 
@@ -340,14 +430,14 @@ def explain_profile(profile: ApproachProfile) -> list[str]:
     """Why the answer was shaped this way, in plain words, from the numbers."""
     first = profile.path[0]
     lines = [(
-        f"After an answer to your own question, you went to “{slot_label(first)}” first "
-        f"{profile.counts[first]} of {profile.starts} times -- more than any other way in."
+        f"After an answer to your own question, when \u201c{slot_label(first)}\u201d was on offer "
+        f"you went there first {profile.first_taken} of {profile.first_offered} times."
     )]
     if len(profile.path) > 1:
         second = profile.path[1]
         lines.append(
-            f"After “{slot_label(first)}”, you went to “{slot_label(second)}” "
-            f"{profile.follows[second]} of {sum(profile.follows.values())} times."
+            f"After \u201c{slot_label(first)}\u201d, with \u201c{slot_label(second)}\u201d on offer, "
+            f"you went there {profile.follows_taken} of {profile.follows_offered} times."
         )
     return lines
 
@@ -365,13 +455,19 @@ class PredictionStore:
 
     async def past_picks(self, learner_id: UUID) -> list[PastPick]:
         rows = await self._pool.fetch(
+            # a hand passed over with "other directions" (kind 'more') is not a
+            # step on the path: the next hand's pick follows what came before it
             "WITH sets AS ("
             "  SELECT s.id, s.session_id, s.turn_index, s.created_at, e.kind, e.elapsed_ms, e.created_at AS picked_at, "
-            "         c.slot, c.position, "
+            "         COALESCE(c.tagged_as, c.slot) AS slot, c.position, "
+            "         ARRAY(SELECT COALESCE(o.tagged_as, o.slot) FROM direction_cards o "
+            "               WHERE o.set_id = s.id ORDER BY o.position) AS offered, "
+            "         EXISTS (SELECT 1 FROM node_calls nc WHERE nc.session_id = s.session_id AND nc.turn_index = s.turn_index AND nc.node_name IN ('FinalAnswer', 'RegenerateAnswer') AND nc.input_json ? 'approach_directive') AS steered, "
             "         ROW_NUMBER() OVER (PARTITION BY s.session_id ORDER BY s.turn_index, s.created_at) AS n, "
-            "         LAG(c.slot) OVER (PARTITION BY s.session_id ORDER BY s.turn_index, s.created_at) AS prev_slot "
+            "         LAG(COALESCE(c.tagged_as, c.slot)) OVER (PARTITION BY s.session_id "
+            "             ORDER BY s.turn_index, s.created_at) AS prev_slot "
             "  FROM direction_sets s JOIN sessions se ON se.id = s.session_id "
-            "  JOIN direction_events e ON e.set_id = s.id "
+            "  JOIN direction_events e ON e.set_id = s.id AND e.kind <> 'more' "
             "  LEFT JOIN direction_cards c ON c.id = e.card_id "
             "  WHERE se.learner_id = $1"
             ") SELECT * FROM sets WHERE kind = 'picked' ORDER BY created_at, id",
@@ -386,6 +482,8 @@ class PredictionStore:
                 stuck=(r["session_id"], r["turn_index"]) in flags.stuck,
                 rushed=r["session_id"] in flags.rushed,
                 at=r["picked_at"],
+                offered=tuple(r["offered"]),
+                steered=r["steered"],
             )
             for r in rows
         ]
@@ -395,15 +493,17 @@ class PredictionStore:
         isn't clear yet. One query, no model call."""
         return approach_profile(await self.past_picks(learner_id))
 
-    async def population(self, exclude_learner: UUID) -> dict[str, int]:
+    async def population(self, exclude_learner: UUID) -> list[Shown]:
+        """Every other learner's choices, each with the hand it came from."""
         rows = await self._pool.fetch(
-            "SELECT c.slot, count(*) AS n FROM direction_events e "
-            "JOIN direction_cards c ON c.id = e.card_id "
+            "SELECT COALESCE(c.tagged_as, c.slot) AS slot, "
+            "ARRAY(SELECT COALESCE(o.tagged_as, o.slot) FROM direction_cards o WHERE o.set_id = s.id) AS offered "
+            "FROM direction_events e JOIN direction_cards c ON c.id = e.card_id "
             "JOIN direction_sets s ON s.id = e.set_id JOIN sessions se ON se.id = s.session_id "
-            "WHERE e.kind = 'picked' AND se.learner_id IS DISTINCT FROM $1 GROUP BY c.slot",
+            "WHERE e.kind = 'picked' AND se.learner_id IS DISTINCT FROM $1",
             exclude_learner,
         )
-        return {r["slot"]: r["n"] for r in rows}
+        return [Shown(offered=tuple(r["offered"]), chosen=r["slot"]) for r in rows]
 
     async def context(self, session_id: UUID, set_id: UUID) -> tuple[str | None, bool]:
         """(the slot picked from the settled set just before `set_id` in this
@@ -411,7 +511,7 @@ class PredictionStore:
         set). Sets never settled -- replaced when a slider re-pitched the
         answer -- are skipped, the same as `past_picks` never sees them."""
         rows = await self._pool.fetch(
-            "SELECT s.id, e.kind, c.slot FROM direction_sets s "
+            "SELECT s.id, e.kind, COALESCE(c.tagged_as, c.slot) AS slot FROM direction_sets s "
             "LEFT JOIN direction_events e ON e.set_id = s.id "
             "LEFT JOIN direction_cards c ON c.id = e.card_id "
             "WHERE s.session_id = $1 ORDER BY s.turn_index, s.created_at",
@@ -420,7 +520,7 @@ class PredictionStore:
         ids = [r["id"] for r in rows]
         if set_id not in ids:
             return None, False
-        earlier = [r for r in rows[: ids.index(set_id)] if r["kind"] is not None]
+        earlier = [r for r in rows[: ids.index(set_id)] if r["kind"] not in (None, "more")]
         if not earlier:
             return None, True
         before = earlier[-1]
@@ -432,7 +532,10 @@ class PredictionStore:
         past = await self.past_picks(learner_id)
         population = await self.population(learner_id)
         prev_slot, first = await self.context(session_id, set_id)
-        prediction = predict(past, population, prev_slot=prev_slot, first_in_session=first)
+        offered = [r["slot"] for r in await self._pool.fetch(
+            "SELECT COALESCE(tagged_as, slot) AS slot FROM direction_cards WHERE set_id = $1 ORDER BY position",
+            set_id)]
+        prediction = predict(past, population, offered=offered, prev_slot=prev_slot, first_in_session=first)
         await self._pool.execute(
             "INSERT INTO direction_predictions (id, set_id, learner_id, predicted_slot, scores, "
             "contributions, evidence_count, predictor_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",

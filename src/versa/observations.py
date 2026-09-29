@@ -37,8 +37,12 @@ from pydantic import BaseModel
 DERIVATION_VERSION = "obs-v1"
 
 Lens = Literal["style", "range", "interest", "ability", "mood", "said"]
-Source = Literal["direction", "knob", "stage", "interaction", "stated"]
-ALL_SOURCES: tuple[Source, ...] = ("direction", "knob", "stage", "interaction", "stated")
+Source = Literal["direction", "knob", "stage", "interaction", "stated", "topic"]
+ALL_SOURCES: tuple[Source, ...] = ("direction", "knob", "stage", "interaction", "stated", "topic")
+
+# A Learn-a-topic tree's levels (0 = the topic itself) as a 0-100 range
+# level, so exploring depth reads on the same scale as the depth slider.
+TREE_LEVEL_POINTS = 25
 
 # A pick this soon after the cards appeared was probably not read.
 QUICK_TAP_MS = 1500
@@ -68,18 +72,21 @@ class Observation(BaseModel):
 
 def from_direction_events(learner_id: UUID, rows: Iterable[dict]) -> list[Observation]:
     """A directions set and what happened to it. The cards are never shaped
-    by what Versa believes (invariant 14), so every pick is unsteered.
+    by what Versa believes (invariant 14); a pick is steered only when the
+    ANSWER above them was shaped to the learner's way in (row key `steered`).
     Row keys: session_id, turn_index (the answered turn the set followed),
-    kind, slot, position, elapsed_ms, created_at."""
+    kind, slot, position, elapsed_ms, created_at, steered (optional)."""
     out = []
     for r in rows:
         base = {"learner_id": learner_id, "session_id": r["session_id"], "turn_index": r["turn_index"],
-                    "at": r["created_at"], "source": "direction"}
+                    "at": r["created_at"], "source": "direction", "steered": bool(r.get("steered"))}
         if r["kind"] == "picked":
             out.append(Observation(**base, lens="style", key=r["slot"], value=1,
                                    detail={"position": r["position"], "elapsed_ms": r["elapsed_ms"]}))
         else:
-            out.append(Observation(**base, lens="style", key="passed", value=1))
+            # "passed": asked their own question; "more": asked for other
+            # directions -- both mean nothing in that hand matched
+            out.append(Observation(**base, lens="style", key=r["kind"], value=1))
         out.append(Observation(**base, lens="mood", key="decision_ms", value=r["elapsed_ms"],
                                detail={"kind": r["kind"]}))
     return out
@@ -129,6 +136,38 @@ def from_interactions(learner_id: UUID, rows: Iterable[dict]) -> list[Observatio
             out.append(Observation(**base, lens="interest", key="returned_to_topic", value=True))
         if r["help_level"] and r["help_level"] != "none":
             out.append(Observation(**base, lens="ability", key="help_level", value=r["help_level"]))
+    return out
+
+
+def from_topic_signals(learner_id: UUID, rows: Iterable[dict]) -> list[Observation]:
+    """Learn a topic: how they explore a topic's tree (topics.py). Expanding a
+    branch is a range observation -- how deep they go -- and choosing lessons
+    for a course is range too: how deep the lessons they kept go, and how
+    much of what was offered they took (breadth). Both are the learner's own
+    moves, not something Versa suggested. The "session" here is the
+    exploration (one topic tree). Row keys: exploration_id, kind, payload,
+    created_at."""
+    out = []
+    for r in rows:
+        payload = r["payload"] or {}
+        if r["exploration_id"] is None:
+            continue
+        base = {"learner_id": learner_id, "session_id": r["exploration_id"], "turn_index": None,
+                "at": r["created_at"], "source": "topic"}
+        if r["kind"] == "expand":
+            depth = int(payload.get("depth") or 0)
+            out.append(Observation(**base, lens="range", key="explore_depth",
+                                   value=min(100, depth * TREE_LEVEL_POINTS),
+                                   detail={"level": depth, "title": payload.get("title")}))
+        elif r["kind"] == "selection":
+            chosen, total = payload.get("lessons_chosen") or 0, payload.get("lessons_total") or 0
+            out.append(Observation(**base, lens="range", key="explore_depth",
+                                   value=min(100, int(payload.get("max_depth_selected") or 0) * TREE_LEVEL_POINTS),
+                                   detail={"level": payload.get("max_depth_selected"), "from": "selection"}))
+            if total:
+                out.append(Observation(**base, lens="range", key="explore_breadth",
+                                       value=round(100 * chosen / total),
+                                       detail={"lessons_chosen": chosen, "lessons_total": total}))
     return out
 
 
@@ -252,7 +291,8 @@ class ObservationReader:
         async with self._pool.acquire() as conn:
             if "direction" in wanted:
                 out += from_direction_events(learner_id, map(dict, await conn.fetch(
-                    "SELECT s.session_id, s.turn_index, e.kind, c.slot, c.position, e.elapsed_ms, e.created_at "
+                    "SELECT s.session_id, s.turn_index, e.kind, COALESCE(c.tagged_as, c.slot) AS slot, c.position, "
+                    "e.elapsed_ms, e.created_at, EXISTS (SELECT 1 FROM node_calls nc WHERE nc.session_id = s.session_id AND nc.turn_index = s.turn_index AND nc.node_name IN ('FinalAnswer', 'RegenerateAnswer') AND nc.input_json ? 'approach_directive') AS steered "
                     "FROM direction_events e JOIN direction_sets s ON s.id = e.set_id "
                     "JOIN sessions se ON se.id = s.session_id "
                     "LEFT JOIN direction_cards c ON c.id = e.card_id WHERE se.learner_id = $1",
@@ -270,6 +310,10 @@ class ObservationReader:
                     "SELECT session_id, turn_number, entry_state::text AS entry_state, "
                     "help_level::text AS help_level, created_at FROM interactions WHERE learner_id = $1",
                     learner_id)))
+            if "topic" in wanted:
+                out += from_topic_signals(learner_id, map(dict, await conn.fetch(
+                    "SELECT exploration_id, kind, payload, created_at FROM topic_signals "
+                    "WHERE learner_id = $1 AND kind IN ('expand', 'selection')", learner_id)))
             if "stated" in wanted:
                 out += from_stated_preferences(learner_id, map(dict, await conn.fetch(
                     "SELECT i.session_id, i.turn_number, p.label::text AS label, p.stated_preference, "

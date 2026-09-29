@@ -9,6 +9,7 @@ from uuid import UUID
 
 from dotenv import load_dotenv
 
+from versa import migrate as _migrate
 from versa.db import create_pool
 from versa.domain_config import load_domain_config
 from versa.embeddings import (
@@ -16,18 +17,17 @@ from versa.embeddings import (
     StubEmbeddingClient,
     build_embedding_client,
 )
+from versa.interactions import InteractionAbstractStore
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from versa.loop import SessionLoop
-from versa.interactions import InteractionAbstractStore
 from versa.models import Learner
-from versa.session_builder import build_session_loop
 from versa.population_patterns import (
     PopulationAggregationConfig,
     PopulationPatternStore,
     aggregate_population_patterns,
 )
-from versa import migrate as _migrate
+from versa.session_builder import build_session_loop
 
 
 def _database_url() -> str:
@@ -232,6 +232,56 @@ async def _run_migrations(status_only: bool, do_baseline: bool) -> None:
         await pool.close()
 
 
+async def _discovered_moves(learner_spec: str | None = None) -> None:
+    """`versa discovered-moves` -- the moves learners asked for when none of
+    the cards matched and none of the library's types fit (migration 089),
+    grouped across learners (style_patterns.discover_moves). A group marked
+    CANDIDATE was asked for often enough, by enough learners, to consider as
+    a new card type -- a person decides; nothing changes the library on its
+    own. Read-only; no model call, writes nothing."""
+    from versa.style_patterns import (
+        DISCOVER_MIN_LEARNERS,
+        DISCOVER_MIN_READINGS,
+        StyleReader,
+    )
+
+    pool = await create_pool(_database_url(), min_size=1, max_size=2)
+    try:
+        if learner_spec:
+            learner = await _resolve_learner(LearnerStore(pool), learner_spec)
+            moves = await StyleReader(pool).learner_moves(learner.id)
+            if not moves:
+                print(f"learner {learner.id}: no new moves yet")
+                return
+            print(f"learner {learner.id}: {len(moves)} new move(s) -- asked for, not offered by any card")
+            for m in moves:
+                shared = f", also asked by {m['others']} other learner(s)" if m["others"] else ""
+                print(f"  \u201c{m['label']}\u201d -- {m['times']} time(s) in {m['chats']} chat(s){shared}")
+            return
+        # the instrument's own check: a learner typed the very move a card
+        # on screen offered -- that card's wording didn't land
+        missed_wording = await pool.fetch(
+            "SELECT tagged_as, count(*) AS n FROM direction_misses WHERE in_hand GROUP BY tagged_as ORDER BY n DESC")
+        if missed_wording:
+            print("cards whose wording missed (typed what a card on screen already offered):")
+            for r in missed_wording:
+                print(f"  {r['tagged_as']}: {r['n']} time(s)")
+        groups = await StyleReader(pool).discovered_moves()
+        if not groups:
+            print("no new moves yet -- every missed question so far fitted a card type, or none was read")
+            return
+        print(f"{len(groups)} group(s) of new moves (a candidate needs >= {DISCOVER_MIN_READINGS} readings "
+              f"from >= {DISCOVER_MIN_LEARNERS} learners)")
+        for g in groups:
+            mark = "CANDIDATE " if g["candidate_card"] else ""
+            print(f"  {mark}“{g['label']}” -- {g['readings']} reading(s), {g['learners']} learner(s), "
+                  f"{g['sessions']} chat(s)")
+            for example in g["examples"][1:]:
+                print(f"      also: {example}")
+    finally:
+        await pool.close()
+
+
 async def _observations(learner_spec: str) -> None:
     """`versa observations` -- the observation ledger for one learner
     (observations.py, docs/THINKING_STYLE.md layer 1): every raw event split
@@ -262,10 +312,17 @@ async def _observations(learner_spec: str) -> None:
 
         patterns = await StyleReader(pool).patterns(learner.id)
         print(f"  thinking style ({len(patterns)} pattern(s)):" if patterns else "  thinking style: nothing clear yet")
-        for pattern in patterns:
+        # one fact per tendency; patterns pointing the same way are its facets
+        for pattern in [p for p in patterns if p.facet_of is None]:
             print(f"    [{pattern.status}] {pattern.statement}")
             for name, gate in pattern.gates.items():
                 print(f"        {'ok ' if gate.ok else 'no '} {name:12s} {gate.have}  (needs {gate.need})")
+            for facet in [p for p in patterns if p.facet_of == pattern.id]:
+                print(f"        also seen as [{facet.status}]: {facet.statement}")
+        through = await StyleReader(pool).follow_through(learner.id)
+        print(f"  misses (passed every card by asking their own): {through['misses']}, "
+              f"{through['read']} read as a way out ({through['in_hand']} of those were on a card); "
+              f"later offered {through['offered_later']}, taken {through['taken']}, held {through['held']}")
         profile = await store.approach_profile(learner.id)
         if profile is None:
             print("  way in: not clear yet -- answers are not shaped")
@@ -660,6 +717,15 @@ def main() -> None:
         "--learner", required=True,
         help="learner label or an existing learner's UUID",
     )
+    discovered_parser = subparsers.add_parser(
+        "discovered-moves",
+        help="read-only: moves learners asked for that no card type covers, grouped across "
+        "learners -- candidates for new card types (style_patterns.discover_moves)",
+    )
+    discovered_parser.add_argument(
+        "--learner", default=None,
+        help="only this learner's own new moves (label or UUID)",
+    )
     score_predictions_parser = subparsers.add_parser(
         "score-predictions",
         help="read-only reliability-diagram check (score_predictions.py): "
@@ -692,6 +758,8 @@ def main() -> None:
         asyncio.run(_review_claims(args.learner))
     elif args.command == "observations":
         asyncio.run(_observations(args.learner))
+    elif args.command == "discovered-moves":
+        asyncio.run(_discovered_moves(args.learner))
     elif args.command == "score-predictions":
         asyncio.run(_score_predictions(args.exclude_contaminated))
     elif args.command == "invite":

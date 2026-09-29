@@ -11,7 +11,6 @@ import pytest
 from versa.llm import StubLLMClient
 from versa.loop import SessionLoop
 from versa.memory import MemoryConfig
-from versa.models import ThinkingStyleStatus
 
 
 def _make_loop(
@@ -83,13 +82,20 @@ async def test_at_or_above_threshold_auto_consolidates(
         thinking_style_store, embedding_client, llm, min_turns=2,
     )
     _scripted_input(monkeypatch, ["first message", "second message"])
+    consolidated = []
+    real = loop.consolidate_session
+
+    async def spy(session_id):
+        consolidated.append(session_id)
+        return await real(session_id)
+
+    monkeypatch.setattr(loop, "consolidate_session", spy)
 
     await loop.run_interactive(learner_id)
 
-    candidates = await thinking_style_store.list_by_learner(learner_id)
-    assert len(candidates) == 1
-    assert candidates[0].path_summary == "a labeled path"
-    assert candidates[0].status is ThinkingStyleStatus.CANDIDATE
+    assert len(consolidated) == 1  # the session-end hook fired
+    # ...and the retired free-text detector wrote nothing
+    assert await thinking_style_store.list_by_learner(learner_id) == []
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -115,6 +121,5 @@ async def test_explicit_consolidate_session_ignores_turn_count(
     session_id = await transcript.create_session(learner_id)
     await loop.handle_turn(session_id, 0, "one single turn")
 
-    result = await loop.consolidate_session(session_id)
-    assert result is not None
-    assert result.path_summary == "a labeled path"
+    assert await loop.consolidate_session(session_id) is None  # runs; the old detector writes nothing
+    assert await thinking_style_store.list_by_learner(learner_id) == []

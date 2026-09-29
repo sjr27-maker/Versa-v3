@@ -35,7 +35,11 @@ transport:
     take one, which runs as the next turn. Versa guessed the pick before the
     set went out (pick_prediction.py); right after `turn_start` for a pick
     it sends {"type": "guess", "turn_index", "hit", "predicted", "picked",
-    "hits", "guesses", "picks_seen", "because": [lines]}.
+    "hits", "guesses", "picks_seen", "because": [lines]}. A directions frame
+    is a HAND of three dealt from a pool (directions.py lib-v2) and carries
+    "deal_index"; the client sends {"type": "more_directions", "set_id"} for
+    "other directions" and gets the next hand as another directions frame
+    (same turn_index), or {"type": "directions_exhausted", "turn_index"}.
     Rooms (rooms/, experimental): /api/rooms[/from-pdf], /api/rooms/{code}/join,
     /api/rooms/{code}/state, /api/rooms/summaries, WS /api/rooms/{code}/ws
     Billing (billing.py): GET /api/learners/{id}/billing (plan, Plus expiry,
@@ -146,6 +150,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from versa import chatter as _chatter
 from versa import directions as _directions
 from versa import pick_prediction as _pick_prediction
 from versa import style_patterns as _style_patterns
@@ -244,6 +249,16 @@ class EndOut(BaseModel):
 class StylePatternsOut(BaseModel):
     version: str
     patterns: list[_style_patterns.StylePattern]
+    # where every card type sits (directions.py): family and its place on the
+    # four axes -- what the constellation places stars by
+    space: dict[str, dict] = {}
+    # experimenting on a miss (style_patterns.miss_follow_through): misses,
+    # how many were read as a way out, and what happened when a later hand
+    # offered that way -- taken, and held in a later chat
+    misses: dict[str, int] = {}
+    # this learner's own new moves: what they asked for that no card type
+    # covers (StyleReader.learner_moves)
+    new_moves: list[dict] = []
 
 
 class ThinkingStyleItem(BaseModel):
@@ -512,6 +527,15 @@ def create_app(
     # a turn's own row is written in its deferred tail, so reading turns back
     # can lag behind what the learner has actually done.
     latest_turn: dict[UUID, int] = {}
+    # session -> (turn, message, answer, presentation) of the latest answer the
+    # directions were offered for: "other directions" needs them to write a
+    # fresh pool once one is spent. In memory only -- after a restart a spent
+    # pool just answers `directions_exhausted`.
+    offer_context: dict[UUID, tuple[int, str, str, str]] = {}
+    # session -> the text of its latest answer (or options question): whether
+    # it ended by asking the learner something decides if an "ok" is an
+    # answer or just chatter (chatter.py). In memory only.
+    last_answer: dict[UUID, str] = {}
     session_locks: dict[UUID, asyncio.Lock] = {}
 
     guard = build_guard(auth, pool)
@@ -670,6 +694,7 @@ def create_app(
             session_id=session_id, turn_count=await transcript.get_turn_count(session_id),
             before=current, after=updated,
         )
+        _style_patterns.forget(await transcript.get_learner_id(session_id))
         return updated
 
     @api.get("/learners/{learner_id}/sessions", response_model=list[ChatSummary])
@@ -766,7 +791,15 @@ def create_app(
         if await learners.get(learner_id) is None:
             raise HTTPException(status_code=404, detail="unknown learner")
         patterns = await _style_patterns.StyleReader(pool).patterns(learner_id)
-        return StylePatternsOut(version=_style_patterns.STYLE_VERSION, patterns=patterns)
+        space = {
+            slot: {"family": _directions.FAMILY_OF[slot], "coords": list(_directions.COORDS[slot]),
+                   "label": _pick_prediction.slot_label(slot)}
+            for slot in _directions.SLOTS
+        }
+        reader = _style_patterns.StyleReader(pool)
+        return StylePatternsOut(version=_style_patterns.STYLE_VERSION, patterns=patterns, space=space,
+                                misses=await reader.follow_through(learner_id),
+                                new_moves=await reader.learner_moves(learner_id))
 
     @api.get("/learners/{learner_id}/thinking-style", response_model=ThinkingStyleOut)
     async def get_thinking_style(learner_id: UUID, include_archived: bool = False) -> ThinkingStyleOut:
@@ -789,7 +822,10 @@ def create_app(
                 edited=overlay.edited, archived=overlay.archived,
             )
 
-        styles = await thinking_styles.list_by_learner(learner_id)
+        # The old free-text detector is retired (2026-09-30): its past
+        # candidates stay on record but are no longer shown -- the thinking
+        # style is GET .../style-patterns. Only claims are listed here.
+        styles: list = []
         confirmed, emerging, retired = [], [], []
         for c in sorted(styles, key=lambda c: -c.confirmation_count):
             i = await item(c)
@@ -1107,6 +1143,13 @@ def create_app(
                     # the student answered the stage's quick check: keep it
                     await _record_stage_check(session_id, data, send)
                     continue
+                if data.get("type") == "more_directions":
+                    if lock.locked():
+                        await send({"type": "error", "message": "a turn is already running"})
+                        continue
+                    async with lock:
+                        await _more_directions(session_id, data, send)
+                    continue
                 if data.get("type") == "regenerate":
                     # A newer slider position supersedes a rewrite still in
                     # flight: cancel it (it records nothing) and start over.
@@ -1306,10 +1349,13 @@ def create_app(
 
     def _presentation(data: dict) -> str | None:
         """What a client says it shows under answers: "fork" (links the
-        answer ends with), any other truthy value = cards ("strip"), or
-        nothing -- then no set is made at all."""
+        answer ends with), "compass" (one card per family around the
+        answer), any other truthy value = cards ("strip"), or nothing --
+        then no set is made at all."""
         wanted = data.get("directions")
-        return "fork" if wanted == "fork" else ("strip" if wanted else None)
+        if wanted in ("fork", "compass"):
+            return wanted
+        return "strip" if wanted else None
 
     async def _guess_pick(session_id: UUID, set_id: UUID) -> None:
         """Record Versa's guess at which card will be taken, BEFORE the set is
@@ -1346,40 +1392,168 @@ def create_app(
         except Exception:
             logger.warning("revealing the guess failed for set %s", set_id, exc_info=True)
 
+    async def _deal(
+        session_id: UUID, turn_index: int, knobs, pool_id: UUID, pool_cards: dict,
+        deal_index: int, presentation: str, send,
+    ) -> bool:
+        """Deal a hand from a pool (directions.deal_hand: one card per family,
+        at random; sometimes one card swapped for the pool's path or wild
+        card), record Versa's guess before it goes out, and send it. False
+        when the pool has nothing left to deal."""
+        dealt = await direction_store.dealt_slots(pool_id)
+        library = [k for k in pool_cards if k in _directions.SLOTS]
+        compass = presentation == "compass"
+        hand = _directions.deal_hand(library, dealt, _directions.COMPASS_HAND_SIZE if compass else _directions.HAND_SIZE)
+        # the compass has one point per family: no path or wild card in it
+        extras_left = set() if compass else {e for e in _directions.EXTRAS if e in pool_cards and e not in dealt}
+        if "wild" in extras_left and not pool_cards.get("~wild_tag"):
+            extras_left.discard("wild")  # a wild card is only offered once it has a place in the space
+        # right after a miss in this chat, the next answer's first hand is
+        # widened at random (an extra for certain): experimenting on a miss
+        widen = not compass and deal_index == 0 and await direction_store.last_was_miss(session_id)
+        hand = _directions.with_extras(hand, extras_left, widen=widen)
+        if not hand:
+            return False
+        extras = {}
+        if "wild" in hand:
+            extras["wild"] = {"tagged_as": pool_cards["~wild_tag"]}
+        if "path" in hand:
+            first, second = pool_cards["~path_slots"].split(">")
+            # a path pick is read as choosing its first step; the order is on the card
+            extras["path"] = {"tagged_as": first, "path_slots": f"{first}>{second}"}
+        direction_set = await direction_store.add_set(
+            session_id=session_id, turn_index=turn_index, knobs=knobs,
+            cards={slot: pool_cards[slot] for slot in hand},
+            positions=_directions.shuffled_positions(slots=hand), presentation=presentation,
+            pool_id=pool_id, deal_index=deal_index, extras=extras,
+            # on record only when the widening happened (the pool had an extra left)
+            experiment="after_miss" if widen and any(e in hand for e in _directions.EXTRAS) else None,
+        )
+        await _guess_pick(session_id, direction_set.id)
+        await send({
+            "type": "directions",
+            "turn_index": turn_index,
+            "set_id": str(direction_set.id),
+            "presentation": presentation,
+            "deal_index": deal_index,
+            # the family places a card on the compass (and colours it anywhere)
+            "cards": [{"id": str(c.id), "text": c.text,
+                       "family": _directions.FAMILY_OF.get(c.tagged_as or c.slot)}
+                      for c in direction_set.cards],
+        })
+        return True
+
     async def _offer_directions(
         session_id: UUID, turn_index: int, message: str, answer: str, send, presentation: str = "strip",
+        deal_index: int = 0,
     ) -> None:
-        """After an answer: the standard set of directions (directions.py),
-        pitched inside the session's depth/breadth window, in a fresh shuffled
-        order. Best effort -- a failure costs the strip, never the answer. A
-        set that arrives after the learner already moved on is not stored:
-        it was never shown, so it can't be evidence of anything."""
+        """After an answer: "where this could go" (directions.py). A pool of
+        card types is drawn at random from the library (two per family), plus
+        a random two-step path and one wild card, written in one model call
+        pitched inside the session's depth/breadth window and kept whole
+        (direction_pools); a hand of three is dealt from it. The wild card is
+        tagged to its nearest library type by embedding -- blind to the
+        learner. Best effort -- a failure costs the cards, never the answer.
+        Cards that arrive after the learner already moved on are not stored:
+        they were never shown, so they can't be evidence of anything."""
+        offer_context[session_id] = (turn_index, message, answer, presentation)
         try:
             knobs = await transcript.get_knobs(session_id)
             taken = await direction_store.taken_texts(session_id)
+            slots = _directions.draw_pool()
+            route = _directions.draw_path(slots)
             cards = await loop._call_node(
                 loop.suggest_directions, session_id, turn_index,
                 message=message, answer=answer, depth=knobs.depth, breadth=knobs.breadth,
+                slots=slots, path=list(route), wild=True,
                 # passed only once they have taken one, so the first set is unchanged
                 **({"path_so_far": taken} if taken else {}),
             )
             if not cards or latest_turn.get(session_id) != turn_index:
-                return  # the learner already moved on: this set was never shown
-            direction_set = await direction_store.add_set(
-                session_id=session_id, turn_index=turn_index, knobs=knobs,
-                cards=cards, positions=_directions.shuffled_positions(), presentation=presentation,
-            )
-            await _guess_pick(session_id, direction_set.id)
-            await send({
-                "type": "directions",
-                "turn_index": turn_index,
-                "set_id": str(direction_set.id),
-                "presentation": presentation,
-                "cards": [{"id": str(c.id), "text": c.text} for c in direction_set.cards],
-            })
+                return  # the learner already moved on: these cards were never shown
+            pool_cards: dict = dict(cards)
+            if "path" in pool_cards:
+                pool_cards["~path_slots"] = f"{route[0]}>{route[1]}"
+            if "wild" in pool_cards:
+                try:
+                    pool_cards["~wild_tag"] = await _directions.tag_wild(pool_cards["wild"], loop._embedding_client)
+                except Exception:
+                    logger.warning("tagging a wild card failed for session %s", session_id, exc_info=True)
+            pool_id = await direction_store.add_pool(session_id=session_id, turn_index=turn_index, cards=pool_cards)
+            await _deal(session_id, turn_index, knobs, pool_id, pool_cards, deal_index, presentation, send)
         except Exception:
             logger.warning("directions failed on turn %d for session %s", turn_index, session_id,
                            exc_info=True)
+
+    async def _keep_miss(session_id: UUID, set_id: UUID, turn_index: int, question: str, earlier: str) -> None:
+        """A miss (build item 8): they passed every card by asking their own
+        question -- the one time Versa sees what was in their mind when none
+        of its cards matched. Kept with the card type it is nearest to (by
+        embedding, no model call), unless it moved to a new subject. When the
+        embedding can't place it, one fast model call reads what kind of move
+        it makes (directions.ReadMiss): one of the types after all, or a new
+        move -- kept with its embedding, so moves the cards don't offer can
+        be found (style_patterns.discover_moves). In the background: it never
+        holds up the answer."""
+        try:
+            recorder = loop._interaction_recorder
+            follow_up = (await recorder.same_subject(session_id, turn_index, question)
+                         if recorder is not None else None)
+            ranked = await _directions.nearest_types(question, loop._embedding_client)
+            miss = await direction_store.add_miss(set_id=set_id, question=question, follow_up=follow_up,
+                                                  ranked=ranked)
+            if miss is None or miss.tagged_as is not None or miss.follow_up is False:
+                return
+            reading = await loop._call_node(loop.read_miss, session_id, turn_index, earlier=earlier,
+                                            question=question)
+            if reading is None:
+                return
+            embedding = None
+            if reading.same_subject and reading.type is None:
+                from versa.embeddings import TASK_SIMILARITY
+
+                embedding = await loop._embedding_client.embed(reading.move, task_type=TASK_SIMILARITY)
+            await direction_store.add_reading(set_id=set_id, reading=reading, embedding=embedding)
+        except Exception:
+            logger.warning("keeping a miss failed for session %s", session_id, exc_info=True)
+        finally:
+            # a miss just read counts from the next turn on
+            with contextlib.suppress(Exception):
+                _style_patterns.forget(await transcript.get_learner_id(session_id))
+
+    async def _more_directions(session_id: UUID, data: dict, send) -> None:
+        """"Other directions": nothing in this hand matched. Kept as a `more`
+        event on the hand (a signal in itself), then the next hand is dealt
+        from the same pool -- instant, no model call -- or, once the pool is
+        spent, a fresh pool is written for the same answer."""
+        try:
+            set_id = UUID(str(data.get("set_id")))
+        except ValueError:
+            await send({"type": "error", "message": "unknown directions"})
+            return
+        latest = await direction_store.latest_set(session_id)
+        if latest is None or latest.id != set_id or await direction_store.is_settled(set_id):
+            await send({"type": "error", "message": "those directions are no longer open"})
+            return
+        try:
+            await direction_store.record_event(set_id=set_id, kind="more", next_turn_index=latest.turn_index)
+            _style_patterns.forget(await transcript.get_learner_id(session_id))
+        except _directions.AlreadySettled:
+            await send({"type": "error", "message": "those directions are no longer open"})
+            return
+        knobs = await transcript.get_knobs(session_id)
+        if latest.pool_id is not None:
+            pool_cards = await direction_store.get_pool(latest.pool_id)
+            if await _deal(session_id, latest.turn_index, knobs, latest.pool_id, pool_cards,
+                           latest.deal_index + 1, latest.presentation, send):
+                return
+        ctx = offer_context.get(session_id)
+        if ctx is not None and ctx[0] == latest.turn_index:
+            turn_index, message, answer, presentation = ctx
+            await _offer_directions(session_id, turn_index, message, answer, send, presentation,
+                                    deal_index=latest.deal_index + 1)
+            return
+        await send({"type": "directions_exhausted", "turn_index": latest.turn_index})
 
     async def _run_turn(session_id: UUID, data: dict, send) -> None:
         started = time.monotonic()
@@ -1390,6 +1564,17 @@ def create_app(
             text = str(data.get("text", "")).strip()
             if not text:
                 await send({"type": "error", "message": "empty message"})
+                return
+            # "ok", "thanks!", "haha", "hi": a reaction, not a question
+            # (chatter.py). A short reply, no model call, nothing stored, no
+            # Spark -- and the open cards and options stay open.
+            said = last_answer.get(session_id, "").rstrip(" \n*_)\"'")
+            chat_kind = _chatter.classify(text, after_question=said.endswith("?"))
+            if chat_kind is not None:
+                latest = await direction_store.latest_set(session_id)
+                directions_open = latest is not None and not await direction_store.is_settled(latest.id)
+                await send({"type": "chatter", "kind": chat_kind,
+                            "text": _chatter.reply(chat_kind, directions_open=directions_open)})
                 return
         elif kind == "select_option":
             try:
@@ -1447,10 +1632,16 @@ def create_app(
                     await direction_store.record_event(
                         set_id=latest.id, kind="passed", next_turn_index=turn_index,
                     )
+                    earlier = offer_context.get(session_id)
+                    loop._fire_background(_keep_miss(
+                        session_id, latest.id, turn_index, text, earlier[1] if earlier else ""))
         except _directions.AlreadySettled:
             if kind == "direction":
                 await send({"type": "error", "message": "that suggestion is no longer available"})
                 return
+        # the thinking style is analysed turn by turn: whatever they just did
+        # counts in this turn's reading of it
+        _style_patterns.forget(learner_id)
         latest_turn[session_id] = turn_index
         await send({"type": "turn_start", "turn_index": turn_index})
         if kind == "direction":
@@ -1458,8 +1649,18 @@ def create_app(
         first_output_ms: float | None = None
         # The stage starts the moment the student sends: one animation of the
         # whole explanation, written alongside the answer (_StageRun).
+        # After a clarifying question, the stage performs the QUESTION they
+        # asked, as they clarified it -- not the option's own wording, which on
+        # its own gave the director nothing to act out (found 2026-09-30: a
+        # truss-bridge question got "Awesome! Let's keep going!").
+        stage_text = text
+        if kind == "select_option" and data.get("stage"):
+            asked = next((t.text for t in await transcript.list_turns(session_id)
+                          if t.turn_index == option.turn_index), None)
+            if asked:
+                stage_text = f"{asked}\n(They clarified that they meant: {option.text})"
         stage = (
-            _StageRun(session_id, turn_index, text, _Performance(turn_index, send), continues)
+            _StageRun(session_id, turn_index, stage_text, _Performance(turn_index, send), continues)
             if data.get("stage") else None
         )
 
@@ -1534,6 +1735,7 @@ def create_app(
                 if charge.streak_reward:
                     await send({"type": "sparks_reward", "reason": "study_streak",
                                 "amount": charge.streak_reward})
+        last_answer[session_id] = message
         await send({
             "type": "done",
             "turn_index": turn_index,

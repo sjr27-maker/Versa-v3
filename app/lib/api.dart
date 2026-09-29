@@ -325,14 +325,26 @@ class VersaApi {
 
   /// How this learner moves through ideas, from their own choices; empty when
   /// the server has nothing yet (or is older and doesn't know the route).
-  Future<List<StylePattern>> getStylePatterns(String learnerId) async {
+  Future<StyleReport> getStylePatterns(String learnerId) async {
     final r = await _http.get(_uri('/api/learners/$learnerId/style-patterns')).timeout(const Duration(seconds: 10));
-    if (r.statusCode == 404) return const [];
+    if (r.statusCode == 404) return const StyleReport();
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not load how you explore'));
     final body = jsonDecode(r.body) as Map<String, dynamic>;
-    return [
-      for (final p in (body['patterns'] as List? ?? const [])) StylePattern.fromJson(p as Map<String, dynamic>),
-    ];
+    final space = {
+      for (final e in ((body['space'] as Map?) ?? const {}).entries)
+        e.key as String: SpacePoint.fromJson((e.value as Map).cast<String, dynamic>()),
+    };
+    return StyleReport(
+      patterns: [
+        for (final p in (body['patterns'] as List? ?? const []))
+          StylePattern.fromJson(p as Map<String, dynamic>, space: space),
+      ],
+      misses: MissFollowThrough.fromJson(((body['misses'] as Map?) ?? const {}).cast<String, dynamic>()),
+      newMoves: [
+        for (final m in (body['new_moves'] as List? ?? const []))
+          NewMove.fromJson((m as Map).cast<String, dynamic>()),
+      ],
+    );
   }
 
   Future<ClaimDetail> getClaim(String claimId) async {

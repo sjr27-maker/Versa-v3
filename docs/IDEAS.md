@@ -234,6 +234,27 @@ I remember what you meant" moment and the direct answer streams in.
   student ignores them)? What should the playful copy sound like? How often is
   the retract worth the flicker (memory-confirmed hits are rare today)?
 
+### The interest layer, in step with the thinking style — `parked` 2026-09-30
+
+Your words: "make the interest layer work with perfect harmony with the
+thinking layer and focusing on teaching not drifting based on interest --
+keep this for later".
+
+What pulls someone (subjects, and which way their interests move -- say from
+theory toward applications) is kept apart from HOW they think, but read the
+same way: from what they did, gated, proven by predicting. What exists: every
+question with its embedding and time (the full trail is rebuildable), and
+`topic_switch` / `returned_to_topic` observations. Not built: an interest
+model.
+
+The rule when it is built: interests serve the teaching -- choosing examples
+and connections that land for this person inside the subject they are
+learning -- never steering them off it toward what they like. And, with the
+thinking style, it should make ambiguity rarer over time: the ambiguity check
+keeps running on every turn, but with a clear style and clear interests fewer
+readings of a question stay open. Never given to "where this could go"
+(invariant 14).
+
 ---
 
 ## 2. Product surfaces — parked for after the Sandbox chat
@@ -429,6 +450,18 @@ per-session pending-options state in the loop. See the decisions log.
 
 ## 6. Decisions log
 
+- **2026-09-30** — The old free-text thinking-style detector is retired.
+  Session end no longer runs SummarizeSessionPath / ConfirmThinkingStyleMatch
+  or writes `thinking_style_candidates`; the ambiguity check's hint and
+  Learn-a-topic's learner context come only from `style_patterns.py`'s
+  confirmed facts (no fallback), and the Thinking-style page no longer lists
+  the old candidates. Their rows stay on record (invariant 10); the store,
+  its review routes and the two node classes are left for the clean-up pass.
+  The ambiguity check and its options are unchanged -- still generated on
+  every turn that needs them. Why: it could not tell a style from a topic or
+  from what everyone does, never proved itself by predicting, never changed
+  once written, and a control learner reached 3 of 5 toward a false style.
+
 - **2026-09-29** — Thinking style is the core claim. Your words: "what
   persists is the ability to think in a way for any topic"; "if they don't
   select the provided options, we must keep experimenting until a match is
@@ -479,6 +512,14 @@ per-session pending-options state in the loop. See the decisions log.
     one that passes a gate per clause of the definition, including an
     out-of-sample prediction test. Shown as "How you explore" on the
     Thinking-style page, every check behind a tap.
+  - *A bigger space (same day):* your words: "any ideas on truly
+    randomizing the cards, showing more possibilities for a bigger space";
+    "start with 1,2,3 then 4,5,6 then move to presenting work". Built:
+    the 16-type library with families and axes, random layered hands of 3,
+    the choice model, wild and path cards, "↻ other directions", family and
+    lean patterns, and a significance test for the proof (random learners
+    were being confirmed 10-22% of the time; now 0-4%). Next: presenting
+    work -- mockups of the hand of 3, the compass and the constellation.
   - *Open:* exam prep as evidence (invariant 13); how a cohort is defined.
 
 - **2026-09-28** — The stage: a room, a story, and instruments. Your words:

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../billing/sparks_widgets.dart';
 import '../models.dart';
+import 'directions_lab_screen.dart';
 import 'profile_screen.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
@@ -173,6 +174,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: sans(12.5, color: Paper.muted)),
                     value: app.showStagePanel,
                     onChanged: app.setShowStagePanel,
+                  ),
+                ),
+              ]),
+              card([
+                Text('Design lab', style: serif(19)),
+                const SizedBox(height: 6),
+                Text('Three ways to show "where this could go" -- a hand of three, a compass, a '
+                    'constellation. Design only: sample cards, nothing is recorded.',
+                    style: sans(12.5, color: Paper.muted)),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('open-design-lab'),
+                    onPressed: () => Navigator.of(context)
+                        .push(MaterialPageRoute<void>(builder: (_) => const DirectionsLabScreen())),
+                    icon: const Icon(Icons.explore_outlined, size: 16),
+                    label: const Text('Open design lab'),
                   ),
                 ),
               ]),

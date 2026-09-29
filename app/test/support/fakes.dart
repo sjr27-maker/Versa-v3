@@ -50,6 +50,9 @@ class FakeTransport implements ChatTransport {
       sent.add({'type': 'stage_check', for (final e in check.entries) e.key: '${e.value}'});
 
   @override
+  void moreDirections(String setId) => sent.add({'type': 'more_directions', 'set_id': setId});
+
+  @override
   void regenerate(int requestId, {String? directions}) =>
       sent.add({'type': 'regenerate', 'request_id': '$requestId', 'directions': ?directions});
 
@@ -143,6 +146,12 @@ class FakeBackend {
 
   /// learnerId -> the pattern rows `GET .../style-patterns` returns (unset = none).
   final Map<String, List<Map<String, dynamic>>> stylePatternsFor = {};
+
+  /// learnerId -> the `misses` block of `GET .../style-patterns` (unset = none).
+  final Map<String, Map<String, dynamic>> missesFor = {};
+
+  /// learnerId -> the `new_moves` block of `GET .../style-patterns` (unset = none).
+  final Map<String, List<Map<String, dynamic>>> newMovesFor = {};
 
   /// sessionId -> its knobs (unset = defaults); `patchedKnobs` logs every PATCH body.
   final Map<String, Map<String, int>> knobsBySession = {};
@@ -327,7 +336,12 @@ class FakeBackend {
         segments[0] == 'api' &&
         segments[1] == 'learners' &&
         segments[3] == 'style-patterns') {
-      return _json({'version': 'style-v1', 'patterns': stylePatternsFor[segments[2]] ?? []});
+      return _json({
+        'version': 'style-v1',
+        'patterns': stylePatternsFor[segments[2]] ?? [],
+        'misses': missesFor[segments[2]] ?? {},
+        'new_moves': newMovesFor[segments[2]] ?? [],
+      });
     }
     // GET /api/learners/{id}/thinking-style
     if (segments.length == 4 &&

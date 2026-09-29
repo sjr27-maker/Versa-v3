@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models.dart';
 import '../theme.dart';
+import 'directions_compass.dart';
 import 'typing_dots.dart';
 
 /// One message in the conversation: the person's bubble, or the tutor's reply
@@ -16,6 +17,8 @@ class MessageView extends StatelessWidget {
     this.onUndoClaimUpdate,
     this.onViewClaimUpdate,
     this.onPickDirection,
+    this.onMoreDirections,
+    this.compassOnStage = false,
     this.directionsStyle = 'fork',
   });
 
@@ -24,6 +27,12 @@ class MessageView extends StatelessWidget {
 
   /// Takes a "where this could go" card; null hides the strip.
   final void Function(DirectionCard card)? onPickDirection;
+
+  /// "Other directions" under the directions; null hides it.
+  final VoidCallback? onMoreDirections;
+
+  /// The stage is open and shows the compass itself: not repeated here.
+  final bool compassOnStage;
 
   final ChatMessage message;
   final bool showTiming;
@@ -169,12 +178,21 @@ class MessageView extends StatelessWidget {
                   ),
                 ],
                 if (message.directions.isNotEmpty && onPickDirection != null) ...[
-                  if (directionsStyle == 'fork') ...[
+                  if (directionsStyle == 'compass') ...[
+                    if (!compassOnStage) ...[
+                      const SizedBox(height: 14),
+                      DirectionsCompass(
+                          cards: message.directions, enabled: canPickOption, onPick: onPickDirection!),
+                    ],
+                    _moreLink(),
+                  ] else if (directionsStyle == 'fork') ...[
                     const SizedBox(height: 10),
                     _DirectionsFork(cards: message.directions, enabled: canPickOption, onPick: onPickDirection!),
+                    _moreLink(),
                   ] else ...[
                     const SizedBox(height: 14),
                     _DirectionsStrip(cards: message.directions, enabled: canPickOption, onPick: onPickDirection!),
+                    _moreLink(),
                   ],
                 ],
                 if (showTiming && message.timing != null) ...[
@@ -194,6 +212,29 @@ class MessageView extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  /// "↻ other directions": a quiet link under the hand. Hidden once the
+  /// server has nothing more to deal; dimmed while the next hand is coming.
+  Widget _moreLink() {
+    if (onMoreDirections == null || message.directionsSetId == null || message.directionsExhausted) {
+      return const SizedBox.shrink();
+    }
+    final waiting = message.moreDirectionsPending;
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: TextButton.icon(
+        key: const ValueKey('more-directions'),
+        onPressed: waiting || !canPickOption ? null : onMoreDirections,
+        style: TextButton.styleFrom(
+          minimumSize: Size.zero,
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        icon: const Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
+        label: Text(waiting ? 'dealing\u2026' : 'other directions', style: sans(12, color: Paper.muted)),
+      ),
     );
   }
 

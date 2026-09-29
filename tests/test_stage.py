@@ -228,6 +228,10 @@ async def test_an_options_turn_shows_no_skit_and_the_pick_gets_the_whole_one(cle
             assert [e["action"]["do"] for e in stage if e["type"] == "stage"] == ["emote", "spawn", "move", "say"]
         calls = await NodeCallStore(clean_pool).list_calls_for_session(UUID(sid), "StageDirector")
         assert [c.turn_index for c in calls] == [0, 1], "the discarded one is still on record (invariant 2)"
+        # the pick's skit acts out the QUESTION as clarified, not the option's words alone
+        # (2026-09-30: a truss question got "Awesome! Let's keep going!")
+        assert "help with derivatives?" in calls[1].input_json["message"]
+        assert "They clarified that they meant:" in calls[1].input_json["message"]
     finally:
         await _stop(live)
 
