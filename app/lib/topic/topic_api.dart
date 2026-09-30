@@ -113,4 +113,15 @@ class TopicApi {
   Future<String> startLesson(String id) async =>
       (await _post('/lessons/$id/start', const {}, 'could not start this lesson', _generate))['session_id']
           as String;
+
+  /// A tap-to-answer quiz or puzzle on the lesson's current point, as a
+  /// scene for the stage and as a question for the chat. Asking again
+  /// ("try another") brings a different one.
+  Future<LessonQuiz> quiz(String lessonId) async =>
+      LessonQuiz.fromJson(await _post('/lessons/$lessonId/activity', const {}, 'could not set a question', _generate));
+
+  /// The tap. The server grades it against the answer it kept.
+  Future<QuizResult> answerQuiz(String lessonId, String activityId, String picked) async =>
+      QuizResult.fromJson(await _post('/lessons/$lessonId/activity-result',
+          {'activity_id': activityId, 'picked': picked}, 'could not check that answer', _read));
 }

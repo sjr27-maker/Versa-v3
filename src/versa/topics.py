@@ -2,22 +2,40 @@
 branches, and learn it lesson by lesson with progress tracked.
 
 Flow
-    1. Explore. A keyword search (`POST /api/topic-explorations`), a web link
-       or an uploaded PDF (resources.py) produces first-level branches. Any
-       branch can be expanded into more (`POST /api/topic-nodes/{id}/expand`).
+    1. Explore. A keyword search (`POST /api/topic-explorations`) produces
+       first-level branches -- at least four concepts -- and any branch can
+       be expanded into more (`POST /api/topic-nodes/{id}/expand`).
+       A PDF or web link (resources.py) is mapped IMMEDIATELY and in full:
+       one call reads the whole resource (evenly sampled when it is long)
+       and returns every chapter, section and sub-section it actually
+       teaches -- front and back matter and anything it doesn't cover are
+       left out -- and each branch is located in the resource's text
+       (`topic_nodes.source_start/end`, migration 092). Branching further on
+       a resource branch reads THAT section of the resource; when the
+       section has no parts of its own, a few closely related "beyond the
+       resource" branches are offered once, and those branch no further.
     2. Build. The student ticks branches. A ticked branch with no ticked
        ancestor becomes a CHAPTER; ticked branches under it become its
-       LESSONS, in tree order; a chapter with none gets 3-6 lessons planned.
-       Every lesson gets 3-5 tasks ending in a 'check' task (the
-       end-of-lesson questions).
+       LESSONS, in tree order. A resource chapter with none ticked takes its
+       own sub-sections as lessons; any other chapter gets lessons planned.
+       Every lesson is a list of POINTS -- the content it covers, as many as
+       there is (a short section two or three, a dense one up to twelve),
+       taken from the resource's own text when there is one.
     3. Learn. A lesson chat is an ordinary session (app_mode 'topic',
        sessions.lesson_id) running through the normal SessionLoop, so memory,
        options, stated preferences, claims and consolidation all apply to it
        unchanged. `LessonHooks` adds the lesson's context to AssessAndBranch
-       and FinalAnswer, and after every answer runs `JudgeLessonProgress`
-       (through `_call_node`, so it lands in node_calls) to decide whether the
-       current task is done; a completion is appended to lesson_task_events
-       and pushed to the client as a `progress` event.
+       and FinalAnswer: the tutor explains the CURRENT point (from the
+       resource's text when there is one) and never asks the student to type
+       an answer -- the app then asks for a tap-to-answer quiz or puzzle on
+       that point (`POST /api/lessons/{id}/activity`, `LessonQuiz`), and a
+       right answer (`/activity-result`) completes the point. The student
+       types only when they choose to. A lesson is done when every point is,
+       a chapter when every lesson is. The stage acts out the point being
+       explained (`LessonHooks.stage_note`), whatever the student typed.
+       Courses built before 2026-10-01 keep their learn/practice/apply/check
+       tasks, judged after each answer by `JudgeLessonProgress` (through
+       `_call_node`, so it lands in node_calls).
 
 Personalization flows both ways.
     In:  branch generation, lesson planning and lesson tutoring get a profile
@@ -50,6 +68,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
 import logging
 import re
@@ -67,6 +86,7 @@ from versa import profiles as _profiles
 from versa import resources as _resources
 from versa import stage as _stage
 from versa.audit import TranscriptStore, to_jsonable
+from versa.formatting import repair_latex_escapes
 from versa.claims import ClaimStore
 from versa.embeddings import EmbeddingClient
 from versa.interactions import StatedPreferenceStore
@@ -79,12 +99,22 @@ from versa.session_knobs import SessionKnobs, render_knob_directive
 
 logger = logging.getLogger(__name__)
 
-TaskKind = Literal["learn", "practice", "apply", "check"]
+TaskKind = Literal["learn", "practice", "apply", "check", "point"]
 _TASK_KINDS = ("learn", "practice", "apply", "check")
 _ROOT_BRANCHES = (5, 8)
 _EXPAND_BRANCHES = (3, 6)
 _PLANNED_LESSONS = (3, 6)
 _TASKS = (3, 5)
+# A lesson's points: how much content it covers decides how many.
+_POINTS = (2, 12)
+# A resource outline: branches per level, top level first.
+_OUTLINE_LIMITS = (25, 15, 10)
+# How much of a resource one call reads: a section to branch, a chapter to
+# plan, a lesson's text for the tutor.
+_SECTION_CHARS = 40_000
+_LESSON_SOURCE_CHARS = 8_000
+# "Beyond the resource" branches offered once a section has no parts of its own.
+_EXTRA_BRANCHES = (2, 3)
 _PROFILE_FACT_MIN_SIMILARITY = 0.55
 
 
@@ -98,6 +128,11 @@ class NodeOut(BaseModel):
     summary: str
     depth: int
     expanded: bool
+    # Whether asking for (more) branches here can still bring any: false for
+    # a "beyond the resource" branch, and for a resource branch whose
+    # section has run out (it already got its few extras).
+    can_branch: bool = True
+    beyond_resource: bool = False
     children: list[NodeOut] = []
 
 
@@ -212,6 +247,10 @@ class NodeRow(BaseModel):
     summary: str
     depth: int
     position: int
+    # where in the resource's text this branch is (migration 092), when it is
+    source_start: int | None = None
+    source_end: int | None = None
+    beyond_resource: bool = False
 
 
 class ExplorationRow(BaseModel):
@@ -257,6 +296,12 @@ class TopicRow(BaseModel):
     personalization_used: dict = {}
 
 
+_NODE_COLUMNS = (
+    "id, exploration_id, parent_id, title, summary, depth, position, "
+    "source_start, source_end, beyond_resource"
+)
+
+
 class TopicStore:
     """Every table in migrations 072-074. Append-only: insert and read
     methods only -- no delete/remove method, no DELETE or UPDATE SQL."""
@@ -294,6 +339,61 @@ class TopicStore:
                 "SELECT text, headings, title FROM topic_resources WHERE id = $1", resource_id
             )
         return row["text"], list(row["headings"] or []), row["title"]
+
+    async def get_resource_slice(self, resource_id: UUID, start: int, end: int) -> str:
+        """Characters [start, end) of a resource's text."""
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT substr(text, $2 + 1, $3) FROM topic_resources WHERE id = $1",
+                resource_id, max(start, 0), max(end - start, 0),
+            ) or ""
+
+    async def lesson_source(self, lesson_id: UUID) -> tuple[str, str] | None:
+        """(resource kind, text) for a lesson of a course built from a
+        resource: its own section, or -- for a planned lesson -- its
+        chapter's section when that is short enough to hand over whole.
+        None for a search course, or when the section wasn't located."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT r.id AS resource_id, r.kind,
+                       ln.source_start AS l_start, ln.source_end AS l_end,
+                       cn.source_start AS c_start, cn.source_end AS c_end
+                FROM topic_lessons l
+                JOIN topic_chapters c ON c.id = l.chapter_id
+                JOIN topics t ON t.id = c.topic_id
+                JOIN topic_explorations e ON e.id = t.exploration_id
+                JOIN topic_resources r ON r.id = e.resource_id
+                LEFT JOIN topic_nodes ln ON ln.id = l.node_id
+                LEFT JOIN topic_nodes cn ON cn.id = c.node_id
+                WHERE l.id = $1
+                """,
+                lesson_id,
+            )
+        if row is None:
+            return None
+        if row["l_start"] is not None and row["l_end"] is not None:
+            start, end = row["l_start"], min(row["l_end"], row["l_start"] + _LESSON_SOURCE_CHARS)
+        elif (row["c_start"] is not None and row["c_end"] is not None
+              and row["c_end"] - row["c_start"] <= _LESSON_SOURCE_CHARS):
+            start, end = row["c_start"], row["c_end"]
+        else:
+            return None
+        text = await self.get_resource_slice(row["resource_id"], start, end)
+        return (row["kind"], text) if text.strip() else None
+
+    async def latest_answer(self, session_id: UUID) -> str:
+        """The tutor's latest answer in a chat ("" when there is none yet)."""
+        async with self._pool.acquire() as conn:
+            out = await conn.fetchval(
+                "SELECT output_json FROM node_calls WHERE session_id = $1 AND node_name = 'FinalAnswer' "
+                "ORDER BY turn_index DESC, seq DESC LIMIT 1",
+                session_id,
+            )
+        if isinstance(out, str):
+            with contextlib.suppress(ValueError):
+                out = json.loads(out)
+        return out if isinstance(out, str) else ""
 
     async def add_exploration(
         self,
@@ -370,27 +470,43 @@ class TopicStore:
         async with self._pool.acquire() as conn:
             for i, item in enumerate(items):
                 nid = uuid4()
+                source_start, source_end = item.get("source_start"), item.get("source_end")
+                beyond = bool(item.get("beyond_resource"))
                 await conn.execute(
                     """
                     INSERT INTO topic_nodes
-                        (id, exploration_id, parent_id, title, summary, depth, position, generation_id)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                        (id, exploration_id, parent_id, title, summary, depth, position, generation_id,
+                         source_start, source_end, beyond_resource)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     """,
                     nid, exploration_id, parent.id if parent else None, item["title"],
                     item["summary"], depth, start_position + i, generation_id,
+                    source_start, source_end, beyond,
                 )
                 out.append(NodeRow(
                     id=nid, exploration_id=exploration_id,
                     parent_id=parent.id if parent else None, title=item["title"],
                     summary=item["summary"], depth=depth, position=start_position + i,
+                    source_start=source_start, source_end=source_end, beyond_resource=beyond,
                 ))
         return out
+
+    async def add_tree(
+        self, exploration_id: UUID, parent: NodeRow | None, items: list[dict], generation_id: UUID | None,
+        start_position: int = 0,
+    ) -> list[NodeRow]:
+        """`items` and every level of their `children`, parents first."""
+        rows = await self.add_nodes(exploration_id, parent, items, generation_id, start_position)
+        for row, item in zip(rows, items, strict=True):
+            if item.get("children"):
+                await self.add_tree(exploration_id, row, item["children"], generation_id)
+        return rows
 
     async def list_nodes(self, exploration_id: UUID) -> list[NodeRow]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, exploration_id, parent_id, title, summary, depth, position "
-                "FROM topic_nodes WHERE exploration_id = $1 ORDER BY depth, position, created_at",
+                f"SELECT {_NODE_COLUMNS} FROM topic_nodes WHERE exploration_id = $1 "
+                "ORDER BY depth, position, created_at",
                 exploration_id,
             )
         return [NodeRow(**dict(r)) for r in rows]
@@ -398,8 +514,7 @@ class TopicStore:
     async def get_node(self, node_id: UUID) -> NodeRow | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT id, exploration_id, parent_id, title, summary, depth, position "
-                "FROM topic_nodes WHERE id = $1",
+                f"SELECT {_NODE_COLUMNS} FROM topic_nodes WHERE id = $1",
                 node_id,
             )
         return NodeRow(**dict(row)) if row else None
@@ -897,7 +1012,7 @@ def _json_object(raw: str) -> dict | None:
     if match is None:
         return None
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(repair_latex_escapes(match.group(0)))
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
@@ -908,7 +1023,12 @@ def _clip(text: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _parse_branch_items(raw_items: object, limit: int, avoid: set[str] | None = None) -> list[dict]:
+def _parse_branch_items(
+    raw_items: object, limit: int, avoid: set[str] | None = None, deeper: tuple[int, ...] = (6,),
+) -> list[dict]:
+    """Validated branches. `deeper`: how many children each level below may
+    keep (and so how many levels are read at all). An `anchor` -- where the
+    branch starts in a resource's text -- is kept when given."""
     items: list[dict] = []
     seen = {a.strip().lower() for a in (avoid or set())}
     if not isinstance(raw_items, list):
@@ -920,13 +1040,132 @@ def _parse_branch_items(raw_items: object, limit: int, avoid: set[str] | None = 
         if not title or not summary or title.lower() in seen:
             continue
         seen.add(title.lower())
-        item = {"title": title, "summary": summary}
-        if "children" in raw:
-            item["children"] = _parse_branch_items(raw.get("children"), 6, avoid={title})
+        item: dict = {"title": title, "summary": summary}
+        anchor = _clip(raw.get("anchor"), 160)
+        if anchor:
+            item["anchor"] = anchor
+        if "children" in raw and deeper:
+            item["children"] = _parse_branch_items(
+                raw.get("children"), deeper[0], avoid={title}, deeper=deeper[1:],
+            )
         items.append(item)
         if len(items) >= limit:
             break
     return items
+
+
+# ---------------------------------------------------------- finding a branch in a resource
+
+
+def _anchor_pattern(anchor: str) -> re.Pattern | None:
+    words = re.findall(r"\w+", anchor.lower())[:12]
+    if not words:
+        return None
+    return re.compile(r"\W+".join(re.escape(w) for w in words), re.IGNORECASE)
+
+
+def _find_anchor(text: str, item: dict, start: int, end: int) -> int | None:
+    for key in ("anchor", "title"):
+        pattern = _anchor_pattern(item.get(key) or "")
+        if pattern is None:
+            continue
+        match = pattern.search(text, start, end)
+        if match is not None:
+            return match.start()
+    return None
+
+
+def _flatten(items: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for item in items:
+        out.append(item)
+        out += _flatten(item.get("children") or [])
+    return out
+
+
+def _after_contents(text: str, items: list[dict], end: int) -> int:
+    """Where the body starts, past a table of contents: the contents list
+    the headings close together, and each of them appears AGAIN later, in
+    the body. So: the longest run of first appearances (three or more, gaps
+    under ~250 characters) counts as contents only when most of those
+    headings turn up again -- a short text whose sections really are close
+    together is not mistaken for one -- and the body starts where the first
+    of them reappears. Found live 2026-10-01: a
+    two-chapter book's sections were matched in its contents page.
+    No contents: from the start."""
+    firsts = sorted(
+        (p, i) for i in _flatten(items) if (p := _find_anchor(text, i, 0, end)) is not None
+    )
+    best: list[tuple[int, dict]] = []
+    run: list[tuple[int, dict]] = []
+    for hit in firsts:
+        if run and hit[0] - run[-1][0] >= 250:
+            run = []
+        run.append(hit)
+        if len(run) > len(best):
+            best = list(run)
+    if len(best) < 3:
+        return 0
+    # the body starts where the first of them turns up again
+    seconds = [s for p, item in best if (s := _find_anchor(text, item, p + 1, end)) is not None]
+    return min(seconds) if len(seconds) * 2 >= len(best) else 0
+
+
+def locate_sections(text: str, items: list[dict], start: int = 0, end: int | None = None) -> None:
+    """Give each branch (and its children, recursively) the part of the
+    resource's text it covers: `source_start` where its heading is found,
+    `source_end` where the next sibling's is (or the parent's end). A branch
+    whose heading isn't found gets no range -- it then reads its parent's.
+
+    A table of contents lists every heading close together near the start;
+    when the first pass lands there (most gaps under a few hundred
+    characters), the search runs again from after it, to the body."""
+    end = len(text) if end is None else end
+    if start == 0:
+        start = _after_contents(text, items, end)
+
+    def search(from_: int) -> list[int | None]:
+        found: list[int | None] = []
+        cursor = from_
+        for item in items:
+            pos = _find_anchor(text, item, cursor, end)
+            found.append(pos)
+            if pos is not None:
+                cursor = pos + 1
+        return found
+
+    found = search(start)
+    hits = [f for f in found if f is not None]
+    if len(hits) >= 3:
+        gaps = sorted(b - a for a, b in itertools.pairwise(hits))
+        if gaps[len(gaps) // 2] < 250:
+            again = search(hits[-1] + 1)
+            if sum(f is not None for f in again) >= len(hits) // 2:
+                found = again
+    for i, item in enumerate(items):
+        pos = found[i]
+        if pos is None:
+            continue
+        stop = next((f for f in found[i + 1:] if f is not None), end)
+        item["source_start"], item["source_end"] = pos, max(stop, pos + 1)
+        if item.get("children"):
+            locate_sections(text, item["children"], pos, item["source_end"])
+
+
+def sample_text(text: str, limit: int) -> str:
+    """The whole resource in `limit` characters: all of it when it fits,
+    otherwise evenly spaced windows from start to end, each marked with
+    where it comes from -- so a long book's last chapters are seen too."""
+    if len(text) <= limit:
+        return text
+    windows = 12
+    size = limit // windows
+    step = (len(text) - size) / (windows - 1)
+    parts = []
+    for i in range(windows):
+        at = int(i * step)
+        parts.append(f"[... from character {at} of {len(text)} ...]\n{text[at:at + size]}")
+    return "\n\n".join(parts)
 
 
 class GenerateBranches:
@@ -988,8 +1227,10 @@ class GenerateBranches:
 
 
 class OutlineResource:
-    """A resource's text + headings -> a topic title and 1-2 levels of
-    branches covering only what the resource teaches."""
+    """A resource's text + headings -> a topic title and EVERY branch it
+    teaches, up to three levels deep (chapters, sections, sub-sections), in
+    its own order, each with the heading it starts at so it can be found in
+    the text (`locate_sections`). Nothing the resource doesn't teach."""
 
     name = "OutlineResource"
 
@@ -1004,18 +1245,29 @@ class OutlineResource:
         )
         return (
             "TOPIC:OUTLINE\n"
-            "A student brought this resource to learn from. Map what it teaches as a "
-            "tree they can choose from.\n"
+            "A student brought this resource to learn from. Map EVERYTHING it teaches as a "
+            "tree they can choose from -- all of it, not a sample.\n"
             f"Resource title: {title}\n"
             f"{heading_block}"
-            f"Text (may be cut off):\n<<<\n{excerpt}\n>>>\n"
+            f"Text (a long resource is shown as evenly spaced windows from start to end):\n"
+            f"<<<\n{excerpt}\n>>>\n"
             f"{profile}"
-            "\nReturn a short `title` for the topic, and 4-10 top-level `branches` in "
-            "the resource's own order, each with 0-6 `children`. Only include what the "
-            "resource actually covers. Each branch/child: `title` (2-6 words) and "
-            "`summary` (one sentence, at most 25 words).\n"
-            'Respond with JSON: {"title": "...", "branches": [{"title": "...", '
-            '"summary": "...", "children": [{"title": "...", "summary": "..."}]}]}'
+            "\nReturn a short `title` for the topic and its `branches`, in the resource's own "
+            "order:\n"
+            f"- top level: every chapter or main part it teaches (at most {_OUTLINE_LIMITS[0]});\n"
+            f"- `children`: every section of that part (at most {_OUTLINE_LIMITS[1]} each), and "
+            f"their `children`: every sub-section (at most {_OUTLINE_LIMITS[2]} each) -- as deep as "
+            "the resource itself goes, and no deeper. A part with no sections has no children.\n"
+            "- ONLY what the resource actually teaches. Leave out the cover, contents, preface, "
+            "foreword, acknowledgements, about the author, index, glossary lists, bibliography "
+            "and references, end-of-book exercises, question banks and answer keys, and any topic "
+            "the resource doesn't cover itself -- never add a chapter it doesn't have.\n"
+            "- Each branch: `title` (2-6 words), `summary` (one sentence, at most 25 words, "
+            "saying what that part of THIS resource covers) and `anchor`: its heading copied "
+            "exactly as it appears in the text (so it can be found there).\n"
+            'Respond with JSON: {"title": "...", "branches": [{"title": "...", "summary": "...", '
+            '"anchor": "...", "children": [{"title": "...", "summary": "...", "anchor": "...", '
+            '"children": [...]}]}]}'
         )
 
     async def run(self, title: str, headings: list[str], excerpt: str, profile: str) -> dict:
@@ -1025,8 +1277,72 @@ class OutlineResource:
         parsed = _json_object(raw) or {}
         return {
             "title": _clip(parsed.get("title") or title, 120),
-            "branches": _parse_branch_items(parsed.get("branches"), 10),
+            "branches": _parse_branch_items(
+                parsed.get("branches"), _OUTLINE_LIMITS[0], deeper=_OUTLINE_LIMITS[1:],
+            ),
         }
+
+
+class ExpandSection:
+    """One branch of a resource -> its parts, read from THAT section of the
+    resource's text. When the section has no parts of its own, a few
+    closely related branches just beyond the resource instead ("a little
+    extra"), which branch no further."""
+
+    name = "ExpandSection"
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+        self.last_call_count = 0
+
+    def prompt(self, path: list[str], section: str, existing: list[str], profile: str,
+               allow_extra: bool = True) -> str:
+        avoid = ""
+        if existing:
+            avoid = (
+                "\nAlready shown under this branch -- do not repeat, rephrase or overlap these:\n"
+                + "".join(f"- {e}\n" for e in existing)
+            )
+        extra_rule = (
+            f"- If the section has NO further parts beyond those already shown, return "
+            f"`branches: []` and instead {_EXTRA_BRANCHES[0]}-{_EXTRA_BRANCHES[1]} `extra` branches: "
+            "ideas just beyond the resource that help understand THIS section (a prerequisite it "
+            "assumes, a closely related idea, a real application). Nothing loosely related.\n"
+            if allow_extra else "- `extra`: always [] here.\n"
+        )
+        return (
+            "TOPIC:SECTION\n"
+            "A student is mapping a resource they brought, to choose what to learn.\n"
+            "Path (each step is a part of the one before): " + " > ".join(path) + "\n"
+            f"The text of the LAST step, {path[-1]!r}, from the resource:\n<<<\n{section}\n>>>\n"
+            f"{avoid}{profile}"
+            "\nRules:\n"
+            f"- `branches`: the parts this text actually contains, one level deeper, in its own "
+            f"order ({_EXPAND_BRANCHES[0]}-{_EXPAND_BRANCHES[1] + 4}). Only what the text covers -- "
+            "never a part it doesn't have, never an unrelated chapter. Each: `title` (2-6 words), "
+            "`summary` (one sentence, at most 25 words), `anchor`: where it starts, copied exactly "
+            "from the text.\n"
+            f"{extra_rule}"
+            'Respond with JSON: {"branches": [{"title": "...", "summary": "...", "anchor": "..."}], '
+            '"extra": [{"title": "...", "summary": "..."}]}'
+        )
+
+    async def run(self, path: list[str], section: str, existing: list[str], profile: str,
+                  allow_extra: bool = True) -> dict:
+        self.last_call_count = 0
+        raw = await self._llm.complete(self.prompt(path, section, existing, profile, allow_extra))
+        self.last_call_count += 1
+        parsed = _json_object(raw) or {}
+        branches = _parse_branch_items(
+            parsed.get("branches"), _EXPAND_BRANCHES[1] + 4, avoid=set(existing), deeper=(),
+        )
+        extra = [] if branches or not allow_extra else _parse_branch_items(
+            parsed.get("extra"), _EXTRA_BRANCHES[1], avoid=set(existing), deeper=(),
+        )
+        for item in extra:
+            item.pop("anchor", None)
+            item["beyond_resource"] = True
+        return {"branches": branches, "extra": extra}
 
 
 _DEFAULT_TASKS = [
@@ -1037,6 +1353,24 @@ _DEFAULT_TASKS = [
 
 def _default_check(title: str) -> dict:
     return {"kind": "check", "description": f"Answer 2-3 short end-of-lesson questions on {title}."}
+
+
+def normalize_points(raw_points: object, lesson_title: str) -> list[dict]:
+    """A lesson's points as tasks of kind 'point': the content it covers, in
+    order, at most `_POINTS[1]`, never none."""
+    points: list[dict] = []
+    seen: set[str] = set()
+    if isinstance(raw_points, list):
+        for raw in raw_points:
+            text = _clip(raw.get("point") if isinstance(raw, dict) else raw, 300)
+            if not text or text.lower() in seen:
+                continue
+            seen.add(text.lower())
+            points.append({"kind": "point", "description": text})
+    points = points[: _POINTS[1]]
+    if not points:
+        points.append({"kind": "point", "description": f"The main idea of {lesson_title}."})
+    return points
 
 
 def normalize_tasks(raw_tasks: object, lesson_title: str) -> list[dict]:
@@ -1066,7 +1400,8 @@ def normalize_tasks(raw_tasks: object, lesson_title: str) -> list[dict]:
 
 class PlanLessons:
     """One chapter -> its lessons (kept as the student chose them, or planned)
-    with an objective and 3-5 tasks each."""
+    with an objective and the POINTS each covers -- as many as its content
+    needs, from the resource's own text when there is one."""
 
     name = "PlanLessons"
 
@@ -1083,33 +1418,58 @@ class PlanLessons:
         profile: str,
     ) -> str:
         others = "".join(f"- {c}\n" for c in other_chapters) or "- (none)\n"
+        has_source = bool(chapter.get("source")) or any(le.get("source") for le in chosen_lessons)
         if chosen_lessons:
             lesson_rule = (
-                "The student chose these lessons for this chapter. Keep exactly these, "
-                "in this order, with these titles:\n"
-                + "".join(f"{i + 1}. {le['title']} -- {le['summary']}\n" for i, le in enumerate(chosen_lessons))
+                "The lessons of this chapter are fixed. Keep exactly these, in this order, with "
+                "these titles:\n"
+                + "".join(
+                    f"{i + 1}. {le['title']} -- {le['summary']}\n"
+                    + (f"   Its text in the resource:\n   <<<\n{le['source']}\n   >>>\n" if le.get("source") else "")
+                    for i, le in enumerate(chosen_lessons)
+                )
+            )
+        elif chapter.get("source"):
+            lesson_rule = (
+                "Split this chapter into lessons that follow the resource's own sections, in its "
+                f"order ({_PLANNED_LESSONS[0] - 2}-{_PLANNED_LESSONS[1]}; a short chapter may be one lesson).\n"
             )
         else:
             lesson_rule = (
                 f"Split this chapter into {_PLANNED_LESSONS[0]}-{_PLANNED_LESSONS[1]} "
                 "lessons in a sensible learning order for this student.\n"
             )
+        source_block = (
+            f"This chapter's text in the student's resource:\n<<<\n{chapter['source']}\n>>>\n"
+            if chapter.get("source") else ""
+        )
+        source_rule = (
+            "- The points come from the resource's text: cover EVERYTHING it teaches in that "
+            "lesson's part, in its order, and nothing it doesn't (skip exercises' answers, "
+            "references and anything off the chapter).\n"
+            if has_source else ""
+        )
         return (
             "TOPIC:LESSONS\n"
             f"You are planning one chapter of a course called {course_title!r}.\n"
             f"This chapter: {chapter['title']} -- {chapter['summary']}\n"
             f"The course's other chapters (for context only, don't plan them):\n{others}"
+            f"{source_block}"
             f"{lesson_rule}"
             f"{profile}"
-            "\nFor each lesson give a `title`, an `objective` (one sentence: what the "
-            f"student can do after it) and {_TASKS[0]}-{_TASKS[1]} `tasks` done in a chat "
-            "with a tutor, in order. Each task has a `kind` -- learn (understand an "
-            "idea and explain it back), practice (a short exercise), apply (use it on a "
-            "real case) or check -- and a concrete `description`. The LAST task must be "
-            "kind \"check\": 2-4 short end-of-lesson questions the student answers. "
-            "Keep every lesson inside this chapter.\n"
+            "\nA lesson is taught point by point in a chat with a tutor: each point is explained, "
+            "then checked with a quick tap-to-answer quiz or puzzle, and the lesson is done when "
+            "every point is. For each lesson give a `title`, an `objective` (one sentence: what "
+            "the student can do after it) and its `points`:\n"
+            "- each point is ONE idea, fact, rule or method to explain, as one short sentence "
+            "that states it (\"Acceleration is the rate of change of velocity: a = dv/dt\"), "
+            "in teaching order;\n"
+            f"- as many as the content needs, {_POINTS[0]}-{_POINTS[1]}: a light lesson two or "
+            "three, a dense one more -- never padding, never skipping something it teaches;\n"
+            f"{source_rule}"
+            "- keep every lesson inside this chapter.\n"
             'Respond with JSON: {"lessons": [{"title": "...", "objective": "...", '
-            '"tasks": [{"kind": "learn", "description": "..."}]}]}'
+            '"points": ["...", "..."]}]}'
         )
 
     async def run(
@@ -1135,7 +1495,7 @@ class PlanLessons:
                     "node_id": chosen.get("node_id"),
                     "title": chosen["title"],
                     "objective": _clip(raw_l.get("objective") or chosen["summary"], 300),
-                    "tasks": normalize_tasks(raw_l.get("tasks"), chosen["title"]),
+                    "tasks": normalize_points(raw_l.get("points"), chosen["title"]),
                 })
             return lessons
         for raw_l in raw_lessons[: _PLANNED_LESSONS[1]]:
@@ -1148,28 +1508,38 @@ class PlanLessons:
                 "node_id": None,
                 "title": title,
                 "objective": _clip(raw_l.get("objective") or title, 300),
-                "tasks": normalize_tasks(raw_l.get("tasks"), title),
+                "tasks": normalize_points(raw_l.get("points"), title),
             })
         if not lessons:
             lessons.append({
                 "node_id": None,
                 "title": chapter["title"],
                 "objective": _clip(chapter["summary"], 300),
-                "tasks": normalize_tasks([], chapter["title"]),
+                "tasks": normalize_points([], chapter["title"]),
             })
         return lessons
+
+
+class ActivityChoice(BaseModel):
+    id: str
+    text: str
 
 
 class ActivityOut(BaseModel):
     """A lesson task set by the stage: the scene that leads into it (ending
     in the challenge, an `ask`), and facts about the next lesson for the
-    slime to tell while the learner is idle."""
+    slime to tell while the learner is idle. The same challenge is given
+    flat (`question`, `choices`, `form`) for the chat, which shows it when
+    the stage is off -- one tap answers it wherever it is shown."""
     activity_id: UUID
     task_id: UUID
     task_description: str
     script: list[dict]
     facts: list[str]
     next_lesson: str | None = None
+    question: str = ""
+    choices: list[ActivityChoice] = []
+    form: str = "quiz"
 
 
 class ActivityResultIn(BaseModel):
@@ -1180,6 +1550,8 @@ class ActivityResultIn(BaseModel):
 class ActivityResultOut(BaseModel):
     correct: bool
     answer: str
+    # why the right answer is right (a quiz on a point), for the chat
+    explain: str = ""
     # the same payload a `progress` frame carries, when the task got done
     progress: dict | None = None
 
@@ -1289,9 +1661,39 @@ def build_selection(nodes: list[NodeRow], selected: set[UUID]) -> list[dict]:
 # ================================================================ lesson context (tutoring)
 
 
-def render_lesson_context(course: CourseProgress, lesson_id: UUID, profile: str = "") -> tuple[str, str]:
+def _point_goal(lp: LessonProgress, current: TaskRow, source_kind: str | None) -> str:
+    number = next(i for i, t in enumerate(lp.tasks, 1) if t.id == current.id)
+    faithful = (
+        f"- Teach it from the {source_kind.upper() if source_kind == 'pdf' else 'resource'}'s text below, "
+        "faithfully: what it says, in its terms -- add only what is needed to understand it.\n"
+        if source_kind else ""
+    )
+    return (
+        f"- The lesson is taught point by point. The CURRENT point is {number} of {len(lp.tasks)}: "
+        f"{current.description!r}. Write every answer exactly as you would in a free Sandbox chat -- "
+        "your usual voice and formatting, at the length and depth their sliders set.\n"
+        "- The lesson decides the main track: when their message is 'start', 'continue', 'next' or asks "
+        "to explain it again, explain the CURRENT point (and nothing from later points). A quick "
+        "tap-to-answer quiz or puzzle on it follows your answer, so never ask them to type anything and "
+        "don't end with a question; you may end with one short line handing over to it (\"Let's check "
+        "that with a quick one.\").\n"
+        f"{faithful}"
+        "- The student decides where to wander: any other message -- a question they typed, or one of "
+        "the directions under your last answer they tapped (an example, the why, a picture, a real "
+        "use, something deeper) -- is theirs. Answer THAT, fully, as the Sandbox would, even when it "
+        "goes beyond the current point; tie it to what the lesson is about where it genuinely helps. "
+        "Don't drag it back to the current point, and don't quiz them: end with one short line saying "
+        "the lesson carries on whenever they're ready.\n"
+    )
+
+
+def render_lesson_context(
+    course: CourseProgress, lesson_id: UUID, profile: str = "", source: tuple[str, str] | None = None,
+) -> tuple[str, str]:
     """(answer_context, assess_context) for one lesson turn. Both start with a
-    newline so they drop into the prompts like the other blocks do."""
+    newline so they drop into the prompts like the other blocks do.
+    `source`: (resource kind, the lesson's text in it), for a course built
+    from a PDF or link (`TopicStore.lesson_source`)."""
     lp = course.lessons[lesson_id]
     chapter = next(c for c in course.chapters if c.id == lp.lesson.chapter_id)
     current = lp.current_task
@@ -1299,6 +1701,7 @@ def render_lesson_context(course: CourseProgress, lesson_id: UUID, profile: str 
     for i, t in enumerate(lp.tasks, 1):
         mark = "done" if t.id in lp.done_task_ids else ("CURRENT" if current and t.id == current.id else "to do")
         task_lines.append(f"  [{mark}] {i}. ({t.kind}) {t.description}\n")
+    points = bool(lp.tasks) and all(t.kind == "point" for t in lp.tasks)
     others = [
         f"  - {c.title}: {c.summary} ({course.chapter_percent(c.id)}% done)\n"
         for c in course.chapters if c.id != chapter.id
@@ -1312,6 +1715,8 @@ def render_lesson_context(course: CourseProgress, lesson_id: UUID, profile: str 
             + (f" and suggest the next lesson, {next_lesson!r}" if next_lesson else " -- and the whole course is complete")
             + "; answer anything else they ask briefly.\n"
         )
+    elif current.kind == "point":
+        goal = _point_goal(lp, current, source[0] if source else None)
     elif current.kind == "check":
         goal = (
             "- All the teaching tasks are done: run the end-of-lesson questions now. Ask 2-4 "
@@ -1331,8 +1736,10 @@ def render_lesson_context(course: CourseProgress, lesson_id: UUID, profile: str 
         f"Chapter {chapter.position + 1} of {len(course.chapters)}: {chapter.title} -- "
         f"{chapter.summary} ({course.chapter_percent(chapter.id)}% complete)\n"
         f"Lesson: {lp.lesson.title}. Objective: {lp.lesson.objective}\n"
-        f"Tasks in this lesson ({lp.percent}% complete):\n{''.join(task_lines)}"
+        f"{'Points' if points else 'Tasks'} in this lesson ({lp.percent}% complete):\n{''.join(task_lines)}"
         + (f"Other chapters of this course, for connections only:\n{''.join(others)}" if others else "")
+        + (f"This lesson's text in the student's {source[0]} (teach from it):\n<<<\n{source[1]}\n>>>\n"
+           if source else "")
         + f"{profile}"
         + "How to teach this lesson:\n"
         + goal
@@ -1340,13 +1747,16 @@ def render_lesson_context(course: CourseProgress, lesson_id: UUID, profile: str 
         "answer briefly, then steer back -- and name the chapter that covers it if one does.\n"
         "- Make a connection to another chapter only when it genuinely helps them "
         "understand: at most one per answer, naming that chapter. Never force one.\n"
-        "- If the conversation is just starting, open by stating the lesson's objective in "
-        "one sentence, then set the first task.\n"
+        + ("- If the conversation is just starting, open by stating the lesson's objective in "
+           "one sentence, then explain the first point.\n" if points else
+           "- If the conversation is just starting, open by stating the lesson's objective in "
+           "one sentence, then set the first task.\n")
     )
     assess_context = (
         f"\nThis message is part of a lesson in the student's course {course.topic.title!r}: "
         f"chapter {chapter.title!r}, lesson {lp.lesson.title!r}"
-        + (f", current task: {current.description!r}" if current else "")
+        + (f", current {'point' if current.kind == 'point' else 'task'}: {current.description!r}"
+           if current else "")
         + ". Anything the lesson already settles is NOT ambiguous; only flag a real fork "
         "the lesson doesn't answer.\n"
     )
@@ -1387,7 +1797,30 @@ class LessonHooks:
         # thinking styles + confirmed claims only: FinalAnswer's own
         # personalization blocks already carry history, stated preference
         # and promoted claims.
-        return render_lesson_context(course, lesson_id, _tutoring_profile(profile))
+        return render_lesson_context(
+            course, lesson_id, _tutoring_profile(profile), await self.store.lesson_source(lesson_id),
+        )
+
+    async def stage_note(self, session_id: UUID) -> str | None:
+        """What the stage should act out on a lesson turn: the lesson and the
+        point being explained now. None for any non-lesson session."""
+        lesson_id = await self.store.get_session_lesson(session_id)
+        if lesson_id is None:
+            return None
+        topic_id = await self.store.get_lesson_topic_id(lesson_id)
+        course = await load_course(self.store, topic_id) if topic_id else None
+        if course is None or lesson_id not in course.lessons:
+            return None
+        lp = course.lessons[lesson_id]
+        chapter = next(c for c in course.chapters if c.id == lp.lesson.chapter_id)
+        current = lp.current_task
+        where = (
+            f"The student is studying their course {course.topic.title!r}: chapter {chapter.title!r}, "
+            f"lesson {lp.lesson.title!r} ({lp.lesson.objective})."
+        )
+        if current is None:
+            return where + " Every point of this lesson is done: celebrate it and sum the lesson up."
+        return where + f" The lesson's current point: {current.description!r}."
 
     async def after_answer(
         self,
@@ -1404,7 +1837,9 @@ class LessonHooks:
         course = await load_course(self.store, topic_id)
         lp = course.lessons[lesson_id]
         current = lp.current_task
-        if current is None:
+        if current is None or current.kind == "point":
+            # a point is completed by its tap-to-answer quiz (activity-result),
+            # never judged from the chat
             return
         answer_context, _ = render_lesson_context(course, lesson_id)
         recent_history = await loop._build_disambiguation_history(session_id, turn_index)
@@ -1459,11 +1894,15 @@ class LessonHooks:
             self.on_progress(session_id, payload)
 
 
-async def tutoring_sources(pool: asyncpg.Pool, learner_id: UUID) -> list[str]:
+async def tutoring_sources(
+    pool: asyncpg.Pool, learner_id: UUID, *, session_id: UUID | None = None
+) -> list[str]:
     """What shapes a lesson chat for this learner, in plain words: the
     tutoring profile (thinking style, confirmed traits) plus what
     FinalAnswer's own personalization blocks read (stated preference,
-    past chats through the history block, the session's sliders)."""
+    past chats through the history block, the session's sliders).
+    "Past chats" means another chat than this lesson's own `session_id`:
+    a learner's first chat has none, whatever they typed in it."""
     profile = await build_learner_profile(pool, learner_id, include_courses=False)
     keep = ("thinking_styles", "stated_preference", "knobs")
     used = {k: v for k, v in profile.used.items() if k in keep}
@@ -1471,7 +1910,9 @@ async def tutoring_sources(pool: asyncpg.Pool, learner_id: UUID) -> list[str]:
         used["claims"] = {"confirmed": profile.used["claims"]["confirmed"]}
     async with pool.acquire() as conn:
         if await conn.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM interactions WHERE learner_id = $1)", learner_id
+            "SELECT EXISTS (SELECT 1 FROM interactions WHERE learner_id = $1 "
+            "AND session_id IS DISTINCT FROM $2)",
+            learner_id, session_id,
         ):
             used["history"] = True
     return describe_personalization(used)
@@ -1495,7 +1936,19 @@ def _tutoring_profile(profile: LearnerProfile) -> str:
 # ================================================================ service + router
 
 
-def _tree(nodes: list[NodeRow]) -> list[NodeOut]:
+def can_branch(node: NodeRow, nodes: list[NodeRow], from_resource: bool) -> bool:
+    """Whether asking for (more) branches under `node` can bring anything.
+    A search branch always can. A resource branch can until its section has
+    run out -- shown by the "beyond the resource" extras it got then -- and
+    an extra itself never does."""
+    if not from_resource:
+        return True
+    if node.beyond_resource:
+        return False
+    return not any(n.parent_id == node.id and n.beyond_resource for n in nodes)
+
+
+def _tree(nodes: list[NodeRow], from_resource: bool = False) -> list[NodeOut]:
     children: dict[UUID | None, list[NodeRow]] = {}
     for n in nodes:
         children.setdefault(n.parent_id, []).append(n)
@@ -1505,6 +1958,7 @@ def _tree(nodes: list[NodeRow]) -> list[NodeOut]:
         return NodeOut(
             id=n.id, parent_id=n.parent_id, title=n.title, summary=n.summary,
             depth=n.depth, expanded=bool(kids), children=[build(k) for k in kids],
+            can_branch=can_branch(n, nodes, from_resource), beyond_resource=n.beyond_resource,
         )
 
     return [build(n) for n in sorted(children.get(None, []), key=lambda k: k.position)]
@@ -1521,6 +1975,7 @@ class TopicService:
         self.store = TopicStore(pool)
         self.branches = GenerateBranches(llm)
         self.outline = OutlineResource(llm)
+        self.section = ExpandSection(llm)
         self.plan = PlanLessons(llm)
         self._embeddings = embedding_client
         self._node_locks: dict[UUID, asyncio.Lock] = {}
@@ -1548,7 +2003,8 @@ class TopicService:
         )
         return ExplorationOut(
             id=exploration.id, query=exploration.query, source_kind=exploration.source_kind,
-            resource=resource, root_nodes=_tree(await self.store.list_nodes(exploration.id)),
+            resource=resource,
+            root_nodes=_tree(await self.store.list_nodes(exploration.id), exploration.resource_id is not None),
             personalized_by=describe_personalization(exploration.personalization_used),
         )
 
@@ -1592,15 +2048,36 @@ class TopicService:
         outline, gid = await self._generate(
             self.outline, learner_id=learner_id, exploration_id=exploration.id,
             profile_used=profile.used, title=resource.title, headings=resource.headings,
-            excerpt=resource.outline_excerpt(), profile=profile.text,
+            excerpt=sample_text(resource.text, _resources.OUTLINE_TEXT_CHARS), profile=profile.text,
         )
         if not outline["branches"]:
             raise HTTPException(status_code=502, detail="could not outline that resource")
-        roots = await self.store.add_nodes(exploration.id, None, outline["branches"], gid)
-        for root, item in zip(roots, outline["branches"], strict=True):
-            if item.get("children"):
-                await self.store.add_nodes(exploration.id, root, item["children"], gid)
+        # the whole tree at once, each branch found in the text
+        locate_sections(resource.text, outline["branches"])
+        await self.store.add_tree(exploration.id, None, outline["branches"], gid)
         return await self.exploration_out(exploration)
+
+    async def _section_of(self, node: NodeRow, nodes: list[NodeRow], resource_id: UUID) -> tuple[int, int, str]:
+        """(start, end, text) of the resource a branch covers: its own range,
+        or the nearest ancestor's that has one, or the whole resource."""
+        by_id = {n.id: n for n in nodes}
+        cursor: NodeRow | None = node
+        while cursor is not None and (cursor.source_start is None or cursor.source_end is None):
+            cursor = by_id.get(cursor.parent_id) if cursor.parent_id else None
+        if cursor is None:
+            text, _, _ = await self.store.get_resource_text(resource_id)
+            return 0, len(text), text
+        start, end = cursor.source_start, cursor.source_end
+        return start, end, await self.store.get_resource_slice(resource_id, start, end)
+
+    async def would_generate(self, node: NodeRow, more: bool) -> bool:
+        """Whether expanding `node` runs a model call (and so is priced)."""
+        exploration = await self.store.get_exploration(node.exploration_id)
+        nodes = await self.store.list_nodes(node.exploration_id)
+        has_children = any(n.parent_id == node.id for n in nodes)
+        if has_children and not more:
+            return False
+        return can_branch(node, nodes, exploration.resource_id is not None)
 
     async def expand(self, node_id: UUID, more: bool) -> list[NodeOut]:
         node = await self.store.get_node(node_id)
@@ -1611,8 +2088,9 @@ class TopicService:
             exploration = await self.store.get_exploration(node.exploration_id)
             nodes = await self.store.list_nodes(node.exploration_id)
             existing = sorted((n for n in nodes if n.parent_id == node.id), key=lambda n: n.position)
-            if existing and not more:
-                return _subtree(nodes, node.id)
+            from_resource = exploration.resource_id is not None
+            if (existing and not more) or not can_branch(node, nodes, from_resource):
+                return _subtree(nodes, node.id, from_resource)
             by_id = {n.id: n for n in nodes}
             path, cursor = [], node
             while cursor is not None:
@@ -1620,19 +2098,35 @@ class TopicService:
                 cursor = by_id.get(cursor.parent_id) if cursor.parent_id else None
             path.append(exploration.query)
             path.reverse()
-            resource_note = ""
-            if exploration.resource_id:
-                _, _, title = await self.store.get_resource_text(exploration.resource_id)
-                resource_note = f"The student is learning this from a resource titled {title!r}.\n"
             profile = await build_learner_profile(
                 self._pool, exploration.learner_id, query_text=" ".join(path[-2:]),
                 embedding_client=self._embeddings,
             )
-            items, gid = await self._generate(
-                self.branches, learner_id=exploration.learner_id, exploration_id=exploration.id,
-                profile_used=profile.used, path=path, existing=[e.title for e in existing],
-                profile=profile.text, resource_note=resource_note,
-            )
+            if from_resource:
+                # branch on what THIS section of the resource contains; when it
+                # has no more parts, a few extras just beyond it, once
+                start, end, section = await self._section_of(node, nodes, exploration.resource_id)
+                result, gid = await self._generate(
+                    self.section, learner_id=exploration.learner_id, exploration_id=exploration.id,
+                    profile_used=profile.used, path=path, section=section[:_SECTION_CHARS],
+                    existing=[e.title for e in existing], profile=profile.text,
+                    allow_extra=not node.beyond_resource,
+                )
+                items = result["branches"]
+                if items:
+                    locate_sections(section, items)
+                    for item in items:  # section-relative -> resource offsets
+                        if item.get("source_start") is not None:
+                            item["source_start"] += start
+                            item["source_end"] = min(item["source_end"] + start, end)
+                else:
+                    items = result["extra"]
+            else:
+                items, gid = await self._generate(
+                    self.branches, learner_id=exploration.learner_id, exploration_id=exploration.id,
+                    profile_used=profile.used, path=path, existing=[e.title for e in existing],
+                    profile=profile.text,
+                )
             await self.store.add_nodes(
                 exploration.id, node, items, gid,
                 start_position=(max((e.position for e in existing), default=-1) + 1),
@@ -1642,7 +2136,7 @@ class TopicService:
                 payload={"node_id": node.id, "title": node.title, "depth": node.depth,
                          "more": more, "new_children": len(items)},
             )
-            return _subtree(await self.store.list_nodes(node.exploration_id), node.id)
+            return _subtree(await self.store.list_nodes(node.exploration_id), node.id, from_resource)
 
     async def build_topic(self, body: TopicIn) -> TopicOut:
         exploration = await self.store.get_exploration(body.exploration_id)
@@ -1654,19 +2148,42 @@ class TopicService:
         if not selected <= node_ids:
             raise HTTPException(status_code=422, detail="selected branches must come from this exploration")
         selection = build_selection(nodes, selected)
+        if exploration.resource_id is not None:
+            # a resource chapter with no lessons ticked takes its own
+            # sections as lessons (2026-10-01: PDF courses came out as bare
+            # chapters, their sub-sections dropped)
+            for ch in selection:
+                if not ch["lessons"]:
+                    ch["lessons"] = sorted(
+                        (n for n in nodes if n.parent_id == ch["node"].id and not n.beyond_resource),
+                        key=lambda n: n.position,
+                    )
         title = (body.title or "").strip() or exploration.query
         profile = await build_learner_profile(
             self._pool, body.learner_id, query_text=title, embedding_client=self._embeddings,
         )
         chapter_labels = [f"{c['node'].title}: {c['node'].summary}" for c in selection]
 
+        async def source_of(node: NodeRow, budget: int) -> str:
+            if exploration.resource_id is None or node.source_start is None or node.source_end is None:
+                return ""
+            end = min(node.source_end, node.source_start + budget)
+            return await self.store.get_resource_slice(exploration.resource_id, node.source_start, end)
+
         async def plan(i: int, ch: dict) -> list[dict]:
             others = [label for j, label in enumerate(chapter_labels) if j != i]
             chosen = [{"node_id": n.id, "title": n.title, "summary": n.summary} for n in ch["lessons"]]
+            chapter = {"title": ch["node"].title, "summary": ch["node"].summary}
+            if chosen:
+                per_lesson = _SECTION_CHARS // len(chosen)
+                for le, node in zip(chosen, ch["lessons"], strict=True):
+                    if text := await source_of(node, per_lesson):
+                        le["source"] = text
+            elif text := await source_of(ch["node"], _SECTION_CHARS):
+                chapter["source"] = text
             lessons, _ = await self._generate(
                 self.plan, learner_id=body.learner_id, exploration_id=exploration.id,
-                profile_used=profile.used, course_title=title,
-                chapter={"title": ch["node"].title, "summary": ch["node"].summary},
+                profile_used=profile.used, course_title=title, chapter=chapter,
                 other_chapters=others, chosen_lessons=chosen, profile=profile.text,
             )
             return lessons
@@ -1702,7 +2219,7 @@ class TopicService:
         return course.to_topic_out()
 
 
-def _subtree(nodes: list[NodeRow], parent_id: UUID) -> list[NodeOut]:
+def _subtree(nodes: list[NodeRow], parent_id: UUID, from_resource: bool = False) -> list[NodeOut]:
     def find(tree: list[NodeOut]) -> list[NodeOut] | None:
         for n in tree:
             if n.id == parent_id:
@@ -1712,7 +2229,7 @@ def _subtree(nodes: list[NodeRow], parent_id: UUID) -> list[NodeOut]:
                 return found
         return None
 
-    return find(_tree(nodes)) or []
+    return find(_tree(nodes, from_resource)) or []
 
 
 def build_topics_router(
@@ -1723,6 +2240,7 @@ def build_topics_router(
     ablation_config=None,
     link_fetcher: Callable | None = None,
     sparks=None,
+    on_progress: Callable[[UUID, dict], None] | None = None,
 ) -> APIRouter:
     """`sparks` (a sparks.SparkEngine) prices the generating endpoints --
     exploring, expanding a branch, building a course -- and answers 402 when
@@ -1786,10 +2304,9 @@ def build_topics_router(
         node = await store.get_node(node_id) if sparks is not None else None
         if node is None:  # unknown (the service answers 404) or nothing to price
             return await service.expand(node_id, more)
-        exploration = await store.get_exploration(node.exploration_id)
-        has_children = any(n.parent_id == node.id for n in await store.list_nodes(node.exploration_id))
-        if has_children and not more:  # already expanded: read back, free
+        if not await service.would_generate(node, more):  # read back, or nothing left: free
             return await service.expand(node_id, more)
+        exploration = await store.get_exploration(node.exploration_id)
         async with priced(exploration.learner_id, "expand_topic", node_id=node_id):
             return await service.expand(node_id, more)
 
@@ -1830,7 +2347,9 @@ def build_topics_router(
             tasks=[TaskOut(id=t.id, position=t.position, kind=t.kind, description=t.description,
                            done=t.id in lp.done_task_ids) for t in lp.tasks],
             session_id=lp.session_id,
-            personalized_by=await tutoring_sources(pool, course.topic.learner_id),
+            personalized_by=await tutoring_sources(
+                pool, course.topic.learner_id, session_id=lp.session_id
+            ),
         )
 
     @router.get("/lessons/{lesson_id}", response_model=LessonOut)
@@ -1885,7 +2404,18 @@ def build_topics_router(
             raise HTTPException(status_code=409, detail="every task in this lesson is done")
         context, _ = render_lesson_context(course, lesson_id)
         upcoming = _next_lesson_title(course, lesson_id)
-        prompt = _stage.task_stage_prompt(context, current.kind, current.description, upcoming or "")
+        explanation, asked = "", []
+        if current.kind == "point" and lp.session_id is not None:
+            explanation = await store.latest_answer(lp.session_id)
+            async with pool.acquire() as conn:  # "try another": not the same question again
+                asked = [r["q"] for r in await conn.fetch(
+                    "SELECT output_json->>'question' AS q FROM topic_generations "
+                    "WHERE node_name = 'LessonActivity' AND output_json IS NOT NULL "
+                    "AND input_json->>'task_id' = $1 ORDER BY created_at",
+                    str(current.id),
+                ) if r["q"]]
+        prompt = _stage.task_stage_prompt(context, current.kind, current.description, upcoming or "",
+                                          explanation=explanation, avoid=asked)
         learner_id = course.topic.learner_id
         inputs = {"lesson_id": lesson_id, "task_id": current.id, "prompt": prompt}
         try:
@@ -1902,11 +2432,15 @@ def build_topics_router(
         gid = await store.record_generation(
             learner_id=learner_id, exploration_id=None, node_name="LessonActivity", input_json=inputs,
             output_json={"raw": raw, "script": script, "facts": facts, "question": ask["question"],
-                         "answer": ask["answer"]},
+                         "answer": ask["answer"], "explain": ask.get("explain", "")},
             error=None,
         )
-        return ActivityOut(activity_id=gid, task_id=current.id, task_description=current.description,
-                           script=script, facts=facts, next_lesson=upcoming)
+        return ActivityOut(
+            activity_id=gid, task_id=current.id, task_description=current.description,
+            script=script, facts=facts, next_lesson=upcoming, question=ask["question"],
+            choices=[ActivityChoice(id=c["id"], text=c["text"]) for c in ask["choices"]],
+            form=ask.get("form", "quiz"),
+        )
 
     @router.post("/lessons/{lesson_id}/activity-result", response_model=ActivityResultOut)
     async def lesson_activity_result(lesson_id: UUID, body: ActivityResultIn) -> ActivityResultOut:
@@ -1926,8 +2460,14 @@ def build_topics_router(
         course, lesson = await lesson_view(lesson_id)
         task_id = UUID(str(row["input_json"]["task_id"]))
         lp = course.lessons[lesson_id]
+        explain = str(out.get("explain") or "")
+        await store.add_signal(
+            learner_id=course.topic.learner_id, kind="quiz_answered", topic_id=course.topic.id,
+            payload={"lesson_id": lesson_id, "task_id": task_id, "activity_id": body.activity_id,
+                     "picked": body.picked, "correct": correct},
+        )
         if not correct or task_id in lp.done_task_ids:
-            return ActivityResultOut(correct=correct, answer=str(out.get("answer")))
+            return ActivityResultOut(correct=correct, answer=str(out.get("answer")), explain=explain)
         choice = next((c.get("text") for c in (out.get("script") or [{}])[-1].get("choices", [])
                        if c.get("id") == body.picked), body.picked)
         await store.add_task_event(
@@ -1942,11 +2482,15 @@ def build_topics_router(
         )
         updated = await load_course(store, course.topic.id)
         ulp = updated.lessons[lesson_id]
-        return ActivityResultOut(correct=True, answer=str(out.get("answer")), progress={
+        progress = {
             "lesson_id": str(lesson_id), "task_id": str(task_id), "lesson_percent": ulp.percent,
             "chapter_percent": updated.chapter_percent(ulp.lesson.chapter_id),
             "topic_percent": updated.percent, "lesson_status": ulp.status,
-        })
+        }
+        if on_progress is not None and lesson.session_id is not None:
+            on_progress(lesson.session_id, progress)  # a finished lesson earns its reward
+        return ActivityResultOut(correct=True, answer=str(out.get("answer")), explain=explain,
+                                 progress=progress)
 
     router.topic_service = service  # type: ignore[attr-defined]  # exposed for tests
     return router

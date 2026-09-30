@@ -6,6 +6,7 @@ import '../stage/engine.dart';
 import '../stage/script.dart';
 import '../stage/stage_view.dart';
 import '../theme.dart';
+import '../widgets/rich_text.dart';
 import 'room_chat.dart';
 import 'room_controller.dart';
 import 'room_models.dart';
@@ -61,11 +62,101 @@ class _RoomStageState extends State<RoomStage> {
   final _engine = StageEngine();
   StreamSubscription<RoomEvent>? _sub;
 
+  /// The quiz task whose question is up on the stage (its option set id).
+  String? _askedSet;
+
+  /// Messages already seen, so the slime reacts to each graded tap once.
+  int _seenSeq = 0;
+
   @override
   void initState() {
     super.initState();
     _sub = widget.controller.stageEvents.listen(_onEvent);
     widget.controller.addListener(_onRoom);
+    _engine.addListener(_maybeAsk);
+    final messages = widget.controller.messages;
+    _seenSeq = messages.isEmpty ? 0 : messages.last.seq;
+  }
+
+  /// A race, or else this person's quiz task, goes up on the stage as the
+  /// slime's question -- but only once whatever it is acting out has
+  /// finished, so a task never cuts an explanation short. Answered anywhere
+  /// else (For you, the chat), or won by someone, it comes down.
+  RoomOptionSet? get _asking => widget.controller.board.openRace ?? widget.controller.board.myQuiz;
+
+  void _maybeAsk() {
+    final room = widget.controller;
+    final quiz = _asking;
+    if (quiz == null || room.pickedSetIds.contains(quiz.setId)) {
+      if (_askedSet != null && _engine.question?.key == 'task-$_askedSet') _engine.withdrawQuestion();
+      _askedSet = null;
+      return;
+    }
+    if (_askedSet == quiz.setId || _engine.running || _engine.asking) return;
+    _askedSet = quiz.setId;
+    _engine.ask(StageQuestion(
+      key: 'task-${quiz.setId}',
+      text: quiz.race ? 'RACE! ${quiz.prompt}' : quiz.prompt,
+      choices: [for (final o in quiz.options) StageChoice(id: o.id, text: o.text)],
+    ));
+  }
+
+  void _onChoice(StageChoice choice) {
+    final quiz = _asking;
+    if (quiz == null || _engine.question?.key != 'task-${quiz.setId}') return;
+    final option = quiz.options.where((o) => o.id == choice.id).firstOrNull;
+    if (option == null) return;
+    _engine.answer(choice.id);
+    widget.controller.pick(quiz, option);
+  }
+
+  /// The server graded one of MY taps on a quiz task: the slime cheers or
+  /// kindly shows the right answer -- unless it is busy acting something out.
+  /// A race's result is announced for everyone.
+  void _reactToGrades() {
+    final room = widget.controller;
+    for (final m in room.messages) {
+      if (m.seq <= _seenSeq) continue;
+      _seenSeq = m.seq;
+      if (_engine.running) continue;
+      if (m.kind == 'progress' && m.meta.containsKey('race_set_id')) {
+        final winner = m.meta['winner'] as String?;
+        final me = winner != null && m.meta['winner_id'] == room.memberId;
+        _engine.play(parseScript([
+          {'do': 'emote', 'mood': winner == null ? 'surprised' : 'excited'},
+          if (winner != null) {'do': 'effect', 'kind': 'confetti', 'x': 0.5, 'y': 0.3},
+          {
+            'do': 'say',
+            'text': winner == null
+                ? "Nobody! It was \u201c${m.meta['right_answer'] ?? ''}\u201d."
+                : (me ? 'You got it FIRST! +3' : '$winner got it first!'),
+          },
+          {'do': 'jump'},
+        ]));
+        continue;
+      }
+      if (m.kind == 'pick' && m.isMine(room.memberId) && m.meta['race'] == true && m.meta['correct'] != true) {
+        _engine.play(parseScript(const [
+          {'do': 'emote', 'mood': 'surprised'},
+          {'do': 'say', 'text': 'Not that one -- the race is still on!'},
+        ]));
+        continue;
+      }
+      if (m.kind != 'pick' || !m.isMine(room.memberId) || m.meta['quiz'] != true) continue;
+      final right = m.meta['correct'] == true;
+      _engine.play(parseScript(right
+          ? const [
+              {'do': 'emote', 'mood': 'proud'},
+              {'do': 'effect', 'kind': 'sparks', 'x': 0.5, 'y': 0.35},
+              {'do': 'say', 'text': "Yes! That's it."},
+              {'do': 'jump'},
+            ]
+          : [
+              {'do': 'emote', 'mood': 'thinking'},
+              {'do': 'say', 'text': "Not quite -- it's \u201c${m.meta['right_answer'] ?? ''}\u201d."},
+              {'do': 'emote', 'mood': 'happy'},
+            ]));
+    }
   }
 
   void _onEvent(RoomEvent e) {
@@ -84,6 +175,8 @@ class _RoomStageState extends State<RoomStage> {
   bool _wasTyping = false;
 
   void _onRoom() {
+    _reactToGrades();
+    _maybeAsk();
     final typing = widget.controller.versaTyping;
     if (typing == _wasTyping || _engine.running) {
       _wasTyping = typing;
@@ -97,6 +190,7 @@ class _RoomStageState extends State<RoomStage> {
   @override
   void dispose() {
     widget.controller.removeListener(_onRoom);
+    _engine.removeListener(_maybeAsk);
     _sub?.cancel();
     _engine.stop();
     _engine.dispose();
@@ -108,7 +202,15 @@ class _RoomStageState extends State<RoomStage> {
     return Container(
       key: const ValueKey('room-stage'),
       color: Paper.sliver,
-      child: StageView(engine: _engine),
+      child: ListenableBuilder(
+        listenable: _engine,
+        builder: (context, _) => StageView(
+          engine: _engine,
+          onChoice: (_engine.question?.key.startsWith('task-') ?? false) && widget.controller.isLive
+              ? _onChoice
+              : null,
+        ),
+      ),
     );
   }
 }
@@ -131,6 +233,14 @@ class RoomBoardPanel extends StatelessWidget {
       key: const ValueKey('room-board'),
       padding: EdgeInsets.zero,
       children: [
+        if (board.parts.isNotEmpty) ...[
+          _PartsProgress(parts: board.parts),
+          const SizedBox(height: 12),
+        ],
+        if (board.scores.any((s) => s.points > 0)) ...[
+          _Scoreboard(scores: board.scores, meName: board.members.where((m) => m.id == meId).firstOrNull?.name),
+          const SizedBox(height: 12),
+        ],
         Text('Tasks', style: sans(12.5, weight: FontWeight.w700)),
         const SizedBox(height: 6),
         if (board.members.isEmpty) Text('Nobody here yet.', style: sans(12.5, color: Paper.muted)),
@@ -156,6 +266,113 @@ class RoomBoardPanel extends StatelessWidget {
                   maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                 ),
+              ),
+            ]),
+          ),
+      ],
+    );
+  }
+}
+
+/// Friendly rivalry: points from races won (3) and tasks answered right (1).
+class _Scoreboard extends StatelessWidget {
+  const _Scoreboard({required this.scores, this.meName});
+  final List<RoomScore> scores;
+  final String? meName;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      key: const ValueKey('room-scores'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Scoreboard', style: sans(12.5, weight: FontWeight.w700)),
+        const SizedBox(height: 6),
+        for (final (i, s) in scores.indexed)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Row(children: [
+              SizedBox(
+                width: 22,
+                child: i == 0 && s.points > 0
+                    ? Icon(Icons.emoji_events_rounded, size: 15, color: const Color(0xFFE2B33C))
+                    : Text('${i + 1}', style: mono(10, color: Paper.faint)),
+              ),
+              Expanded(
+                child: Text(s.name == meName ? '${s.name} (you)' : s.name,
+                    style: sans(12.5, weight: s.name == meName ? FontWeight.w700 : FontWeight.w500)),
+              ),
+              if (s.wins > 0) ...[
+                Icon(Icons.bolt_rounded, size: 13, color: Paper.accent),
+                Text('${s.wins}', style: sans(11, color: Paper.muted)),
+                const SizedBox(width: 8),
+              ],
+              TweenAnimationBuilder<int>(
+                tween: IntTween(end: s.points),
+                duration: const Duration(milliseconds: 500),
+                builder: (context, v, _) =>
+                    Text('$v', key: ValueKey('score-${s.name}'), style: sans(13, weight: FontWeight.w700)),
+              ),
+            ]),
+          ),
+      ],
+    );
+  }
+}
+
+/// Where the group is in the topic: each part covered, the one they're on,
+/// and what's ahead -- a part is done when Versa has taught all it holds.
+class _PartsProgress extends StatelessWidget {
+  const _PartsProgress({required this.parts});
+  final List<RoomPartProgress> parts;
+
+  @override
+  Widget build(BuildContext context) {
+    final done = parts.where((p) => p.done).length;
+    return Column(
+      key: const ValueKey('room-parts'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Text('Topic', style: sans(12.5, weight: FontWeight.w700)),
+          const Spacer(),
+          Text('$done/${parts.length} parts', style: sans(11, color: done > 0 ? Paper.olive : Paper.faint)),
+        ]),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(3),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(end: parts.isEmpty ? 0 : done / parts.length),
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOutCubic,
+            builder: (context, value, _) => LinearProgressIndicator(
+              value: value,
+              minHeight: 5,
+              color: Paper.olive,
+              backgroundColor: Paper.border,
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        for (final p in parts)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 2),
+            child: Row(children: [
+              Icon(
+                p.done
+                    ? Icons.check_circle_rounded
+                    : (p.current ? Icons.play_circle_fill_rounded : Icons.radio_button_unchecked_rounded),
+                size: 13,
+                color: p.done ? Paper.olive : (p.current ? Paper.accent : Paper.faint),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(p.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: sans(11.5,
+                        color: p.current ? Paper.ink : Paper.muted,
+                        weight: p.current ? FontWeight.w600 : FontWeight.w400)),
               ),
             ]),
           ),
@@ -223,6 +440,7 @@ class ForYouPanel extends StatelessWidget {
     final mine = board.tasksOf(meId);
     final queued = mine.where((t) => !t.done).length - (current == null ? 0 : 1);
     final done = mine.where((t) => t.done).toList();
+    final quiz = board.myQuiz;
     return ListView(
       key: const ValueKey('room-for-you'),
       padding: EdgeInsets.zero,
@@ -244,7 +462,13 @@ class ForYouPanel extends StatelessWidget {
                     style: mono(9.5, color: Paper.accentDark, weight: FontWeight.w700)),
               ]),
               const SizedBox(height: 5),
-              Text(current.description, style: sans(13.5, height: 1.45)),
+              RichMessageText(current.description, selectable: false, style: sans(13.5, height: 1.45)),
+              if (quiz != null) ...[
+                const SizedBox(height: 8),
+                Text('Tap your answer', style: sans(11, color: Paper.muted)),
+                const SizedBox(height: 5),
+                _Choices(set: quiz, controller: controller),
+              ],
               if (queued > 0) ...[
                 const SizedBox(height: 4),
                 Text('$queued more after this', style: sans(11, color: Paper.muted)),
@@ -271,7 +495,7 @@ class ForYouPanel extends StatelessWidget {
               ]),
             ),
         ],
-        for (final set in board.options) ...[
+        for (final set in board.otherOptions) ...[
           const SizedBox(height: 12),
           _OptionSetCard(set: set, controller: controller),
         ],
@@ -294,8 +518,10 @@ class _OptionSetCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(children: [
-          Expanded(child: Text(set.prompt, style: sans(13, weight: FontWeight.w600, height: 1.4))),
-          if (set.forEveryone)
+          Expanded(child: RichMessageText(set.prompt, selectable: false, style: sans(13, weight: FontWeight.w600, height: 1.4))),
+          if (set.race)
+            const RaceChip()
+          else if (set.forEveryone)
             Container(
               margin: const EdgeInsets.only(left: 6),
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
@@ -304,26 +530,40 @@ class _OptionSetCard extends StatelessWidget {
             ),
         ]),
         const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final o in set.options)
-              OutlinedButton(
-                key: ValueKey('room-option-${o.id}'),
-                onPressed: enabled ? () => controller.pick(set, o) : null,
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Paper.accentDark,
-                  side: BorderSide(color: Paper.accent),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  visualDensity: VisualDensity.compact,
-                  textStyle: sans(12.5, weight: FontWeight.w600),
-                ),
-                child: Text(o.text),
-              ),
-          ],
-        ),
+        _Choices(set: set, controller: controller, enabled: enabled),
+      ],
+    );
+  }
+}
+
+/// A set's choices as tappable pills (a quiz task's, or any other options).
+class _Choices extends StatelessWidget {
+  const _Choices({required this.set, required this.controller, this.enabled});
+  final RoomOptionSet set;
+  final RoomController controller;
+  final bool? enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final on = enabled ?? (controller.isLive && !controller.pickedSetIds.contains(set.setId));
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: [
+        for (final o in set.options)
+          OutlinedButton(
+            key: ValueKey('room-option-${o.id}'),
+            onPressed: on ? () => controller.pick(set, o) : null,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Paper.accentDark,
+              side: BorderSide(color: Paper.accent),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              visualDensity: VisualDensity.compact,
+              textStyle: sans(12.5, weight: FontWeight.w600),
+            ),
+            child: RichMessageText(o.text, selectable: false, style: sans(12.5, weight: FontWeight.w600)),
+          ),
       ],
     );
   }

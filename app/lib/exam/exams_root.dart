@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../app_state.dart';
 import '../topic/topics_root.dart' show topicRoute;
 import 'exam_models.dart';
 import 'exam_screen.dart';
@@ -13,6 +15,7 @@ class ExamsRoot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Navigator(
+        key: context.read<ShellState>().examsNavigator,
         onGenerateRoute: (_) => topicRoute((_) => const ExamsHomeScreen()),
       );
 }

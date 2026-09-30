@@ -56,7 +56,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 
-from versa.formatting import MATH_STYLE_JSON
+from versa.formatting import MATH_STYLE_JSON, repair_latex_escapes
 from versa.models import HistoryTurn
 
 logger = logging.getLogger(__name__)
@@ -180,7 +180,7 @@ def _bare_formula(text: str) -> str:
 
 def parse_notes(raw: str) -> Notes | None:
     try:
-        data = json.loads(raw)
+        data = json.loads(repair_latex_escapes(raw))
     except (json.JSONDecodeError, TypeError):
         return None
     if not isinstance(data, dict):

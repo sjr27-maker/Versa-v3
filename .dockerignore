@@ -19,3 +19,6 @@ app/android/.gradle
 app/android/app/build
 app/windows/flutter/ephemeral
 app/ios/Pods
+# the Android release signing key (scripts/build_apk.ps1) -- never uploaded
+app/android/key.properties
+app/android/*.jks

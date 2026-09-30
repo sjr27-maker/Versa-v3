@@ -376,6 +376,12 @@ update rows. Concretely:
   task is done if its latest `room_task_events` row says `completed`; an
   option set is open for a person until they pick from it or a newer set
   for the same audience arrives. Nothing is flagged in place.
+- (2026-10-01) Tasks are tap-to-answer quizzes and races are one question
+  for everyone, first right tap wins: a quiz's right answer is kept in its
+  message's meta (never sent to a device), a tap is graded into the pick
+  message's meta, a race is closed by the `progress` message that names its
+  winner (or nobody), and the scoreboard and the topic's covered parts are
+  derived from those messages -- still no row edited, no score stored.
 - Every model call a room makes is recorded to `room_node_calls` with its
   full input (incl. the prompt) and output, or its error -- invariant 2's
   payload in the rooms' own table, because a room is not a `sessions` row

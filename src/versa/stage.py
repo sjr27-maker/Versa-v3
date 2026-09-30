@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import random
 import re
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
@@ -37,6 +38,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from versa.formatting import repair_latex_escapes
 from versa.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -421,7 +423,7 @@ def parse_script_lines(text: str) -> list[dict]:
     if actions:
         return actions[:MAX_ACTIONS]
     try:
-        whole = json.loads(_strip_fences(text))
+        whole = json.loads(repair_latex_escapes(_strip_fences(text)))
     except (json.JSONDecodeError, TypeError):
         return []
     if isinstance(whole, list):
@@ -442,7 +444,7 @@ def _parse_line(line: str) -> dict | None:
     if not s.startswith("{"):
         return None
     try:
-        return sanitize_action(json.loads(s))
+        return sanitize_action(json.loads(repair_latex_escapes(s)))
     except json.JSONDecodeError:
         return None
 
@@ -547,7 +549,7 @@ PHOTO_RULES = (
 
 def stage_prompt(
     message: str, answer: str = "", previous_answer: str = "", continues: str = "", opening: str = "",
-    live: bool = False, photo: bool = False,
+    live: bool = False, photo: bool = False, lesson: str = "",
 ) -> str:
     """One continuous animation that explains the whole thing.
 
@@ -559,7 +561,13 @@ def stage_prompt(
     them load in like 2-3 sec"), alongside the answer, so it has the question
     and the conversation so far -- the previous answer, and for a fork
     continuation the direction tapped -- but not the new answer.
-    With none of these (older callers), the question alone."""
+    With none of these (older callers), the question alone.
+    `lesson`: in a Learn-a-topic lesson, what the tutor is teaching right now
+    (topics.LessonHooks.stage_note). A lesson turn is often just "start" or
+    "continue" -- which on its own read as small talk and got a 1-3 action
+    shrug (found 2026-10-01: PDF courses, where nobody types a question,
+    showed no animation) -- so the point is what gets acted out, and the
+    skit ends without an ask: the lesson's own quiz follows."""
     if answer or opening or live:
         carry_on = ""
         if continues:
@@ -584,6 +592,14 @@ def stage_prompt(
                 f"{carry_on}{earlier}"
                 f"\nThe student asked: {message!r}\n"
             )
+            if lesson:
+                source += (
+                    f"\nTHIS IS A LESSON. {lesson}\n"
+                    "When the student's message is only 'start', 'continue', 'next' or asks to explain "
+                    "again, act out THAT point -- it is a real explanation, never small talk. When they "
+                    "asked something of their own or took a direction, the tutor is answering THAT: act "
+                    "it out instead.\n"
+                )
         elif answer:
             source = (
                 "The chat shows the student the answer below. Act out THIS answer -- the same "
@@ -650,10 +666,15 @@ def stage_prompt(
             "full sentence taken from the explanation itself (never generic facts, never "
             "the answer's own questions). Put each right after the beat that SHOWED it, "
             "never before.\n"
-            "- You MAY end with ONE ask: a quick check on the main idea with 2-3 short "
-            "answers, exactly one right, named in \"answer\"; in \"then\", react to each "
-            "(right: proud + a small effect; wrong: a kind one-line correction that ends "
-            "happy -- the app shows the right answer first).\n"
+            + (
+                "- No ask at the end: the lesson's own quiz on this point comes right after. End on "
+                "the takeaway, looking pleased and a little curious.\n"
+                if lesson else
+                "- You MAY end with ONE ask: a quick check on the main idea with 2-3 short "
+                "answers, exactly one right, named in \"answer\"; in \"then\", react to each "
+                "(right: proud + a small effect; wrong: a kind one-line correction that ends "
+                "happy -- the app shows the right answer first).\n"
+            )
         )
         count = "18-34"
     else:
@@ -712,10 +733,10 @@ class StageDirector:
 
     async def run(
         self, message: str, answer: str = "", previous_answer: str = "", continues: str = "",
-        opening: str = "", live: bool = False, photo: bool = False,
+        opening: str = "", live: bool = False, photo: bool = False, lesson: str = "",
     ) -> list[dict]:
         self.last_call_count = 0
-        prompt = stage_prompt(message, answer, previous_answer, continues, opening, live, photo)
+        prompt = stage_prompt(message, answer, previous_answer, continues, opening, live, photo, lesson)
         sink = stage_sink.get()
         stream = getattr(self._llm, "stream", None)
         actions: list[dict] = []
@@ -788,11 +809,21 @@ class StageCheckStore:
 TASK_FACTS = 3
 
 
-def task_stage_prompt(lesson_context: str, task_kind: str, task_description: str, next_lesson: str) -> str:
+def task_stage_prompt(lesson_context: str, task_kind: str, task_description: str, next_lesson: str,
+                      explanation: str = "", avoid: list[str] | None = None) -> str:
     """A lesson's current task, SET by the stage instead of listed: the slime
     acts out a short scene that leads into a challenge, and the learner does
-    it by answering on the stage. Plus a few true facts about the next lesson
-    for the slime to tell while the learner is idle."""
+    it by answering on the stage (or on the same question in the chat, when
+    the stage is off). Plus a few true facts about the next lesson for the
+    slime to tell while the learner is idle.
+
+    For a POINT (topics.py, 2026-10-01) the challenge is a quiz or a puzzle on
+    the point the tutor just explained (`explanation`), answered with one tap
+    -- never typed -- and the scene carries on from the explanation's own
+    story. `avoid`: questions already asked on this point, so "try another"
+    brings a different one."""
+    if task_kind == "point":
+        return _point_quiz_prompt(lesson_context, task_description, next_lesson, explanation, avoid or [])
     upcoming = (
         f"The NEXT lesson is {next_lesson!r}. Write {TASK_FACTS} short, true, surprising facts that make "
         "someone curious about it (one sentence each, under 110 characters, no questions).\n"
@@ -821,16 +852,67 @@ def task_stage_prompt(lesson_context: str, task_kind: str, task_description: str
     )
 
 
+def _upcoming(next_lesson: str) -> str:
+    return (
+        f"The NEXT lesson is {next_lesson!r}. Write {TASK_FACTS} short, true, surprising facts that make "
+        "someone curious about it (one sentence each, under 110 characters, no questions).\n"
+        if next_lesson else "There is no next lesson: facts may be about this lesson's idea instead.\n"
+    )
+
+
+def _point_quiz_prompt(lesson_context: str, point: str, next_lesson: str, explanation: str,
+                       avoid: list[str]) -> str:
+    told = (
+        f"What the tutor just explained (the scene and the question must fit it):\n<<<{explanation[:2500]}>>>\n"
+        if explanation else ""
+    )
+    asked = (
+        "Already asked on this point -- ask something DIFFERENT (another angle, another form):\n"
+        + "".join(f"- {q}\n" for q in avoid[-4:])
+        if avoid else ""
+    )
+    return (
+        "STAGE:TASK\n"
+        "You direct a tiny animated stage beside a lesson. The star is a cute, expressive green slime: "
+        "funny, a bit dramatic, endearing.\n\n"
+        f"{_VOCABULARY}\n"
+        f"{lesson_context}\n"
+        f"The point just explained: {point}\n"
+        f"{told}{asked}\n"
+        "Now CHECK that point with something the student answers by TAPPING one choice -- never by "
+        "typing. Pick the form that suits the point, and vary it: a quick quiz question, or a puzzle "
+        "(spot the slime's mistake, what happens next, which comes first, fill the gap, odd one out, "
+        "which example fits the idea).\n"
+        "- The scene (6-12 actions) is a gentle lead-in that carries on from the explanation: the same "
+        "kind of objects, one small situation, the slime getting curious or stuck -- then ONE ask at the "
+        "end: the challenge, as the slime asking the student for help, with 2-4 short choices and "
+        "exactly one right (named in \"answer\"). Wrong choices are believable mistakes, never jokes.\n"
+        "- Answerable from the explanation alone; about THIS point, not the next one.\n"
+        "- In \"then\", react to each choice: right -- proud + a small effect + a one-line why; wrong -- "
+        "a kind one-line hint that ends happy (the app shows the right answer first).\n"
+        "- Show first, then ask. At most 4 things on stage; for maths, the graph kit or typeset math.\n"
+        "- `kind`: \"quiz\" or \"puzzle\". `explain`: one or two plain sentences on why the right "
+        "answer is right, for the chat.\n"
+        f"{_upcoming(next_lesson)}\n"
+        'Respond with ONE JSON object: {"kind": "quiz", "script": [ ...stage actions, the ask last... ], '
+        '"explain": "...", "facts": ["...", "..."]}'
+    )
+
+
 def parse_task_activity(raw: str) -> tuple[list[dict], dict, list[str]] | None:
     """The model's reply -> (the script, its final ask, the idle facts), or
     None when there is no answerable ask at the end (then there is no task to
-    do on stage, and the lesson falls back to the chat)."""
+    do on stage, and the lesson falls back to the chat).
+
+    The ask's choices are shuffled here (their ids stay): a model tends to put
+    the right one first. `explain` and `kind` (quiz/puzzle), when the reply
+    has them, are kept on the ask as `explain` / `form`."""
     text = _strip_fences(raw or "")
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end <= start:
         return None
     try:
-        data = json.loads(text[start:end + 1])
+        data = json.loads(repair_latex_escapes(text[start:end + 1]))
     except ValueError:
         return None
     if not isinstance(data, dict) or not isinstance(data.get("script"), list):
@@ -842,5 +924,13 @@ def parse_task_activity(raw: str) -> tuple[list[dict], dict, list[str]] | None:
     ask = asks[-1]
     # only the last ask counts, and nothing after it
     actions = [a for a in actions[:actions.index(ask)] if a["do"] != "ask"] + [ask]
+    choices = list(ask.get("choices") or [])
+    random.shuffle(choices)
+    ask["choices"] = choices
+    explain = " ".join(str(data.get("explain") or "").split())[:400]
+    if explain:
+        ask["explain"] = explain
+    if data.get("kind") in ("quiz", "puzzle"):
+        ask["form"] = data["kind"]
     facts = [" ".join(str(f).split())[:140] for f in (data.get("facts") or []) if isinstance(f, str) and f.strip()]
     return actions, ask, facts[:TASK_FACTS + 2]

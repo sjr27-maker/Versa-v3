@@ -465,6 +465,11 @@ class SessionLoop:
     def memory_config(self) -> MemoryConfig:
         return self._memory_config
 
+    @property
+    def lesson_hooks(self):
+        """Learn-a-topic lesson chats (topics.LessonHooks), or None."""
+        return self._lesson_hooks
+
     def _fire_background(self, coro) -> None:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)

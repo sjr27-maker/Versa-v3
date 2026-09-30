@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
@@ -57,6 +58,19 @@ class Shell extends StatelessWidget {
         const SettingsScreen(),
       ],
     );
+    // The system back button steps back through the app (ShellState.back)
+    // instead of closing it from inside a mode.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (!await shell.back()) await SystemNavigator.pop();
+      },
+      child: _frame(shell, pages),
+    );
+  }
+
+  Widget _frame(ShellState shell, Widget pages) {
     return LayoutBuilder(builder: (context, c) {
       if (c.maxWidth >= _wideBreakpoint) {
         return Scaffold(

@@ -44,6 +44,11 @@ class TopicHarness {
   final List<String> expandCalls = [];
   List<Map<String, dynamic>>? allSessions;
 
+  /// Serve lessons taught point by point (courses from 2026-10-01 on).
+  bool points = false;
+  final List<String> quizCalls = [];
+  final List<Map<String, dynamic>> quizAnswers = [];
+
   Map<String, dynamic> exploration(String sourceKind, String query) => {
         'id': 'exp-1',
         'query': query,
@@ -92,12 +97,43 @@ class TopicHarness {
         'topic_id': 'topic-1',
         'topic_title': 'Machine learning',
         'session_id': null,
-        'tasks': [
+        'tasks': points
+            ? [
+                {'id': 't1', 'position': 0, 'kind': 'point', 'description': 'A line of best fit sums up a trend', 'done': true},
+                {'id': 't2', 'position': 1, 'kind': 'point', 'description': 'Least squares picks the line', 'done': false},
+                {'id': 't3', 'position': 2, 'kind': 'point', 'description': 'The slope is the rate of change', 'done': false},
+              ]
+            : [
           {'id': 't1', 'position': 0, 'kind': 'learn', 'description': 'Say what a line of best fit is', 'done': true},
           {'id': 't2', 'position': 1, 'kind': 'practice', 'description': 'Fit a line to three points', 'done': false},
           {'id': 't3', 'position': 2, 'kind': 'apply', 'description': 'Predict a house price', 'done': false},
           {'id': 't4', 'position': 3, 'kind': 'check', 'description': 'Answer the end-of-lesson questions', 'done': false},
         ],
+      };
+
+  Map<String, dynamic> quiz(int n) => {
+        'activity_id': 'act-$n',
+        'task_id': 't2',
+        'task_description': 'Least squares picks the line',
+        'question': n == 1 ? 'Which line does least squares pick?' : 'What does a residual measure?',
+        'choices': [
+          {'id': 'a', 'text': 'The one with the smallest squared misses'},
+          {'id': 'b', 'text': 'The steepest one'},
+        ],
+        'form': n == 1 ? 'quiz' : 'puzzle',
+        'script': [
+          {'do': 'say', 'text': 'Hmm, which line?'},
+          {
+            'do': 'ask',
+            'question': 'Which line does least squares pick?',
+            'choices': [
+              {'id': 'a', 'text': 'The one with the smallest squared misses'},
+              {'id': 'b', 'text': 'The steepest one'},
+            ],
+            'answer': 'a',
+          },
+        ],
+        'facts': <String>[],
       };
 
   static http.Response _json(Object? data) =>
@@ -157,6 +193,29 @@ class TopicHarness {
       ]));
     }
     if (path == '/api/topics/topic-1') return _stream(_json(topic));
+    if (path.startsWith('/api/lessons/') && path.endsWith('/activity')) {
+      quizCalls.add(path);
+      return _stream(_json(quiz(quizCalls.length)));
+    }
+    if (path.startsWith('/api/lessons/') && path.endsWith('/activity-result')) {
+      quizAnswers.add(json);
+      final right = json['picked'] == 'a';
+      return _stream(_json({
+        'correct': right,
+        'answer': 'a',
+        'explain': 'It makes the total squared distance to the points as small as it can be.',
+        'progress': right
+            ? {
+                'lesson_id': 'l3',
+                'task_id': 't2',
+                'lesson_percent': 67,
+                'chapter_percent': 67,
+                'topic_percent': 50,
+                'lesson_status': 'in_progress',
+              }
+            : null,
+      }));
+    }
     if (path.startsWith('/api/lessons/') && path.endsWith('/start')) {
       return _stream(_json({'session_id': 'lesson-session-${request.url.pathSegments[2]}'}));
     }
@@ -178,11 +237,12 @@ class TopicHarness {
   VersaApi get api => VersaApi('http://test', client: client);
 }
 
-Future<FakeTransport> _boot(WidgetTester tester, TopicHarness h, {Size size = const Size(1400, 1000)}) async {
+Future<FakeTransport> _boot(WidgetTester tester, TopicHarness h,
+    {Size size = const Size(1400, 1000), Map<String, Object> settings = const {}}) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
-  SharedPreferences.setMockInitialValues({'learner_label': 'Asha'});
+  SharedPreferences.setMockInitialValues({'learner_label': 'Asha', ...settings});
   final prefs = await SharedPreferences.getInstance();
   final transport = FakeTransport();
   await tester.pumpWidget(VersaApp(
@@ -323,6 +383,39 @@ void main() {
     expect(find.text('What do you want to learn?'), findsOneWidget);
   });
 
+  testWidgets('tapping Modes from inside Learn a topic goes back to the mode picker', (tester) async {
+    final h = TopicHarness();
+    await _boot(tester, h);
+    await _openTopics(tester);
+    await _tapKey(tester, 'topic-card-topic-1');
+    expect(find.byKey(const ValueKey('topic-percent')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('nav-Modes')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('mode-learn')), findsOneWidget);
+    expect(find.byKey(const ValueKey('topic-percent')), findsNothing);
+  });
+
+  testWidgets('the system back button steps back a screen, then to the modes, then Home', (tester) async {
+    final h = TopicHarness();
+    await _boot(tester, h);
+    await _openTopics(tester);
+    await _tapKey(tester, 'topic-card-topic-1');
+
+    Future<void> back() async {
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+    }
+
+    await back(); // topic -> topics home
+    expect(find.text('What do you want to learn?'), findsOneWidget);
+    await back(); // topics home -> mode picker
+    expect(find.byKey(const ValueKey('mode-learn')), findsOneWidget);
+    await back(); // Modes -> Home
+    expect(find.byKey(const ValueKey('mode-learn')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('topic screen shows overall and per-chapter percentages; the bar opens the path', (tester) async {
     final h = TopicHarness();
     await _boot(tester, h);
@@ -357,6 +450,8 @@ void main() {
     await _tapKey(tester, 'path-node-l3');
     expect(find.byKey(const ValueKey('lesson-title')), findsOneWidget);
     expect(find.text('Linear regression'), findsWidgets);
+    // a lesson chat is a session, so it can have revision notes too (notes.py)
+    expect(tester.widget<IconButton>(find.byKey(const ValueKey('lesson-notes'))).onPressed, isNotNull);
   });
 
   testWidgets('lesson chat: start sends a turn, a progress event ticks the task and moves the bars',
@@ -400,6 +495,87 @@ void main() {
 
     // A progress frame never becomes a chat message.
     expect(find.text('First, fit a line.'), findsOneWidget);
+  });
+
+  testWidgets('a point lesson: explained, then a tap-to-answer quiz; a right tap ticks the point, Continue goes on',
+      (tester) async {
+    final h = TopicHarness()..points = true;
+    final transport = await _boot(tester, h);
+    await _openTopics(tester);
+    await _tapKey(tester, 'topic-card-topic-1');
+    await _tapKey(tester, 'lesson-node-l3');
+    expect(find.text('1 of 3 points covered'), findsOneWidget);
+    expect(find.text('POINT 2'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('start-lesson')));
+    await tester.pump();
+    expect(h.quizCalls, isEmpty, reason: 'no quiz while the point is being explained');
+    transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'Least squares picks the line...', firstOutputMs: 5, totalMs: 9));
+    await tester.pumpAndSettle();
+
+    // the quiz arrives on its own, under the explanation -- nothing to type
+    expect(h.quizCalls, ['/api/lessons/l3/activity']);
+    expect(find.text('QUICK CHECK · POINT 2 OF 3'), findsOneWidget);
+    expect(find.text('Which line does least squares pick?'), findsOneWidget);
+
+    // a wrong tap: shown kindly, with a way on that isn't typing
+    await _tapKey(tester, 'quiz-choice-b');
+    expect(h.quizAnswers.single, {'activity_id': 'act-1', 'picked': 'b'});
+    expect(find.text('Not quite.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quiz-explain-again')), findsOneWidget);
+    await _tapKey(tester, 'quiz-another');
+    expect(find.text('PUZZLE · POINT 2 OF 3'), findsOneWidget);
+
+    // the right tap ticks the point and moves the bars
+    await _tapKey(tester, 'quiz-choice-a');
+    expect(find.text('Right!'), findsOneWidget);
+    expect(find.byKey(const ValueKey('task-done-t2')), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const ValueKey('lesson-percent'))).data, '67%');
+
+    await tester.ensureVisible(find.byKey(const ValueKey('quiz-continue')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('quiz-continue')));
+    await tester.pump();
+    expect(transport.sent.last['type'], 'message');
+    expect(transport.sent.last['text'], 'Continue.');
+    await tester.pump(const Duration(milliseconds: 500)); // the tutor is thinking: dots keep moving
+    expect(find.byKey(const ValueKey('quiz-continue')), findsNothing); // on to the next point
+
+    // the next point explained: its quiz comes
+    transport.emit(const Done(turnIndex: 1, kind: 'answer', text: 'The slope is...', firstOutputMs: 5, totalMs: 9));
+    await tester.pumpAndSettle();
+    expect(h.quizCalls.length, 3);
+    await _tapKey(tester, 'quiz-choice-a');
+
+    // a question of their own is answered Sandbox-style -- and never quizzed
+    await tester.enterText(find.byKey(const ValueKey('composer-field')), 'what about in 3D?');
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('send-button')));
+    await tester.pump();
+    transport.emit(const Done(turnIndex: 2, kind: 'answer', text: 'In 3D...', firstOutputMs: 5, totalMs: 9));
+    await tester.pumpAndSettle();
+    expect(h.quizCalls.length, 3, reason: 'their own question is theirs to steer');
+    expect(find.byKey(const ValueKey('quiz-continue')), findsOneWidget); // the way back to the lesson
+  });
+
+  testWidgets('with the stage showing, the quiz card waits for the slime to ask (and never for long)',
+      (tester) async {
+    final h = TopicHarness()..points = true;
+    final transport = await _boot(tester, h, settings: {'show_stage_panel': true});
+    await _openTopics(tester);
+    await _tapKey(tester, 'topic-card-topic-1');
+    await _tapKey(tester, 'lesson-node-l3');
+    await tester.tap(find.byKey(const ValueKey('start-lesson')));
+    await tester.pump();
+    transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'Least squares...', firstOutputMs: 5, totalMs: 9));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.text('Watch the stage…'), findsOneWidget);
+    // (the test binding doesn't run the stage's clock, so the slime never
+    // gets to its question here: the card offers the choices after a wait)
+    await tester.pump(const Duration(seconds: 13));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('quiz-choice-a')), findsOneWidget);
   });
 
   testWidgets('on a phone the lesson tasks fold into a strip above the chat', (tester) async {

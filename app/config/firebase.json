@@ -1,0 +1,13 @@
+{
+  "_comment": "Copy to config/firebase.json and fill in from the Firebase console (Project settings -> Your apps). None of these are secret: Firebase client config is public by design, the server checks every token. Build with: flutter run --dart-define-from-file=config/firebase.json",
+  "FIREBASE_PROJECT_ID": "versa-app-9214",
+  "FIREBASE_API_KEY": "AIzaSyBsd9BvlRV_o7AhMTNyKQFcHSnlAWQMjRE",
+  "FIREBASE_MESSAGING_SENDER_ID": "498366759729",
+  "FIREBASE_AUTH_DOMAIN": "versa-app-9214.firebaseapp.com",
+  "FIREBASE_WEB_APP_ID": "1:498366759729:web:294fa24be92744aade6610",
+  "FIREBASE_ANDROID_APP_ID": "1:498366759729:android:893b69bc6ae3823dde6610",
+  "FIREBASE_ANDROID_API_KEY": "AIzaSyD_8sSC2g7ZTtMZPvtdCepdb7eXg8xMEak",
+  "FIREBASE_IOS_APP_ID": "",
+  "FIREBASE_IOS_API_KEY": "",
+  "RC_TEST_KEY": "test_JYRTPRCnkrTymHfaOxhxnkbkuEH"
+}

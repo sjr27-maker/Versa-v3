@@ -89,7 +89,9 @@ if (-not (Exists @('artifacts', 'repositories', 'describe', 'versa', "--location
 $connection = "${Project}:${Region}:${Instance}"
 if (-not (Exists @('sql', 'instances', 'describe', $Instance, "--project=$Project"))) {
     Step "creating Cloud SQL instance $Instance (Postgres 16, $SqlTier) -- this takes several minutes"
-    Run @('sql', 'instances', 'create', $Instance, '--database-version=POSTGRES_16', "--tier=$SqlTier",
+    # --edition=ENTERPRISE: gcloud now defaults Postgres 16 to Enterprise Plus,
+    # which has no shared-core tiers like db-g1-small.
+    Run @('sql', 'instances', 'create', $Instance, '--database-version=POSTGRES_16', '--edition=ENTERPRISE', "--tier=$SqlTier",
           "--region=$Region", '--storage-auto-increase', '--backup', "--project=$Project")
 }
 if (-not (Exists @('sql', 'databases', 'describe', 'versa', "--instance=$Instance", "--project=$Project"))) {
@@ -141,7 +143,20 @@ if ($SkipBuild) {
         Write-Host '  no app/config/firebase.json: the web build will have no Google/email sign-in' -ForegroundColor Yellow
     }
     Step "building $image with Cloud Build (the Flutter web build makes this take a while)"
-    Run @('builds', 'submit', '--tag', $image, "--project=$Project", '--timeout=3600s', '--machine-type=e2-highcpu-8')
+    # BuildKit, not Cloud Build's default legacy builder (`--tag`): the legacy
+    # one once kept the base image's older Flutter and failed at pub get.
+    $cbConfig = Join-Path ([System.IO.Path]::GetTempPath()) 'versa-cloudbuild.yaml'
+    @"
+steps:
+- name: gcr.io/cloud-builders/docker
+  env: ['DOCKER_BUILDKIT=1']
+  args: ['build', '--progress=plain', '-t', '$image', '.']
+images: ['$image']
+timeout: 3600s
+options:
+  machineType: E2_HIGHCPU_8
+"@ | Set-Content -Encoding ascii $cbConfig
+    Run @('builds', 'submit', '.', "--config=$cbConfig", "--project=$Project")
     Run @('artifacts', 'docker', 'tags', 'add', $image, "$repo/versa:latest", "--project=$Project")
 }
 

@@ -10,8 +10,9 @@ latest chat in front of it.
 Each connected device gets:
     {"type": "state", ...}    everything, on connect (so a reconnect resyncs)
     {"type": "message", ...}  each new message it is allowed to see
-    {"type": "board", ...}    members/online, everyone's tasks, and the
-                              options still open for THIS person
+    {"type": "board", ...}    members/online, everyone's tasks, the topic's
+                              parts (covered or not), and the options still
+                              open for THIS person
     {"type": "typing", ...}   someone (or Versa) is typing
     {"type": "stage_start" | "stage" | "stage_end", ...}
                               the slime acting out a teaching message
@@ -27,7 +28,7 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
-from versa.resources import ExtractedResource
+from versa.resources import OUTLINE_TEXT_CHARS, ExtractedResource
 from versa.rooms.nodes import RoomDecision, RoomDirector, mentions_versa
 from versa.rooms.store import (
     MemberRow,
@@ -41,7 +42,7 @@ from versa.rooms.store import (
     open_option_sets,
 )
 from versa.stage import StageDirector, stage_sink
-from versa.topics import GenerateBranches, OutlineResource
+from versa.topics import GenerateBranches, OutlineResource, sample_text
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,12 @@ class RoomError(Exception):
 
 @dataclass
 class _Trigger:
-    kind: str  # created | joined | message | pick
+    kind: str  # created | joined | message | pick | quiz
     name: str
     seq: int
     text: str = ""
     must_reply: bool = False
+    detail: str = ""
 
     def describe(self) -> str:
         if self.kind == "created":
@@ -73,6 +75,10 @@ class _Trigger:
             return f"{self.name} just joined the room"
         if self.kind == "pick":
             return f'{self.name} clicked the option "{self.text}" (message [{self.seq}])'
+        if self.kind == "race":
+            return f'{self.name} {self.detail} (message [{self.seq}])'
+        if self.kind == "quiz":
+            return f'{self.name} answered their task by tapping "{self.text}" -- {self.detail} (message [{self.seq}])'
         direct = " -- and is talking to YOU directly" if self.must_reply else ""
         return f"{self.name} wrote message [{self.seq}]{direct}"
 
@@ -140,7 +146,7 @@ class RoomHub:
         if resource is not None:
             kwargs = {
                 "title": resource.title, "headings": resource.headings,
-                "excerpt": resource.outline_excerpt(), "profile": "",
+                "excerpt": sample_text(resource.text, OUTLINE_TEXT_CHARS), "profile": "",
             }
             try:
                 result = await self.outline.run(**kwargs)
@@ -239,16 +245,75 @@ class RoomHub:
                 None,
             )
             private = bool(question and question.private)
+            meta = {"option_set_id": str(chosen_set.id), "option_id": str(option.id),
+                    "prompt": chosen_set.prompt}
+            # A quiz task's options: the tap is the answer, graded against
+            # the one kept with the task (never the client's word for it).
+            quiz_task = None
+            if question is not None and question.kind == "task" and question.meta.get("answer"):
+                quiz_task = next((t for t in await self.store.list_tasks(room.id)
+                                  if t.message_id == question.id), None)
+            race = question is not None and question.kind == "question" and bool(question.meta.get("race"))
+            if race:
+                if (await self.store.list_races(room.id)).get(chosen_set.id) is not None:
+                    raise RoomError("that race is already over")
+                # graded, but the answer stays secret until the race closes
+                meta.update({"race": True, "correct": option.text == str(question.meta.get("answer"))})
+            if quiz_task is not None:
+                right = str(question.meta["answer"])
+                meta.update({"quiz": True, "correct": option.text == right, "right_answer": right})
             msg = await self.store.add_message(
                 room.id, sender="member", kind="pick", member_id=member.id, text=option.text,
-                to_member_id=member.id if private else None, private=private,
-                meta={"option_set_id": str(chosen_set.id), "option_id": str(option.id),
-                      "prompt": chosen_set.prompt},
+                to_member_id=member.id if private else None, private=private, meta=meta,
             )
             await self.store.add_pick(chosen_set.id, option.id, member.id, msg.id)
+            if quiz_task is not None and meta["correct"]:
+                done = done_task_ids(await self.store.list_task_events(room.id))
+                if quiz_task.id not in done:
+                    evidence = f'tapped the right answer: "{option.text}"'
+                    progress = await self.store.add_message(
+                        room.id, sender="versa", kind="progress", text=quiz_task.description,
+                        to_member_id=member.id,
+                        meta={"task_id": str(quiz_task.id), "task_kind": quiz_task.kind, "evidence": evidence},
+                    )
+                    await self.store.add_task_event(quiz_task.id, "completed", evidence, progress.id)
+                else:
+                    progress = None
+            else:
+                progress = None
+            race_detail = ""
+            if race:
+                right = str(question.meta.get("answer"))
+                members = await self.store.list_members(room.id)
+                tapped = {p.member_id for p in await self.store.list_picks(room.id) if p.set_id == chosen_set.id}
+                if meta["correct"]:
+                    race_detail = f'WON the race "{chosen_set.prompt}" by tapping "{option.text}" first'
+                    progress = await self.store.add_message(
+                        room.id, sender="versa", kind="progress", text=f"{member.name} won the race",
+                        meta={"race_set_id": str(chosen_set.id), "winner_id": str(member.id),
+                              "winner": member.name, "right_answer": right},
+                    )
+                elif tapped >= {m.id for m in members}:
+                    race_detail = f'was the last to answer the race "{chosen_set.prompt}" -- nobody got it'
+                    progress = await self.store.add_message(
+                        room.id, sender="versa", kind="progress", text="Nobody got that one",
+                        meta={"race_set_id": str(chosen_set.id), "winner": None, "right_answer": right},
+                    )
         await self._broadcast_message(room.id, msg)
+        if progress is not None:
+            await self._broadcast_message(room.id, progress)
         await self.push_boards(room.id)
-        self._trigger(room.id, _Trigger("pick", member.name, msg.seq, text=option.text, must_reply=True))
+        if race:
+            if race_detail:  # a wrong tap while the race is still open: nothing for Versa to say
+                self._trigger(room.id, _Trigger("race", member.name, msg.seq, text=option.text,
+                                                must_reply=True, detail=race_detail))
+        elif quiz_task is not None:
+            detail = ("RIGHT -- their task is done" if meta["correct"]
+                      else f'WRONG (the right answer: "{meta["right_answer"]}")')
+            self._trigger(room.id, _Trigger("quiz", member.name, msg.seq, text=option.text,
+                                            must_reply=True, detail=detail))
+        else:
+            self._trigger(room.id, _Trigger("pick", member.name, msg.seq, text=option.text, must_reply=True))
         return msg
 
     async def member_typing(self, room_id: UUID, member: MemberRow) -> None:
@@ -305,6 +370,10 @@ class RoomHub:
 
     async def _snapshot(self, room_id: UUID) -> dict:
         return {
+            "room": await self.store.get_room(room_id),
+            "done_parts": await self.store.list_done_parts(room_id),
+            "races": await self.store.list_races(room_id),
+            "graded": await self.store.list_graded_picks(room_id),
             "members": await self.store.list_members(room_id),
             "tasks": await self.store.list_tasks(room_id),
             "done": done_task_ids(await self.store.list_task_events(room_id)),
@@ -315,6 +384,7 @@ class RoomHub:
 
     def _board(self, member_id: UUID, snap: dict) -> dict:
         names = {m.id: m.name for m in snap["members"]}
+        task_by_message = {t.message_id: t.id for t in snap["tasks"] if t.message_id is not None}
         return {
             "members": [
                 {"id": str(m.id), "name": m.name, "online": m.id in snap["online"]}
@@ -333,9 +403,16 @@ class RoomHub:
                 {
                     "set_id": str(s.id), "prompt": s.prompt, "for_everyone": s.member_id is None,
                     "options": [{"id": str(o.id), "text": o.text} for o in s.options],
+                    # the choices of this person's quiz task: a tap answers it
+                    "task_id": str(task_by_message[s.message_id]) if s.message_id in task_by_message else None,
+                    # a race: one question for everyone, first right tap wins
+                    "race": s.id in snap["races"],
                 }
                 for s in open_option_sets(member_id, snap["sets"], snap["picks"])
+                if snap["races"].get(s.id) is None  # a race closes the moment it is decided
             ],
+            "scores": _scores(snap["members"], snap["graded"]),
+            "parts": _parts(snap["room"], snap["done_parts"]),
         }
 
     async def state_for(self, room: RoomRow, member: MemberRow) -> dict:
@@ -403,6 +480,10 @@ class RoomHub:
         names = {m.id: m.name for m in members}
         tasks: list[TaskRow] = snap["tasks"]
         done: set[UUID] = snap["done"]
+        task_options = {
+            s.message_id: [o.text for o in s.options] for s in snap["sets"] if s.message_id is not None
+        }
+        points = {s["member_id"]: s["points"] for s in _scores(members, snap["graded"])}
         member_ctx = []
         for m in members:
             mine = [t for t in tasks if t.member_id == m.id]
@@ -411,9 +492,11 @@ class RoomHub:
                 "name": m.name,
                 "online": m.id in snap["online"],
                 "current_task": (
-                    {"kind": open_[0].kind, "description": open_[0].description} if open_ else None
+                    {"kind": open_[0].kind, "description": open_[0].description,
+                     "options": task_options.get(open_[0].message_id, [])} if open_ else None
                 ),
                 "done_count": sum(1 for t in mine if t.id in done),
+                "points": points.get(str(m.id), 0),
                 "queued_count": max(len(open_) - 1, 0),
             })
         recent = await self.store.list_messages(room_id, limit=TRANSCRIPT_MESSAGES)
@@ -431,8 +514,9 @@ class RoomHub:
                 transcript=[_transcript_line(m, names) for m in recent],
                 events=[t.describe() for t in batch],
                 must_reply=must_reply,
+                done_parts=sorted(snap["done_parts"]),
             )
-            await self._apply(room, decision, members, tasks, done)
+            await self._apply(room, decision, members, tasks, done, snap["done_parts"])
         finally:
             if must_reply:
                 await self._versa_typing(room_id, False)
@@ -447,8 +531,10 @@ class RoomHub:
         members: list[MemberRow],
         tasks: list[TaskRow],
         done: set[UUID],
+        done_parts: set[int] | None = None,
     ) -> None:
         by_name = {m.name: m for m in members}
+        done_parts = set(done_parts or ())
         board_changed = False
         for action in decision.actions:
             target = by_name.get(action.to) if action.to else None
@@ -474,13 +560,40 @@ class RoomHub:
                 await self._broadcast_message(room.id, msg)
                 board_changed = True
             elif action.type == "task":
+                # always a quiz: its options are that person's to tap, and the
+                # right one stays on the server (message_out never sends it)
                 for who in [target] if target else members:
+                    set_id = uuid4()
                     msg = await self.store.add_message(
                         room.id, sender="versa", kind="task", text=action.text,
-                        to_member_id=who.id, meta={"task_kind": action.kind},
+                        to_member_id=who.id,
+                        meta={"task_kind": action.kind, "option_set_id": str(set_id),
+                              "options": action.options, "answer": action.answer},
                     )
                     tasks.append(await self.store.add_task(room.id, who.id, action.kind, action.text, msg.id))
+                    await self.store.add_option_set(set_id, room.id, who.id, action.text, action.options, msg.id)
                     await self._broadcast_message(room.id, msg)
+                board_changed = True
+            elif action.type == "part_done" and action.part is not None:
+                if action.part in done_parts:
+                    continue
+                title = room.outline[action.part - 1]["title"]
+                msg = await self.store.add_message(
+                    room.id, sender="versa", kind="progress", text=title,
+                    meta={"part": action.part, "part_title": title, "evidence": action.evidence},
+                )
+                done_parts.add(action.part)
+                await self._broadcast_message(room.id, msg)
+                board_changed = True
+            elif action.type == "race":
+                set_id = uuid4()
+                msg = await self.store.add_message(
+                    room.id, sender="versa", kind="question", text=action.prompt,
+                    meta={"race": True, "option_set_id": str(set_id), "options": action.options,
+                          "answer": action.answer},
+                )
+                await self.store.add_option_set(set_id, room.id, None, action.prompt, action.options, msg.id)
+                await self._broadcast_message(room.id, msg)
                 board_changed = True
             elif action.type == "complete_task" and target is not None:
                 open_ = [t for t in tasks if t.member_id == target.id and t.id not in done]
@@ -539,6 +652,37 @@ def room_out(room: RoomRow) -> dict:
     }
 
 
+RACE_WIN_POINTS = 3
+QUIZ_POINTS = 1
+
+
+def _scores(members: list[MemberRow], graded: list[tuple[UUID, dict]]) -> list[dict]:
+    """The scoreboard, derived from graded taps: a race won is worth
+    RACE_WIN_POINTS, a quiz task answered right QUIZ_POINTS. Highest first."""
+    by_id = {m.id: {"member_id": str(m.id), "name": m.name, "points": 0, "wins": 0} for m in members}
+    for member_id, meta in graded:
+        row = by_id.get(member_id)
+        if row is None or not meta.get("correct"):
+            continue
+        if meta.get("race"):
+            row["points"] += RACE_WIN_POINTS
+            row["wins"] += 1
+        else:
+            row["points"] += QUIZ_POINTS
+    return sorted(by_id.values(), key=lambda r: (-r["points"], r["name"].lower()))
+
+
+def _parts(room: RoomRow | None, done: set[int]) -> list[dict]:
+    """The topic's parts in order: covered, the one the group is on, or ahead."""
+    if room is None:
+        return []
+    current = next((i + 1 for i in range(len(room.outline)) if i + 1 not in done), None)
+    return [
+        {"title": p.get("title", ""), "done": i + 1 in done, "current": i + 1 == current}
+        for i, p in enumerate(room.outline)
+    ]
+
+
 def message_out(msg: MessageRow, names: dict[UUID, str]) -> dict:
     if msg.sender == "versa":
         sender_name = VERSA
@@ -557,7 +701,8 @@ def message_out(msg: MessageRow, names: dict[UUID, str]) -> dict:
         "to_member_id": str(msg.to_member_id) if msg.to_member_id else None,
         "to_name": names.get(msg.to_member_id) if msg.to_member_id else None,
         "private": msg.private,
-        "meta": msg.meta,
+        # a quiz task's right answer never leaves the server
+        "meta": {k: v for k, v in msg.meta.items() if k != "answer"},
         "created_at": _iso(msg.created_at),
     }
 
@@ -569,10 +714,22 @@ def _transcript_line(msg: MessageRow, names: dict[UUID, str]) -> str:
         return f"[{msg.seq}] ({msg.text})"
     if msg.sender == "member":
         if msg.kind == "pick":
-            return f'[{msg.seq}] {who} clicked: "{msg.text}" (answering: {msg.meta.get("prompt", "")})'
+            graded = ""
+            if msg.meta.get("quiz"):
+                graded = " -- RIGHT" if msg.meta.get("correct") else f' -- WRONG, right: "{msg.meta.get("right_answer")}"'
+            return f'[{msg.seq}] {who} clicked: "{msg.text}" (answering: {msg.meta.get("prompt", "")}){graded}'
         return f"[{msg.seq}] {who}: {msg.text}"
     if msg.kind == "task":
-        return f"[{msg.seq}] Versa gave {to} a task: {msg.text}"
+        options = " | ".join(msg.meta.get("options") or [])
+        return f"[{msg.seq}] Versa gave {to} a task: {msg.text}" + (f" (tap: {options})" if options else "")
+    if msg.kind == "progress" and "race_set_id" in msg.meta:
+        winner = msg.meta.get("winner")
+        return (f'[{msg.seq}] RACE OVER: {winner} won (answer: "{msg.meta.get("right_answer")}")' if winner
+                else f'[{msg.seq}] RACE OVER: nobody got it (answer: "{msg.meta.get("right_answer")}")')
+    if msg.kind == "question" and msg.meta.get("race"):
+        return f'[{msg.seq}] Versa started a RACE for everyone: {msg.text} (tap: {" | ".join(msg.meta.get("options") or [])})'
+    if msg.kind == "progress" and msg.meta.get("part"):
+        return f'[{msg.seq}] Versa marked part {msg.meta["part"]} covered: {msg.text}'
     if msg.kind == "progress":
         return f"[{msg.seq}] Versa marked {to}'s task done: {msg.text}"
     if msg.kind == "question" and msg.meta.get("options"):

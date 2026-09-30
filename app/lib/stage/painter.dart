@@ -453,7 +453,7 @@ class StagePainter extends CustomPainter {
         canvas.drawRRect(rr, edge);
         canvas.drawLine(r.topLeft + Offset(half * 0.25, half * 0.25), r.bottomRight - Offset(half * 0.25, half * 0.25),
             edge..strokeWidth = 1.2);
-        if (p.label != null) _label(canvas, p.label!, Offset(0, -half), half * 0.55, Paper.ink, alpha, box: true);
+        if (p.label != null) _label(canvas, p.label!, Offset(0, -half), half * 0.55, _onLight, alpha, box: true);
 
       case PropKind.ball:
         final c = Offset(0, -half);
@@ -532,7 +532,7 @@ class StagePainter extends CustomPainter {
         for (final c in puffs) {
           canvas.drawCircle(c, half * 0.65, fill);
         }
-        if (p.label != null) _label(canvas, p.label!, Offset(0, -half * 0.25), 12, Paper.ink, alpha);
+        if (p.label != null) _label(canvas, p.label!, Offset(0, -half * 0.25), 12, _onLight, alpha);
 
       case PropKind.emoji:
         final tp = TextPainter(
@@ -1054,7 +1054,7 @@ class StagePainter extends CustomPainter {
   /// tenths, a counter rolls, a gauge's needle swings, a bar and a
   /// thermometer fill -- each drawn standing on its base point (0, 0).
   void _paintInstrument(Canvas canvas, StageProp p, double half, double alpha, Offset dir, double t) {
-    final ink = Paper.ink.withValues(alpha: alpha);
+    final ink = _onLight.withValues(alpha: alpha);
     final col = propColor(p.color, p.kind == PropKind.thermometer ? Paper.danger : const Color(0xFF4F7CAC));
     final tag = p.caption ?? (p.kind == PropKind.counter ? null : p.label);
     switch (p.kind) {
@@ -1250,7 +1250,7 @@ class StagePainter extends CustomPainter {
       final tp = TextPainter(
         text: TextSpan(
           text: name,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Paper.ink.withValues(alpha: k)),
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: _onLight.withValues(alpha: k)),
         ),
         textDirection: TextDirection.ltr,
       )..layout(maxWidth: size.width * 0.4);
@@ -1273,7 +1273,7 @@ class StagePainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
-        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: Paper.ink.withValues(alpha: alpha)),
+        style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700, color: _onLight.withValues(alpha: alpha)),
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: 150);
@@ -1344,6 +1344,17 @@ class StagePainter extends CustomPainter {
     return path.shift(Offset(0, -r));
   }
 
+  /// Text on the stage's own white/light surfaces (captions, tags, clock
+  /// faces, boxes, clouds) is always dark: those surfaces stay light in
+  /// the night theme, where `Paper.ink` turns near-white and vanished.
+  static const _onLight = Color(0xFF2B2823);
+
+  /// A label's halo is the fixed opposite of its text, not a palette
+  /// colour -- in the night theme `Paper.ink` is light, so a light label
+  /// ringed in it came out as a white smear.
+  static const _haloDark = Color(0xFF1C1915);
+  static const _haloLight = Color(0xFFFDFBF4);
+
   /// A word on or beside a thing. Drawn last, ringed by a halo in the
   /// opposite tone so it reads over whatever is behind it. `inline`: a
   /// reading shown IN an instrument (a counter's screen, a clock face),
@@ -1371,7 +1382,7 @@ class StagePainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3.2
         ..strokeJoin = StrokeJoin.round
-        ..color = (light ? Paper.ink : Paper.surface).withValues(alpha: alpha * (light ? 0.55 : 0.92)),
+        ..color = (light ? _haloDark : _haloLight).withValues(alpha: alpha * (light ? 0.85 : 0.92)),
     ));
     _later(canvas, (c) {
       halo.paint(c, at);

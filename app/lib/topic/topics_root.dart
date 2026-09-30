@@ -20,7 +20,6 @@ class TopicsRoot extends StatefulWidget {
 }
 
 class _TopicsRootState extends State<TopicsRoot> {
-  final _navigator = GlobalKey<NavigatorState>();
   ShellState? _shell;
 
   @override
@@ -44,7 +43,7 @@ class _TopicsRootState extends State<TopicsRoot> {
   void _openPendingLesson() {
     if (_shell?.pendingLessonId == null) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final nav = _navigator.currentState;
+      final nav = _shell?.topicsNavigator.currentState;
       final id = _shell?.takePendingLesson();
       if (nav == null || id == null || !mounted) return;
       nav.push(topicRoute((_) => LessonChatScreen(lessonId: id)));
@@ -54,7 +53,7 @@ class _TopicsRootState extends State<TopicsRoot> {
   @override
   Widget build(BuildContext context) {
     return Navigator(
-      key: _navigator,
+      key: context.read<ShellState>().topicsNavigator,
       onGenerateRoute: (_) => topicRoute((_) => const TopicsHomeScreen()),
     );
   }

@@ -4,7 +4,9 @@ import '../theme.dart';
 
 /// The stage and the chat with a handle between them that the learner drags
 /// to give either one more room -- a finger on a phone, the mouse on a
-/// laptop. Double-tap the handle to put it back in the middle.
+/// laptop. Double-tap the handle to put it back in the middle. On a phone a
+/// single tap stretches the stage as tall as it goes (the ambiguity options
+/// sit on it and need the room), and a second tap brings it back.
 ///
 ///  * wide (a laptop): stage on the left, chat on the right; the handle is a
 ///    vertical bar and sets how much of the row the stage takes.
@@ -53,6 +55,10 @@ class _StageSplitState extends State<StageSplit> {
   static const _minChatWidth = 380.0;
   static const _minStageHeight = 120.0;
 
+  /// On a phone, what the chat keeps below the stage at the most: its
+  /// header, a line or two, and the composer.
+  static const _minChatHeight = 260.0;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
@@ -78,7 +84,7 @@ class _StageSplitState extends State<StageSplit> {
         ]);
       }
       // A phone: keep room below for the chat's header, a few lines and the composer.
-      final maxHeight = (c.maxHeight * 0.5).clamp(_minStageHeight + 40, 640.0).toDouble();
+      final maxHeight = (c.maxHeight - _minChatHeight).clamp(_minStageHeight + 40, 900.0).toDouble();
       final height = _height.clamp(_minStageHeight, maxHeight).toDouble();
       return Column(children: [
         widget.stage(height),
@@ -87,6 +93,10 @@ class _StageSplitState extends State<StageSplit> {
           axis: Axis.vertical,
           onDrag: (dy) => setState(() => _height = (height + dy).clamp(_minStageHeight, maxHeight).toDouble()),
           onEnd: () => widget.onHeight?.call(_height),
+          onTap: () {
+            setState(() => _height = height < maxHeight - 1 ? maxHeight : StageSplit.defaultHeight);
+            widget.onHeight?.call(_height);
+          },
           onReset: () {
             setState(() => _height = StageSplit.defaultHeight);
             widget.onHeight?.call(_height);
@@ -107,6 +117,7 @@ class ResizeHandle extends StatelessWidget {
     required this.axis,
     required this.onDrag,
     this.onEnd,
+    this.onTap,
     this.onReset,
   });
 
@@ -116,15 +127,18 @@ class ResizeHandle extends StatelessWidget {
   final Axis axis;
   final ValueChanged<double> onDrag;
   final VoidCallback? onEnd;
+  final VoidCallback? onTap;
   final VoidCallback? onReset;
 
   @override
   Widget build(BuildContext context) {
     final vertical = axis == Axis.vertical;
+    // Paper.faint, not a border colour: on the light palettes a border-
+    // coloured pill all but vanished and nobody found the handle.
     final pill = Container(
-      width: vertical ? 44 : 4,
-      height: vertical ? 4 : 44,
-      decoration: BoxDecoration(color: Paper.borderStrong, borderRadius: BorderRadius.circular(2)),
+      width: vertical ? 48 : 5,
+      height: vertical ? 5 : 48,
+      decoration: BoxDecoration(color: Paper.faint, borderRadius: BorderRadius.circular(3)),
     );
     final bar = Container(
       width: vertical ? double.infinity : thickness,
@@ -134,11 +148,14 @@ class ResizeHandle extends StatelessWidget {
       child: pill,
     );
     return Semantics(
-      label: 'Drag to resize the stage and the chat. Double-tap to reset.',
+      label: onTap == null
+          ? 'Drag to resize the stage and the chat. Double-tap to reset.'
+          : 'Drag to resize the stage and the chat. Tap to stretch it, double-tap to reset.',
       child: MouseRegion(
         cursor: vertical ? SystemMouseCursors.resizeRow : SystemMouseCursors.resizeColumn,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
+          onTap: onTap,
           onDoubleTap: onReset,
           onVerticalDragUpdate: vertical ? (d) => onDrag(d.delta.dy) : null,
           onVerticalDragEnd: vertical ? (_) => onEnd?.call() : null,

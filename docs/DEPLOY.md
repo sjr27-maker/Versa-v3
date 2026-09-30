@@ -91,6 +91,21 @@ add both in Firebase (step 1). The APK lands at
 For RevenueCat purchases in the app, `config/firebase.json` can also carry
 `RC_TEST_KEY` (Test Store) or `RC_GOOGLE_KEY` (Play) — see `app/README.md`.
 
+**Demo builds (Test Store).** RevenueCat's SDK crashes on purpose in any
+non-debuggable Android build that carries a Test Store key. So when
+`RC_TEST_KEY` is set, `build_apk.ps1` builds a *demo* APK in Flutter's
+**profile** mode: compiled ahead of time (near-release speed) and debuggable
+by design, signed with the release key (`android/app/build.gradle.kts`), and
+saved as the same `app-release.apk`. (A debuggable *release* build doesn't
+work: Flutter then compiles the Dart code in slow debug mode.) Purchases are simulated, show in the
+RevenueCat dashboard as sandbox data, and should still reach the server's
+webhook (check once in RevenueCat → Integrations → Webhooks). Play refuses debuggable uploads, so a demo build can't ship.
+
+**Play builds.** `build_apk.ps1 -Api <url> -Bundle` makes an `.aab` for
+Play internal testing; it refuses while `RC_TEST_KEY` is set (use
+`RC_GOOGLE_KEY=goog_...`). Play re-signs the app, so add Play's app signing
+key SHA-1/SHA-256 (Play Console → App integrity) to Firebase as well.
+
 ## 5. Invites
 
 Make codes against the **deployed** database through the Cloud SQL proxy:

@@ -457,8 +457,15 @@ async def test_finishing_a_lesson_pays_back(clean_pool, embedding_client):
             sid = (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"]
         rewards, statuses = [], []
         async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
+            await _turn(ws, {"type": "message", "text": "I'm ready, let's start this lesson."})
             for _ in range(6):
-                await _turn(ws, {"type": "message", "text": "I think I get it now"})
+                # each point is finished by its tap-to-answer quiz (topics.py)
+                async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+                    quiz = (await client.post(f"/api/lessons/{lesson_id}/activity")).json()
+                    if "activity_id" not in quiz:
+                        break
+                    await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                      json={"activity_id": quiz["activity_id"], "picked": "a"})
                 await live.loop.wait_for_background_tasks()
                 while True:
                     try:

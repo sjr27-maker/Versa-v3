@@ -81,6 +81,20 @@ class _NotesPanelState extends State<NotesPanel> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(NotesPanel old) {
+    super.didUpdateWidget(old);
+    // a different chat (or server): what was shown belongs to the old one
+    if (old.sessionId != widget.sessionId || old.api != widget.api) {
+      _status = null;
+      _pdfBusy = null;
+      _pdfMessage = null;
+      _pdfSaved = false;
+      _pdfCache = null;
+      _load();
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _phase = _Phase.loading;

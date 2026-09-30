@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
@@ -362,9 +362,61 @@ class ShellState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Tapping the tab you're already on takes it back to its start: Modes,
+  /// tapped from inside a mode, returns to the mode picker.
   void goTab(int index) {
+    if (index == tab && index == tabModes && inMode) {
+      closeModes();
+      return;
+    }
     tab = index;
     notifyListeners();
+  }
+
+  /// The nested navigators of the modes that have their own screen stacks
+  /// (topics_root / rooms_root / exams_root), so the system back button
+  /// can step back inside them -- a nested Navigator doesn't get it itself.
+  final topicsNavigator = GlobalKey<NavigatorState>();
+  final roomsNavigator = GlobalKey<NavigatorState>();
+  final examsNavigator = GlobalKey<NavigatorState>();
+
+  bool get inMode => inSandbox || inTopics || inRooms || inExams;
+
+  void closeModes() {
+    inSandbox = false;
+    inTopics = false;
+    inRooms = false;
+    inExams = false;
+    notifyListeners();
+  }
+
+  /// The system back button (Android): one screen back inside a mode, then
+  /// out to the mode picker, then to Home. False when there's nowhere left
+  /// to go, and the app should close.
+  Future<bool> back() async {
+    if (tab == tabModes) {
+      final nav = (inTopics
+              ? topicsNavigator
+              : inRooms
+                  ? roomsNavigator
+                  : inExams
+                      ? examsNavigator
+                      : null)
+          ?.currentState;
+      if (nav != null && nav.canPop()) {
+        await nav.maybePop(); // respects a screen's own PopScope
+        return true;
+      }
+      if (inMode) {
+        closeModes();
+        return true;
+      }
+    }
+    if (tab != tabHome) {
+      goTab(tabHome);
+      return true;
+    }
+    return false;
   }
 
   void openSandbox() {

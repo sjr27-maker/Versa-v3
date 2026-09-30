@@ -11,6 +11,11 @@ reach the server. The room is a WhatsApp-style group chat:
     whom (everyone or one person, optionally privately) and how: a chat
     line, a short teaching explanation (acted out on the stage), a question,
     clickable options, a task for someone, or marking someone's task done.
+    It teaches the topic part by part: explain a piece, then give each
+    person a task on it -- always a quiz or puzzle answered with one tap
+    (graded by the hub, so a right tap completes it), never something to
+    type -- and carry on until the part's content is covered (`part_done`).
+    People type only when they choose to.
 
 Modules
     store.py   the tables (migration rooms_001_rooms.sql), insert-only

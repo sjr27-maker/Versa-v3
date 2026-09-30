@@ -105,8 +105,11 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
       if (!mounted) return;
       setState(() {
         final known = {for (final c in node.children) c.id};
-        node.children.addAll(children.where((c) => !known.contains(c.id)));
+        final fresh = children.where((c) => !known.contains(c.id)).toList();
+        node.children.addAll(fresh);
         node.expanded = true;
+        // a resource section that has run out: its extras came, or nothing new did
+        if (node.children.any((c) => c.beyondResource) || (more && fresh.isEmpty)) node.canBranch = false;
         _open.add(node.id);
         _growing = node.id;
       });

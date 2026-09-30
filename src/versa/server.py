@@ -21,7 +21,9 @@ transport:
     learner asks; priced), GET /api/sessions/{id}/notes/{note_id}/pdf
     Learn a topic (topics.py): /api/topic-explorations[/from-link|/from-pdf],
     /api/topic-nodes/{id}/expand, /api/topics, /api/learners/{id}/topics,
-    /api/topics/{id}, /api/lessons/{id}[/start]
+    /api/topics/{id}, /api/lessons/{id}[/start|/activity|/activity-result]
+    (activity: a tap-to-answer quiz on the lesson's current point, acted out
+    on the stage and shown in the chat; activity-result grades the tap)
     Exam prep (exams.py): /api/exams[/from-link|/from-pdf|/from-course],
     /api/learners/{id}/exams, /api/exams/{id}, /api/exams/{id}/mock,
     /api/exam-units/{id}/quiz, /api/exam-quizzes/{id}[/submit],
@@ -99,6 +101,7 @@ Chat protocol (JSON text frames).
   after `done`.
 
   server -> client, lesson chats only (topics.py), when a task was judged
+  (or a point's quiz answered right, POST /api/lessons/{id}/activity-result)
   complete -- usually just after `done`, from the turn's background tail
     {"type": "progress", "lesson_id", "task_id", "lesson_percent",
      "chapter_percent", "topic_percent", "lesson_status"}
@@ -1352,6 +1355,12 @@ def create_app(
                 if self.photo:
                     # the learner's own picture: the slime can hold it up
                     kwargs["photo"] = True
+                hooks = loop.lesson_hooks
+                if hooks is not None:
+                    # a lesson: act out the point being taught, whatever was typed
+                    note = await hooks.stage_note(self.session_id)
+                    if note:
+                        kwargs["lesson"] = note
                 await loop._call_node(stage_director, self.session_id, self.turn_index, **kwargs)
             except Exception:
                 logger.warning("stage direction failed on turn %d for session %s",
@@ -1808,7 +1817,7 @@ def create_app(
     app.include_router(build_feed_router(pool, tiers.fast))
     app.include_router(build_topics_router(
         pool, tiers.fast, loop._embedding_client, ablation_config=loop.ablation_config,
-        sparks=sparks,
+        sparks=sparks, on_progress=on_lesson_progress,
     ))
     # Exam preparation (exams.py): syllabus units, unit quizzes, mock tests.
     exams_router = build_exams_router(pool, tiers.fast, sparks=sparks)

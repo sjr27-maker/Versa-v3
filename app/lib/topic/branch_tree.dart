@@ -89,7 +89,8 @@ class _Layout {
     List<(String, TopicNode?, _SlotKind)> itemsUnder(TopicNode n) => [
           for (final c in n.children) (c.id, c, _SlotKind.node),
           if (n.children.isEmpty) ('leaf-${n.id}', null, _SlotKind.leaf),
-          ('more-${n.id}', n, _SlotKind.more),
+          // a resource branch whose section has run out asks for nothing more
+          if (n.canBranch) ('more-${n.id}', n, _SlotKind.more),
         ];
 
     // returns the width used and the centre x of the item
@@ -481,6 +482,12 @@ class _NodeCard extends StatelessWidget {
                     ),
                   ),
                 ]),
+                if (node.beyondResource)
+                  Padding(
+                    key: ValueKey('beyond-${node.id}'),
+                    padding: const EdgeInsets.only(left: 6, bottom: 2),
+                    child: Text('BEYOND YOUR RESOURCE', style: mono(8.5, color: Paper.faint)),
+                  ),
                 if (node.summary.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(left: 6, top: 2),
@@ -492,7 +499,9 @@ class _NodeCard extends StatelessWidget {
                 const Spacer(),
                 Align(
                   alignment: Alignment.bottomRight,
-                  child: branching
+                  child: !node.canBranch && !node.expanded
+                      ? const SizedBox(height: 32)
+                      : branching
                       ? Padding(
                           padding: EdgeInsets.all(8),
                           child: SizedBox(

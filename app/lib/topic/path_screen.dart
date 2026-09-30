@@ -224,10 +224,15 @@ class LessonPath extends StatelessWidget {
     required this.onOpen,
     this.keyPrefix = 'path',
     this.nodeSize = 72,
-    this.rowHeight = 150,
+    this.rowHeight = 168,
+    this.background,
   });
 
   final String keyPrefix;
+
+  /// What the path sits on; each title is backed with it so the road
+  /// passes behind the words instead of through them. Defaults to the page.
+  final Color? background;
   final double nodeSize;
   final double rowHeight;
 
@@ -278,6 +283,7 @@ class LessonPath extends StatelessWidget {
                   keyPrefix: keyPrefix,
                   lesson: lessons[i],
                   isNext: lessons[i].id == nextLessonId,
+                  background: background ?? Paper.page,
                   onTap: () => onOpen(lessons[i].id),
                 ),
               ),
@@ -324,8 +330,10 @@ class _PathNode extends StatefulWidget {
     required this.onTap,
     required this.size,
     required this.keyPrefix,
+    required this.background,
   });
   final double size;
+  final Color background;
   final String keyPrefix;
   final LessonSummary lesson;
   final bool isNext;
@@ -408,12 +416,16 @@ class _PathNodeState extends State<_PathNode> {
             child: Text(l.status == LessonStatus.inProgress ? 'CONTINUE' : 'START',
                 style: mono(9, color: Paper.page, weight: FontWeight.w700)),
           ),
-        Text(
-          l.title,
-          maxLines: 2,
-          textAlign: TextAlign.center,
-          overflow: TextOverflow.ellipsis,
-          style: sans(12, color: l.status == LessonStatus.notStarted ? Paper.muted : Paper.ink, weight: FontWeight.w500),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(color: widget.background, borderRadius: BorderRadius.circular(8)),
+          child: Text(
+            l.title,
+            maxLines: 2,
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            style: sans(12, color: l.status == LessonStatus.notStarted ? Paper.muted : Paper.ink, weight: FontWeight.w500),
+          ),
         ),
       ],
     );

@@ -164,6 +164,8 @@ class RoomOptionSet {
     required this.prompt,
     required this.forEveryone,
     required this.options,
+    this.taskId,
+    this.race = false,
   });
 
   final String setId;
@@ -171,10 +173,19 @@ class RoomOptionSet {
   final bool forEveryone;
   final List<RoomOption> options;
 
+  /// Set when these are the choices of this person's quiz task: one tap
+  /// answers it (the server grades it).
+  final String? taskId;
+
+  /// One question for everyone: the first right tap wins.
+  final bool race;
+
   factory RoomOptionSet.fromJson(Map<String, dynamic> j) => RoomOptionSet(
+        race: j['race'] as bool? ?? false,
         setId: j['set_id'] as String,
         prompt: j['prompt'] as String? ?? '',
         forEveryone: j['for_everyone'] as bool? ?? false,
+        taskId: j['task_id'] as String?,
         options: [
           for (final o in (j['options'] as List? ?? const []))
             RoomOption(id: (o as Map)['id'] as String, text: o['text'] as String? ?? ''),
@@ -189,14 +200,53 @@ class RoomMemberInfo {
   final bool online;
 }
 
-/// Everything around the chat: who's here, everyone's tasks, and the
-/// options still waiting for THIS person.
+/// One row of the scoreboard.
+class RoomScore {
+  const RoomScore({required this.name, required this.points, required this.wins});
+  final String name;
+  final int points;
+  final int wins;
+}
+
+/// One part of the room's topic, in order: covered, the one the group is
+/// on, or still ahead.
+class RoomPartProgress {
+  const RoomPartProgress({required this.title, required this.done, required this.current});
+  final String title;
+  final bool done;
+  final bool current;
+}
+
+/// Everything around the chat: who's here, everyone's tasks, the topic's
+/// parts, and the options still waiting for THIS person.
 class RoomBoard {
-  const RoomBoard({this.members = const [], this.tasks = const [], this.options = const []});
+  const RoomBoard({
+    this.members = const [],
+    this.tasks = const [],
+    this.options = const [],
+    this.parts = const [],
+    this.scores = const [],
+  });
 
   final List<RoomMemberInfo> members;
   final List<RoomTask> tasks;
   final List<RoomOptionSet> options;
+  final List<RoomPartProgress> parts;
+
+  /// The scoreboard, highest first (a race won is worth 3, a task right 1).
+  final List<RoomScore> scores;
+
+  /// The race still open for this person, if any.
+  RoomOptionSet? get openRace => options.where((s) => s.race).firstOrNull;
+
+  /// This person's open quiz task, as the choices to tap.
+  RoomOptionSet? get myQuiz => options.where((s) => s.taskId != null).firstOrNull;
+
+  /// The open option sets that aren't a quiz task.
+  List<RoomOptionSet> get otherOptions => [for (final s in options) if (s.taskId == null) s];
+
+  /// The set with this id, while it is still open for this person.
+  RoomOptionSet? openSet(Object? setId) => options.where((s) => s.setId == setId).firstOrNull;
 
   static const empty = RoomBoard();
 
@@ -212,6 +262,22 @@ class RoomBoard {
         tasks: [for (final t in (j['tasks'] as List? ?? const [])) RoomTask.fromJson(t as Map<String, dynamic>)],
         options: [
           for (final s in (j['options'] as List? ?? const [])) RoomOptionSet.fromJson(s as Map<String, dynamic>),
+        ],
+        scores: [
+          for (final s in (j['scores'] as List? ?? const []))
+            RoomScore(
+              name: (s as Map)['name'] as String? ?? '',
+              points: (s['points'] as num?)?.toInt() ?? 0,
+              wins: (s['wins'] as num?)?.toInt() ?? 0,
+            ),
+        ],
+        parts: [
+          for (final p in (j['parts'] as List? ?? const []))
+            RoomPartProgress(
+              title: (p as Map)['title'] as String? ?? '',
+              done: p['done'] as bool? ?? false,
+              current: p['current'] as bool? ?? false,
+            ),
         ],
       );
 

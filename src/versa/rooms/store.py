@@ -319,6 +319,52 @@ class RoomStore:
             )
         return [TaskEventRow(**dict(r)) for r in rows]
 
+    async def list_races(self, room_id: UUID) -> dict[UUID, dict | None]:
+        """Every race Versa set (option set id -> its result, or None while it
+        is still open). A race is a `question` message with `race` in its
+        meta; its result is the `progress` message that closed it -- a winner,
+        or nobody -- never a stored flag."""
+        async with self._pool.acquire() as conn:
+            opened = await conn.fetch(
+                "SELECT meta->>'option_set_id' AS set_id FROM room_messages "
+                "WHERE room_id = $1 AND kind = 'question' AND meta ? 'race'",
+                room_id,
+            )
+            closed = await conn.fetch(
+                "SELECT meta FROM room_messages WHERE room_id = $1 AND kind = 'progress' "
+                "AND meta ? 'race_set_id' ORDER BY seq",
+                room_id,
+            )
+        out: dict[UUID, dict | None] = {UUID(r["set_id"]): None for r in opened if r["set_id"]}
+        for r in closed:
+            meta = r["meta"] if isinstance(r["meta"], dict) else {}
+            key = UUID(meta["race_set_id"])
+            if out.get(key) is None:
+                out[key] = meta
+        return out
+
+    async def list_graded_picks(self, room_id: UUID) -> list[tuple[UUID, dict]]:
+        """(member, meta) for every tap the hub graded -- a quiz task or a
+        race -- oldest first: what the scoreboard is derived from."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT member_id, meta FROM room_messages WHERE room_id = $1 AND kind = 'pick' "
+                "AND meta ? 'correct' ORDER BY seq",
+                room_id,
+            )
+        return [(r["member_id"], r["meta"] if isinstance(r["meta"], dict) else {}) for r in rows]
+
+    async def list_done_parts(self, room_id: UUID) -> set[int]:
+        """The outline parts (1-based) Versa marked covered -- each is a
+        `progress` message with a `part` in its meta, never a stored flag."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT meta->>'part' AS part FROM room_messages "
+                "WHERE room_id = $1 AND kind = 'progress' AND meta ? 'part'",
+                room_id,
+            )
+        return {int(r["part"]) for r in rows if (r["part"] or "").isdigit()}
+
     # ---------------------------------------------------------- options
 
     async def add_option_set(

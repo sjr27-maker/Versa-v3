@@ -18,11 +18,17 @@ ARG FLUTTER_VERSION=3.47.5
 # ---------------------------------------------------------------- flutter sdk
 FROM ${FLUTTER_BASE} AS flutter
 ARG FLUTTER_VERSION
-RUN root="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")" \
- && git config --global --add safe.directory "$root" \
- && git -C "$root" fetch --depth 1 origin "refs/tags/${FLUTTER_VERSION}:refs/tags/${FLUTTER_VERSION}" \
- && git -C "$root" checkout -q "${FLUTTER_VERSION}" \
- && flutter --version && flutter precache --web --android
+# Fails loudly if the switch didn't take: Cloud Build's legacy builder once
+# carried on silently with the base image's older Flutter.
+RUN set -eux; \
+    root="$(dirname "$(dirname "$(readlink -f "$(command -v flutter)")")")"; \
+    git config --global --add safe.directory "$root"; \
+    git -C "$root" fetch --depth 1 origin "refs/tags/${FLUTTER_VERSION}:refs/tags/${FLUTTER_VERSION}"; \
+    git -C "$root" checkout -q "${FLUTTER_VERSION}"; \
+    git -C "$root" rev-parse HEAD; \
+    flutter --version; \
+    flutter --version | grep -q "Flutter ${FLUTTER_VERSION} "; \
+    flutter precache --web --android
 
 # ---------------------------------------------------------------- web app
 FROM flutter AS web

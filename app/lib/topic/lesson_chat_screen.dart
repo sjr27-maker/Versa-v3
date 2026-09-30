@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../chat_controller.dart';
 import '../models.dart';
+import '../notes/notes_api.dart';
+import '../notes/notes_sheet.dart';
 import '../picture.dart';
 import '../theme.dart';
 import '../widgets/collapsed_rail.dart';
@@ -15,13 +17,16 @@ import '../widgets/level_slider.dart';
 import '../widgets/message_view.dart';
 import '../widgets/stage_panel.dart';
 import '../widgets/stage_split.dart';
+import 'lesson_quiz.dart';
 import 'topic_api.dart';
 import 'topic_models.dart';
 import 'topic_widgets.dart';
 
-/// A lesson: a chat whose tutor works through this lesson's tasks, with the
-/// task checklist and progress beside it (filled in live as the server judges
-/// each task done), the length/depth/breadth sliders, and the stage when it's on.
+/// A lesson: a chat whose tutor explains this lesson's points one at a time,
+/// each followed by a tap-to-answer quiz or puzzle (lesson_quiz.dart) that
+/// the stage acts out too -- the learner never has to type, and types
+/// whenever they want to. The points and progress sit beside it (ticked
+/// live as each is done), with the length/depth/breadth sliders.
 class LessonChatScreen extends StatefulWidget {
   const LessonChatScreen({super.key, required this.lessonId});
   final String lessonId;
@@ -33,6 +38,7 @@ class LessonChatScreen extends StatefulWidget {
 class _LessonChatScreenState extends State<LessonChatScreen> {
   Lesson? _lesson;
   ChatController? _chat;
+  LessonQuizController? _quiz;
   StreamSubscription<ProgressEvent>? _progress;
   Object? _error;
 
@@ -60,6 +66,19 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
       setState(() {
         _lesson = lesson;
         _chat = chat;
+        _quiz = LessonQuizController(
+          api: api,
+          lesson: lesson,
+          chat: chat,
+          onProgress: (p) => _onProgress(ProgressEvent(
+            lessonId: p['lesson_id'] as String? ?? lesson.id,
+            taskId: p['task_id'] as String? ?? '',
+            lessonPercent: (p['lesson_percent'] as num?)?.toInt() ?? lesson.percent,
+            chapterPercent: (p['chapter_percent'] as num?)?.toInt() ?? 0,
+            topicPercent: (p['topic_percent'] as num?)?.toInt() ?? 0,
+            lessonStatus: p['lesson_status'] as String? ?? 'in_progress',
+          )),
+        );
       });
     } catch (e) {
       if (mounted) setState(() => _error = e);
@@ -69,6 +88,8 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
   void _onProgress(ProgressEvent e) {
     final lesson = _lesson;
     if (lesson == null || e.lessonId != lesson.id) return;
+    // the tap's reply and the chat's frame both carry it: tick it once
+    if (lesson.tasks.any((t) => t.id == e.taskId && t.done)) return;
     setState(() {
       for (final t in lesson.tasks) {
         if (t.id == e.taskId) t.done = true;
@@ -87,7 +108,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
           duration: const Duration(seconds: 3),
           content: Text(lesson.status == LessonStatus.done
               ? 'Lesson complete. ${e.lessonPercent}%'
-              : 'Task done: ${task.description}'),
+              : '${task.isPoint ? 'Got it' : 'Task done'}: ${task.description}'),
         ));
     }
   }
@@ -95,6 +116,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
   @override
   void dispose() {
     _progress?.cancel();
+    _quiz?.dispose();
     _chat?.dispose();
     super.dispose();
   }
@@ -135,6 +157,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
         key: GlobalObjectKey(chat),
         lesson: lesson,
         chat: chat,
+        quiz: _quiz,
         optionsOnStage: stageOpen,
         showStageToggle: showStage && !wide,
         stageCollapsed: shell.stagePanelCollapsed,
@@ -168,6 +191,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
                     onFraction: (f) => shell.stageFraction = f,
                     stage: (height) => StagePanel(
                       chat: chat,
+                      quiz: _quiz,
                       compact: !wide,
                       compactHeight: height,
                       onCollapse: shell.toggleStagePanelCollapsed,
@@ -201,10 +225,12 @@ class _LessonChatColumn extends StatefulWidget {
     required this.stageCollapsed,
     required this.onToggleStage,
     this.compactTasks,
+    this.quiz,
   });
 
   final Lesson lesson;
   final ChatController chat;
+  final LessonQuizController? quiz;
   final bool optionsOnStage;
   final bool showStageToggle;
   final bool stageCollapsed;
@@ -224,6 +250,7 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
   void initState() {
     super.initState();
     widget.chat.addListener(_onChange);
+    widget.quiz?.addListener(_onQuiz);
     _scroll.addListener(() {
       if (!_scroll.hasClients) return;
       final p = _scroll.position;
@@ -234,8 +261,14 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
   @override
   void dispose() {
     widget.chat.removeListener(_onChange);
+    widget.quiz?.removeListener(_onQuiz);
     _scroll.dispose();
     super.dispose();
+  }
+
+  /// The quiz card grows under the last answer: keep it in view.
+  void _onQuiz() {
+    if (_atBottom) _follow(4);
   }
 
   void _onChange() {
@@ -295,9 +328,16 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
                         key: const ValueKey('lesson-message-list'),
                         controller: _scroll,
                         padding: const EdgeInsets.fromLTRB(24, 22, 24, 16),
-                        itemCount: shown.length,
+                        itemCount: shown.length + (widget.quiz == null ? 0 : 1),
                         separatorBuilder: (_, _) => const SizedBox(height: 18),
                         itemBuilder: (context, i) {
+                          if (i == shown.length) {
+                            return LessonQuizCard(
+                              key: const ValueKey('lesson-quiz'),
+                              controller: widget.quiz!,
+                              onBackToCourse: () => Navigator.of(context).maybePop(),
+                            );
+                          }
                           final m = shown[i];
                           return MessageView(
                             message: m,
@@ -320,7 +360,9 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
                 padding: const EdgeInsets.fromLTRB(22, 4, 22, 18),
                 child: Composer(
                   enabled: chat.canSend,
-                  hint: chat.canSend || chat.busy ? 'Answer, ask, or say what you want to do…' : 'Waiting for the connection…',
+                  hint: chat.canSend || chat.busy
+                      ? (lesson.byPoints ? 'Ask anything -- or just tap the answers' : 'Answer, ask, or say what you want to do…')
+                      : 'Waiting for the connection…',
                   onSend: chat.send,
                   uploadPicture: (bytes, name) {
                     final app = context.read<AppState>();
@@ -397,6 +439,15 @@ class _LessonHeader extends StatelessWidget {
         SizedBox(
           width: 120,
           child: PercentRow(percent: lesson.percent, height: 6, labelKey: const ValueKey('lesson-header-percent')),
+        ),
+        // Revision notes of this lesson chat -- written only when asked (notes.py).
+        IconButton(
+          key: const ValueKey('lesson-notes'),
+          tooltip: 'Notes',
+          onPressed: chat.sessionId == null
+              ? null
+              : () => showNotesSheet(context, api: NotesApi.of(chat.api), sessionId: chat.sessionId!),
+          icon: Icon(Icons.sticky_note_2_outlined, color: Paper.faint, size: 20),
         ),
       ]),
     );
@@ -481,8 +532,8 @@ class _TaskPanel extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           lesson.status == LessonStatus.done
-              ? 'Done. Every task complete.'
-              : '${lesson.tasksDone} of ${lesson.tasks.length} tasks done',
+              ? (lesson.byPoints ? 'Done. Every point covered.' : 'Done. Every task complete.')
+              : '${lesson.tasksDone} of ${lesson.tasks.length} ${lesson.byPoints ? 'points covered' : 'tasks done'}',
           style: sans(12, color: Paper.muted),
         ),
         const SizedBox(height: 14),
@@ -543,6 +594,7 @@ class _TaskRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final kind = switch (task.kind) {
+      'point' => 'POINT ${task.position + 1}',
       'practice' => 'PRACTICE',
       'apply' => 'APPLY',
       'check' => 'END-OF-LESSON QUESTIONS',
@@ -622,7 +674,8 @@ class _CompactTasks extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
             child: Row(children: [
-              Text('TASKS ${lesson.tasksDone}/${lesson.tasks.length}', style: mono(10)),
+              Text('${lesson.byPoints ? 'POINTS' : 'TASKS'} ${lesson.tasksDone}/${lesson.tasks.length}',
+                  style: mono(10)),
               const Spacer(),
               Icon(collapsed ? Icons.expand_more_rounded : Icons.expand_less_rounded, color: Paper.faint),
             ]),

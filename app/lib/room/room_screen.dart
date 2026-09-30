@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../picture.dart';
 import '../theme.dart';
 import '../widgets/composer.dart';
+import '../widgets/stage_split.dart';
 import 'room_api.dart';
 import 'room_chat.dart';
 import 'room_controller.dart';
@@ -163,13 +164,16 @@ class _RoomScreenState extends State<RoomScreen> {
       child: RoomMessageList(
         messages: _room.messages,
         meId: me,
+        controller: _room,
         footer: typing.isEmpty ? null : RoomTypingBubble(names: typing),
       ),
     );
   }
 }
 
-/// On a phone the three boxes share one strip, as tabs.
+/// On a phone the three boxes share one strip, as tabs, with a handle under
+/// it the learner drags to make the strip taller or shorter (double-tap puts
+/// it back) -- the same handle as the Sandbox/lesson stage split.
 class _NarrowTop extends StatefulWidget {
   const _NarrowTop({required this.room});
   final RoomController room;
@@ -180,12 +184,19 @@ class _NarrowTop extends StatefulWidget {
 
 class _NarrowTopState extends State<_NarrowTop> {
   int _tab = 0;
+  double _height = _defaultHeight;
+
+  static const _defaultHeight = 210.0;
+  static const _minHeight = 120.0;
 
   @override
   Widget build(BuildContext context) {
     final room = widget.room;
     final waiting = room.board.options.isNotEmpty;
     final tabs = ['Stage', 'Board', waiting ? 'For you •' : 'For you'];
+    // Leave the chat room for a few lines and the composer.
+    final maxHeight = (MediaQuery.sizeOf(context).height * 0.6).clamp(_minHeight + 40, 700.0).toDouble();
+    final height = _height.clamp(_minHeight, maxHeight).toDouble();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -206,7 +217,7 @@ class _NarrowTopState extends State<_NarrowTop> {
         ),
         const SizedBox(height: 8),
         SizedBox(
-          height: 210,
+          height: height,
           child: IndexedStack(
             index: _tab,
             children: [
@@ -215,6 +226,13 @@ class _NarrowTopState extends State<_NarrowTop> {
               RoomPanelFrame(title: 'For you', child: ForYouPanel(controller: room)),
             ],
           ),
+        ),
+        ResizeHandle(
+          key: const ValueKey('room-top-resize'),
+          axis: Axis.vertical,
+          onDrag: (dy) => setState(() => _height = (height + dy).clamp(_minHeight, maxHeight).toDouble()),
+          onTap: () => setState(() => _height = height < maxHeight - 1 ? maxHeight : _defaultHeight),
+          onReset: () => setState(() => _height = _defaultHeight),
         ),
       ],
     );

@@ -8,6 +8,7 @@ import '../stage/engine.dart';
 import '../stage/script.dart';
 import '../stage/stage_view.dart';
 import '../theme.dart';
+import '../topic/lesson_quiz.dart';
 import 'directions_compass.dart';
 
 /// The stage: the slime character that acts out the conversation (usable
@@ -24,7 +25,20 @@ import 'directions_compass.dart';
 /// without turning the feature off -- and a minimized stage hands the options
 /// back to the chat.
 class StagePanel extends StatefulWidget {
-  const StagePanel({super.key, required this.onCollapse, this.compact = false, this.compactHeight, this.chat, this.engine});
+  const StagePanel({
+    super.key,
+    required this.onCollapse,
+    this.compact = false,
+    this.compactHeight,
+    this.chat,
+    this.engine,
+    this.quiz,
+  });
+
+  /// A lesson's quiz on the point just explained (topic/lesson_quiz.dart):
+  /// once the explanation's performance is over, the slime acts out a short
+  /// lead-in and asks it. A tap here or on the chat's card answers both.
+  final LessonQuizController? quiz;
 
   final VoidCallback onCollapse;
 
@@ -81,6 +95,11 @@ class _StagePanelState extends State<StagePanel> {
     super.initState();
     _engine.onNote = _launchNote;
     _engine.onChecked = (question, choices, picked, answer) {
+      final quiz = widget.quiz;
+      if (quiz != null && _quizShown != null && quiz.quiz?.activityId == _quizShown) {
+        quiz.answer(picked); // graded by the server; ignored if the card got there first
+        return;
+      }
       final turn = _turn;
       if (turn == null) return;
       widget.chat?.recordStageCheck(
@@ -92,11 +111,70 @@ class _StagePanelState extends State<StagePanel> {
       );
     };
     _attach(widget.chat);
+    _attachQuiz(widget.quiz);
+    _engine.addListener(_maybePlayQuiz);
+  }
+
+  // ------------------------------------------------ the lesson's quiz
+
+  /// The quiz (activity id) the stage has acted out, and whether its scene is
+  /// still playing.
+  String? _quizShown;
+  bool _quizRunning = false;
+
+  void _attachQuiz(LessonQuizController? quiz) {
+    if (quiz == null) return;
+    quiz.stageAttached = true;
+    quiz.addListener(_onQuiz);
+    _onQuiz();
+  }
+
+  void _detachQuiz(LessonQuizController? quiz) {
+    if (quiz == null) return;
+    quiz.stageAttached = false;
+    quiz.stageAsked(); // nothing left to wait for: the card offers its choices
+    quiz.removeListener(_onQuiz);
+  }
+
+  void _onQuiz() {
+    final quiz = widget.quiz;
+    if (quiz == null) return;
+    final asked = _quizShown != null && _engine.question?.key.startsWith('skit-') == true;
+    if (asked && quiz.quiz?.activityId == _quizShown && quiz.picked != null) {
+      // answered on the card: the slime takes the same answer and reacts
+      _engine.answer(quiz.picked!);
+    } else if (_quizRunning && quiz.quiz?.activityId != _quizShown) {
+      // moved on (another question, or on to the next point): clear it
+      _engine.stop();
+    }
+    _maybePlayQuiz();
+  }
+
+  /// Act the quiz out -- only once whatever the stage is doing has finished,
+  /// so it never cuts an explanation short.
+  void _maybePlayQuiz() {
+    final quiz = widget.quiz;
+    final q = quiz?.quiz;
+    if (quiz == null || q == null) return;
+    if (_quizShown == q.activityId) {
+      if (_quizRunning && _engine.question?.key.startsWith('skit-') == true) quiz.stageAsked();
+      return;
+    }
+    if (quiz.phase != QuizPhase.asking || _live || _engine.running || _engine.asking || q.script.isEmpty) return;
+    _quizShown = q.activityId;
+    _quizRunning = true;
+    _engine.play(parseScript(q.script)).whenComplete(() {
+      _quizRunning = false;
+    });
   }
 
   @override
   void didUpdateWidget(covariant StagePanel old) {
     super.didUpdateWidget(old);
+    if (old.quiz != widget.quiz) {
+      _detachQuiz(old.quiz);
+      _attachQuiz(widget.quiz);
+    }
     if (old.chat != widget.chat) {
       _detach(old.chat);
       _engine.withdrawQuestion();
@@ -192,6 +270,8 @@ class _StagePanelState extends State<StagePanel> {
   @override
   void dispose() {
     _detach(widget.chat);
+    _detachQuiz(widget.quiz);
+    _engine.removeListener(_maybePlayQuiz);
     _engine.stop();
     _engine.onNote = null;
     _engine.onChecked = null;

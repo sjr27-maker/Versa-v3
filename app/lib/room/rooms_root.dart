@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../app_state.dart';
 import 'room_api.dart';
 import 'room_screen.dart';
 import 'rooms_home_screen.dart';
@@ -14,12 +16,10 @@ class RoomsRoot extends StatefulWidget {
 }
 
 class _RoomsRootState extends State<RoomsRoot> {
-  final _navigator = GlobalKey<NavigatorState>();
-
   @override
   Widget build(BuildContext context) {
     return Navigator(
-      key: _navigator,
+      key: context.read<ShellState>().roomsNavigator,
       onGenerateRoute: (_) => roomRoute((_) => const RoomsHomeScreen()),
     );
   }

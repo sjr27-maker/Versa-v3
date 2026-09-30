@@ -57,6 +57,17 @@ android {
             signingConfig = if (releaseKey.isEmpty) signingConfigs.getByName("debug")
                             else signingConfigs.getByName("release")
         }
+        // Demo builds (scripts/build_apk.ps1 with RevenueCat's Test Store key)
+        // are Flutter PROFILE builds: compiled ahead of time like release, but
+        // debuggable -- the Test Store SDK crashes on purpose in any build that
+        // isn't, and a debuggable *release* build makes Flutter fall back to
+        // slow debug-mode Dart. Flutter creates `profile` as a copy of debug,
+        // so give it the release key: Google sign-in only accepts the key
+        // registered in Firebase. Play refuses debuggable uploads anyway.
+        findByName("profile")?.apply {
+            signingConfig = if (releaseKey.isEmpty) signingConfigs.getByName("debug")
+                            else signingConfigs.getByName("release")
+        }
     }
 }
 

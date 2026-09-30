@@ -15,6 +15,8 @@ class TopicNode {
     required this.depth,
     required this.expanded,
     required this.children,
+    this.canBranch = true,
+    this.beyondResource = false,
   });
 
   final String id;
@@ -27,6 +29,15 @@ class TopicNode {
   bool expanded;
   final List<TopicNode> children;
 
+  /// Asking for (more) branches here can still bring some. False for a
+  /// resource branch whose section has run out, and for a "beyond the
+  /// resource" extra.
+  bool canBranch;
+
+  /// Not in the person's PDF or link: one of the few related extras offered
+  /// once its section had no more parts.
+  final bool beyondResource;
+
   factory TopicNode.fromJson(Map<String, dynamic> j) => TopicNode(
         id: j['id'] as String,
         parentId: j['parent_id'] as String?,
@@ -38,6 +49,8 @@ class TopicNode {
           for (final c in (j['children'] as List? ?? const []))
             TopicNode.fromJson(c as Map<String, dynamic>),
         ],
+        canBranch: j['can_branch'] as bool? ?? true,
+        beyondResource: j['beyond_resource'] as bool? ?? false,
       );
 }
 
@@ -244,9 +257,12 @@ class LessonTask {
 
   final String id;
   final int position;
-  final String kind; // learn | practice | apply | check
+  final String kind; // point | (courses before 2026-10-01) learn | practice | apply | check
   final String description;
   bool done;
+
+  /// A point of content: explained, then checked with a tap-to-answer quiz.
+  bool get isPoint => kind == 'point';
 
   factory LessonTask.fromJson(Map<String, dynamic> j) => LessonTask(
         id: j['id'] as String,
@@ -292,6 +308,10 @@ class Lesson {
 
   int get tasksDone => tasks.where((t) => t.done).length;
 
+  /// Taught point by point, each checked with a quiz (courses built from
+  /// 2026-10-01 on).
+  bool get byPoints => tasks.isNotEmpty && tasks.every((t) => t.isPoint);
+
   /// The task the tutor is working toward: the first one not done yet.
   LessonTask? get currentTask {
     for (final t in tasks) {
@@ -318,5 +338,65 @@ class Lesson {
         chapterPercent: (j['chapter_percent'] as num?)?.toInt(),
         topicPercent: (j['topic_percent'] as num?)?.toInt(),
         personalizedBy: _strings(j['personalized_by']),
+      );
+}
+
+/// One choice of a lesson quiz.
+class QuizChoice {
+  const QuizChoice({required this.id, required this.text});
+  final String id;
+  final String text;
+}
+
+/// A tap-to-answer quiz or puzzle on the point just explained
+/// (POST /api/lessons/{id}/activity). [script] is the same challenge as a
+/// short scene for the stage, ending in the slime asking it.
+class LessonQuiz {
+  LessonQuiz({
+    required this.activityId,
+    required this.taskId,
+    required this.question,
+    required this.choices,
+    required this.form,
+    required this.script,
+    this.facts = const [],
+  });
+
+  final String activityId;
+  final String taskId;
+  final String question;
+  final List<QuizChoice> choices;
+  final String form; // quiz | puzzle
+  final List<Map<String, dynamic>> script;
+  final List<String> facts;
+
+  factory LessonQuiz.fromJson(Map<String, dynamic> j) => LessonQuiz(
+        activityId: j['activity_id'] as String,
+        taskId: j['task_id'] as String,
+        question: j['question'] as String? ?? '',
+        choices: [
+          for (final c in (j['choices'] as List? ?? const []))
+            QuizChoice(id: (c as Map)['id'] as String, text: c['text'] as String? ?? ''),
+        ],
+        form: j['form'] as String? ?? 'quiz',
+        script: [for (final a in (j['script'] as List? ?? const [])) (a as Map).cast<String, dynamic>()],
+        facts: _strings(j['facts']),
+      );
+}
+
+/// What a tap on a quiz came to. [progress] is set when it completed the
+/// point (the same payload as a chat `progress` frame).
+class QuizResult {
+  const QuizResult({required this.correct, required this.answer, this.explain = '', this.progress});
+  final bool correct;
+  final String answer; // the right choice's id
+  final String explain;
+  final Map<String, dynamic>? progress;
+
+  factory QuizResult.fromJson(Map<String, dynamic> j) => QuizResult(
+        correct: j['correct'] as bool? ?? false,
+        answer: j['answer'] as String? ?? '',
+        explain: j['explain'] as String? ?? '',
+        progress: (j['progress'] as Map?)?.cast<String, dynamic>(),
       );
 }

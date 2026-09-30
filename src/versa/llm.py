@@ -112,8 +112,10 @@ def _stub_room_director(prompt: str) -> str:
         if " just created this room" in event or " just joined the room" in event:
             actions.append({"type": "say", "to": "all", "kind": "chat",
                             "text": f"Welcome, {name}! (stub) Let's learn this together."})
-            actions.append({"type": "task", "to": name, "task_kind": "learn",
-                            "description": "Say in your own words what you already know about the topic."})
+            actions.append({"type": "task", "to": name, "task_kind": "check",
+                            "description": "(stub) Quick one: which of these is part of the topic?",
+                            "options": ["The first part", "Something unrelated"],
+                            "answer": "The first part"})
         elif " clicked the option " in event:
             actions.append({"type": "say", "to": name, "kind": "chat",
                             "text": f"Good pick, {name}. (stub)"})
@@ -267,10 +269,24 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
             "title": "Stub resource topic",
             "branches": [
                 {"title": "Introduction", "summary": "What the resource sets out to teach.",
-                 "children": [{"title": "Key terms", "summary": "The vocabulary used throughout."}]},
+                 "anchor": "Introduction",
+                 "children": [{"title": "Key terms", "summary": "The vocabulary used throughout.",
+                               "anchor": "Key terms", "children": []}]},
                 {"title": "Main section", "summary": "The central material of the resource.",
+                 "anchor": "Main section", "children": []},
+                {"title": "Summary", "summary": "How the pieces fit together.", "anchor": "Summary",
                  "children": []},
-                {"title": "Summary", "summary": "How the pieces fit together.", "children": []},
+            ],
+        }
+    ),
+    # topics.ExpandSection: a resource branch's own parts (none here, so the
+    # stub offers the "beyond the resource" extras).
+    "TOPIC:SECTION": json.dumps(
+        {
+            "branches": [],
+            "extra": [
+                {"title": "A related idea", "summary": "Something just beyond the resource that helps."},
+                {"title": "Where it is used", "summary": "A real application of this section."},
             ],
         }
     ),
@@ -280,10 +296,10 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
                 {
                     "title": f"Stub lesson {i}",
                     "objective": "Explain the idea in your own words and use it once.",
-                    "tasks": [
-                        {"kind": "learn", "description": "Understand the idea and explain it back."},
-                        {"kind": "practice", "description": "Solve one short practice question."},
-                        {"kind": "check", "description": "Answer 2 end-of-lesson questions."},
+                    "points": [
+                        "The idea itself, stated plainly.",
+                        "Why it works.",
+                        "One place it shows up.",
                     ],
                 }
                 for i in (1, 2, 3)
@@ -335,6 +351,8 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
     ),
     # topics.LessonActivity: a lesson task set on the stage (stage.task_stage_prompt).
     "STAGE:TASK": json.dumps({
+        "kind": "quiz",
+        "explain": "2 and 3 more make 5.",
         "script": [
             {"do": "plan", "cast": {"box": "a box of apples"}, "shows": "counting the apples"},
             {"do": "spawn", "id": "box", "kind": "emoji", "label": "\U0001F34E", "x": 0.6},
@@ -801,26 +819,55 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
                 "items": {
                     "type": "OBJECT",
                     "properties": {
-                        "type": {"type": "STRING", "enum": ["say", "options", "task", "complete_task"]},
+                        "type": {"type": "STRING", "enum": ["say", "options", "complete_task", "part_done"]},
                         "to": {"type": "STRING"},
                         "private": {"type": "BOOLEAN", "nullable": True},
                         "kind": {"type": "STRING", "enum": ["chat", "content", "question"], "nullable": True},
                         "text": {"type": "STRING", "nullable": True},
                         "prompt": {"type": "STRING", "nullable": True},
                         "options": {"type": "ARRAY", "items": {"type": "STRING"}, "nullable": True},
+                        # a task's or race's tap-to-answer choices
+                        "choices": {"type": "ARRAY", "items": {"type": "STRING"}, "nullable": True},
                         "task_kind": {
                             "type": "STRING",
                             "enum": ["learn", "practice", "apply", "check", "discuss"],
                             "nullable": True,
                         },
                         "description": {"type": "STRING", "nullable": True},
+                        "answer": {"type": "STRING", "nullable": True},
+                        "part": {"type": "INTEGER", "nullable": True},
                         "evidence": {"type": "STRING", "nullable": True},
                     },
                     "required": ["type", "to"],
                 },
             },
+            # quiz tasks and a race: their own place, so choices and answer
+            # can be required (the flat actions left them out, live 2026-10-01)
+            "tasks": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "to": {"type": "STRING"},
+                        "question": {"type": "STRING"},
+                        "choices": {"type": "ARRAY", "items": {"type": "STRING"}},
+                        "answer": {"type": "STRING"},
+                    },
+                    "required": ["to", "question", "choices", "answer"],
+                },
+            },
+            "race": {
+                "type": "OBJECT",
+                "nullable": True,
+                "properties": {
+                    "question": {"type": "STRING"},
+                    "choices": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "answer": {"type": "STRING"},
+                },
+                "required": ["question", "choices", "answer"],
+            },
         },
-        "required": ["reason", "actions"],
+        "required": ["reason", "actions", "tasks"],
     },
     "CONFIRM:FACT_MATCH": {
         "type": "OBJECT",
@@ -945,6 +992,24 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
         }}},
         "required": ["branches"],
     },
+    "TOPIC:SECTION": {
+        "type": "OBJECT",
+        "properties": {
+            "branches": {"type": "ARRAY", "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "title": {"type": "STRING"}, "summary": {"type": "STRING"}, "anchor": {"type": "STRING"},
+                },
+                "required": ["title", "summary"],
+            }},
+            "extra": {"type": "ARRAY", "items": {
+                "type": "OBJECT",
+                "properties": {"title": {"type": "STRING"}, "summary": {"type": "STRING"}},
+                "required": ["title", "summary"],
+            }},
+        },
+        "required": ["branches", "extra"],
+    },
     "TOPIC:OUTLINE": {
         "type": "OBJECT",
         "properties": {
@@ -956,11 +1021,25 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
                     "properties": {
                         "title": {"type": "STRING"},
                         "summary": {"type": "STRING"},
+                        "anchor": {"type": "STRING"},
                         "children": {"type": "ARRAY", "items": {
-            "type": "OBJECT",
-            "properties": {"title": {"type": "STRING"}, "summary": {"type": "STRING"}},
-            "required": ["title", "summary"],
-        }},
+                            "type": "OBJECT",
+                            "properties": {
+                                "title": {"type": "STRING"},
+                                "summary": {"type": "STRING"},
+                                "anchor": {"type": "STRING"},
+                                "children": {"type": "ARRAY", "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "title": {"type": "STRING"},
+                                        "summary": {"type": "STRING"},
+                                        "anchor": {"type": "STRING"},
+                                    },
+                                    "required": ["title", "summary"],
+                                }},
+                            },
+                            "required": ["title", "summary"],
+                        }},
                     },
                     "required": ["title", "summary"],
                 },
@@ -978,19 +1057,9 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
                     "properties": {
                         "title": {"type": "STRING"},
                         "objective": {"type": "STRING"},
-                        "tasks": {
-                            "type": "ARRAY",
-                            "items": {
-                                "type": "OBJECT",
-                                "properties": {
-                                    "kind": {"type": "STRING", "enum": ["learn", "practice", "apply", "check"]},
-                                    "description": {"type": "STRING"},
-                                },
-                                "required": ["kind", "description"],
-                            },
-                        },
+                        "points": {"type": "ARRAY", "items": {"type": "STRING"}},
                     },
-                    "required": ["title", "objective", "tasks"],
+                    "required": ["title", "objective", "points"],
                 },
             },
         },

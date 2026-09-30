@@ -17,10 +17,14 @@ from versa import resources
 from versa.llm import StubLLMClient
 from versa.topics import (
     NodeRow,
+    TopicStore,
     build_selection,
     derive_done_task_ids,
     describe_personalization,
+    locate_sections,
+    normalize_points,
     normalize_tasks,
+    sample_text,
 )
 
 _JUDGE_DONE = json.dumps(
@@ -87,6 +91,49 @@ def test_tasks_are_normalized_to_end_in_exactly_one_check():
     assert normalize_tasks(None, "Heat")[-1]["description"].endswith("Heat.")
 
 
+def test_points_are_the_content_of_a_lesson_never_none():
+    points = normalize_points(["A is B.", "  ", "a is b.", {"point": "C follows."}, 7], "Entropy")
+    assert [p["description"] for p in points] == ["A is B.", "C follows.", "7"]
+    assert all(p["kind"] == "point" for p in points)
+    assert normalize_points("junk", "Entropy") == [{"kind": "point", "description": "The main idea of Entropy."}]
+    assert len(normalize_points([f"p{i}" for i in range(30)], "x")) == 12
+
+
+def test_sections_are_found_in_the_text_past_a_table_of_contents():
+    toc = "Contents\n1 Motion 3\n2 Forces 9\n3 Energy 14\n\n"
+    body = (
+        "1 Motion\nThings move. Speed is distance over time.\n" + "x " * 200
+        + "\n2 Forces\nA push or a pull. Newton's laws.\n" + "y " * 200
+        + "\n3 Energy\nThe ability to do work.\n"
+    )
+    text = toc + body
+    items = [
+        {"title": "Motion", "anchor": "1 Motion",
+         "children": [{"title": "Speed", "anchor": "Speed is distance"}]},
+        {"title": "Forces", "anchor": "2 Forces"},
+        {"title": "Energy", "anchor": "3 Energy"},
+        {"title": "Not in it", "anchor": "Thermodynamics"},
+    ]
+    locate_sections(text, items)
+    motion, forces, energy, missing = items
+    assert text[motion["source_start"]:].startswith("1 Motion\nThings move")  # the body, not the contents
+    assert motion["source_end"] == forces["source_start"]
+    assert text[forces["source_start"]:forces["source_end"]].startswith("2 Forces\nA push")
+    assert energy["source_end"] == len(text)
+    assert "source_start" not in missing
+    speed = motion["children"][0]
+    assert motion["source_start"] < speed["source_start"] < motion["source_end"]
+
+
+def test_a_long_resource_is_sampled_from_start_to_end():
+    text = "".join(f"<{i}>" + "." * 996 for i in range(300))  # 300k characters
+    sample = sample_text(text, 60_000)
+    assert len(sample) < 62_000
+    assert "<0>" in sample and "<299>" in sample  # the start and the very end
+    assert sample.count("[... from character") == 12  # evenly spaced windows between
+    assert sample_text("short", 100) == "short"
+
+
 def test_personalization_is_described_only_from_what_was_used():
     assert describe_personalization({}) == []
     assert describe_personalization({"thinking_styles": 1, "knobs": {"depth": 80}}) == [
@@ -109,7 +156,7 @@ async def _signals(pool, learner_id, kind=None):
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_explore_expand_build_learn_and_progress(clean_pool, embedding_client):
-    llm = _llm(**{"LESSON:JUDGE": _JUDGE_DONE})
+    llm = _llm(**{"LESSON:JUDGE": _JUDGE_DONE})  # never asked: points are done by their quiz
     live = await _start(clean_pool, llm, embedding_client)
     try:
         async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
@@ -152,7 +199,7 @@ async def test_explore_expand_build_learn_and_progress(clean_pool, embedding_cli
 
             lesson_id = ch0["lessons"][0]["id"]
             lesson = (await client.get(f"/api/lessons/{lesson_id}")).json()
-            assert lesson["tasks"][-1]["kind"] == "check" and lesson["session_id"] is None
+            assert [t["kind"] for t in lesson["tasks"]] == ["point"] * 3 and lesson["session_id"] is None
             sid = (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"]
             assert (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"] == sid
 
@@ -160,8 +207,16 @@ async def test_explore_expand_build_learn_and_progress(clean_pool, embedding_cli
             events = await _turn(ws, {"type": "message", "text": "I'm ready, let's start this lesson."})
             assert events[-1]["type"] == "done"
             await live.loop.wait_for_background_tasks()
-            progress = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-        assert progress["type"] == "progress"
+            with pytest.raises(asyncio.TimeoutError):  # explaining a point completes nothing
+                await asyncio.wait_for(ws.recv(), timeout=1)
+            async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+                quiz = (await client.post(f"/api/lessons/{lesson_id}/activity")).json()
+                assert quiz["question"] and {c["id"] for c in quiz["choices"]} == {"a", "b"}
+                result = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                            json={"activity_id": quiz["activity_id"], "picked": "a"})).json()
+            assert result["correct"] and result["explain"]
+            progress = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))  # pushed to the chat too
+        assert progress["type"] == "progress" and progress == {"type": "progress", **result["progress"]}
         assert progress["lesson_id"] == lesson_id
         assert progress["lesson_percent"] == 33 and progress["lesson_status"] == "in_progress"
         assert progress["chapter_percent"] == 16 or progress["chapter_percent"] == 17
@@ -190,12 +245,12 @@ async def test_explore_expand_build_learn_and_progress(clean_pool, embedding_cli
                 "SELECT node_name FROM topic_generations WHERE learner_id = $1",
                 __import__("uuid").UUID(lid),
             )
-        assert judged == 1
+        assert judged == 0
         names = [g["node_name"] for g in generations]
         assert names.count("GenerateBranches") == 2 and names.count("PlanLessons") == 2
 
         kinds = [s["kind"] for s in await _signals(clean_pool, lid)]
-        for kind in ("search", "expand", "selection", "lesson_open", "task_completed"):
+        for kind in ("search", "expand", "selection", "lesson_open", "task_completed", "quiz_answered"):
             assert kind in kinds, kind
         selection = (await _signals(clean_pool, lid, "selection"))[0]["payload"]
         not_chosen = {n["title"] for n in selection["shown_not_selected"]}
@@ -231,16 +286,49 @@ async def test_expand_more_appends_new_children_only(clean_pool, embedding_clien
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def _legacy_course(pool, learner_id: str) -> tuple[str, str]:
+    """A course as they were built before 2026-10-01: learn/practice/check
+    tasks, judged from the chat. (topic id, lesson id)"""
+    from uuid import UUID
+
+    store = TopicStore(pool)
+    topic_id = await store.add_topic(
+        learner_id=UUID(learner_id), exploration_id=None, title="waves", source_kind="search",
+        chapters=[{"title": "Waves", "summary": "What waves are.", "lessons": [{
+            "title": "Wave basics", "objective": "Describe a wave.",
+            "tasks": [{"kind": "learn", "description": "Explain a wave back."},
+                      {"kind": "check", "description": "Answer 2 questions."}],
+        }]}],
+    )
+    course = await __import__("versa.topics", fromlist=["load_course"]).load_course(store, topic_id)
+    return str(topic_id), str(next(iter(course.lessons)))
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_legacy_task_is_judged_from_the_chat(clean_pool, embedding_client):
+    live = await _start(clean_pool, _llm(**{"LESSON:JUDGE": _JUDGE_DONE}), embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+            lid = (await client.post("/api/learners", json={"label": "legacy"})).json()["id"]
+            _, lesson_id = await _legacy_course(clean_pool, lid)
+            sid = (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"]
+        async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
+            await _turn(ws, {"type": "message", "text": "A wave carries energy, not matter."})
+            await live.loop.wait_for_background_tasks()
+            progress = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        assert progress["type"] == "progress" and progress["lesson_percent"] == 50
+    finally:
+        await _stop(live)
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_a_task_not_done_sends_no_progress_but_records_drift(clean_pool, embedding_client):
     live = await _start(clean_pool, _llm(**{"LESSON:JUDGE": _JUDGE_NOT_DONE}), embedding_client)
     try:
         async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
             lid = (await client.post("/api/learners", json={"label": "drift"})).json()["id"]
-            ex = (await client.post("/api/topic-explorations", json={"learner_id": lid, "query": "waves"})).json()
-            topic = (await client.post("/api/topics", json={
-                "learner_id": lid, "exploration_id": ex["id"], "selected_node_ids": [ex["root_nodes"][0]["id"]],
-            })).json()
-            lesson_id = topic["chapters"][0]["lessons"][0]["id"]
+            topic_id, lesson_id = await _legacy_course(clean_pool, lid)
+            topic = {"id": topic_id}
             sid = (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"]
         async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
             await _turn(ws, {"type": "message", "text": "what's the capital of France?"})
@@ -344,6 +432,7 @@ async def test_from_link_and_from_pdf_build_a_tree_from_the_resource(clean_pool,
             assert ex["root_nodes"][0]["children"][0]["title"] == "Key terms"  # 2 levels from the outline
             outline_prompt = next(p for p in llm.prompts if p.startswith("TOPIC:OUTLINE"))
             assert "- Light reactions" in outline_prompt and "ATP." in outline_prompt
+            assert "Leave out the cover, contents" in outline_prompt
 
             r = await client.post(
                 "/api/topic-explorations/from-pdf", data={"learner_id": lid},
@@ -359,6 +448,79 @@ async def test_from_link_and_from_pdf_build_a_tree_from_the_resource(clean_pool,
             assert bad.status_code == 422 and "not a PDF" in bad.json()["detail"]
         kinds = [s["kind"] for s in await _signals(clean_pool, lid, "resource")]
         assert kinds == ["resource", "resource"]
+    finally:
+        await _stop(live)
+
+
+_BOOK = (
+    "<title>Mechanics</title>"
+    "<h2>Motion</h2><p>Speed is distance over time. Velocity has a direction.</p>"
+    "<h3>Speed</h3><p>Speed is how fast something goes, in metres per second.</p>"
+    "<h3>Velocity</h3><p>Velocity is speed in a given direction.</p>"
+    "<h2>Forces</h2><p>A force is a push or a pull, measured in newtons.</p>"
+)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_resource_is_mapped_whole_and_its_sections_become_lessons(clean_pool, embedding_client, monkeypatch):
+    """PDF/link: the whole tree arrives at once, each branch found in the
+    text; branching further reads that section and, when it has no parts,
+    offers a few extras once -- which branch no further; a ticked chapter
+    takes its own sections as lessons, planned from their text."""
+    async def fake_fetch(url: str) -> resources.ExtractedResource:
+        return resources.extract_html(_BOOK, url=url)
+
+    outline = json.dumps({"title": "Mechanics", "branches": [
+        {"title": "Motion", "summary": "How things move.", "anchor": "Motion", "children": [
+            {"title": "Speed", "summary": "How fast.", "anchor": "Speed is how fast"},
+            {"title": "Velocity", "summary": "Speed with direction.", "anchor": "Velocity is speed"},
+        ]},
+        {"title": "Forces", "summary": "Pushes and pulls.", "anchor": "Forces"},
+    ]})
+    monkeypatch.setattr(resources, "fetch_link", fake_fetch)
+    llm = _llm(**{"TOPIC:OUTLINE": outline})
+    live = await _start(clean_pool, llm, embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+            lid = (await client.post("/api/learners", json={"label": "book"})).json()["id"]
+            ex = (await client.post("/api/topic-explorations/from-link",
+                                    json={"learner_id": lid, "url": "https://example.test/book"})).json()
+            motion, forces = ex["root_nodes"]
+            assert [c["title"] for c in motion["children"]] == ["Speed", "Velocity"]
+            assert all(n["can_branch"] for n in (motion, forces))
+
+            # Forces has no parts of its own: a couple of extras, once
+            extras = (await client.post(f"/api/topic-nodes/{forces['id']}/expand")).json()
+            assert [e["title"] for e in extras] == ["A related idea", "Where it is used"]
+            assert all(e["beyond_resource"] and not e["can_branch"] for e in extras)
+            section_prompt = next(p for p in llm.prompts if p.startswith("TOPIC:SECTION"))
+            assert "measured in newtons" in section_prompt and "Speed is how fast" not in section_prompt
+            again = (await client.post(f"/api/topic-nodes/{forces['id']}/expand", json={"more": True})).json()
+            assert [e["id"] for e in again] == [e["id"] for e in extras]  # stopped: nothing new
+            assert sum(p.startswith("TOPIC:SECTION") for p in llm.prompts) == 1
+            leaf = (await client.post(f"/api/topic-nodes/{extras[0]['id']}/expand")).json()
+            assert leaf == []
+            tree = (await client.get(f"/api/topic-explorations/{ex['id']}")).json()
+            assert tree["root_nodes"][1]["can_branch"] is False
+
+            topic = (await client.post("/api/topics", json={
+                "learner_id": lid, "exploration_id": ex["id"], "selected_node_ids": [motion["id"]],
+            })).json()
+            (chapter,) = topic["chapters"]
+            assert [le["title"] for le in chapter["lessons"]] == ["Speed", "Velocity"]
+            plan_prompt = next(p for p in llm.prompts if p.startswith("TOPIC:LESSONS"))
+            assert "in metres per second" in plan_prompt and "measured in newtons" not in plan_prompt
+
+            lesson_id = chapter["lessons"][0]["id"]
+            sid = (await client.post(f"/api/lessons/{lesson_id}/start")).json()["session_id"]
+        async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
+            await _turn(ws, {"type": "message", "text": "Continue.", "stage": True})
+            await live.loop.wait_for_background_tasks()
+        answer_prompt = next(p for p in llm.prompts if p.startswith("FINAL:ANSWER"))
+        assert "in metres per second" in answer_prompt  # taught from the resource's own text
+        assert "never ask them to type anything" in answer_prompt
+        stage_prompt = next(p for p in llm.prompts if p.startswith("STAGE:DIRECT"))
+        assert "THIS IS A LESSON" in stage_prompt and "The idea itself, stated plainly." in stage_prompt
     finally:
         await _stop(live)
 
@@ -419,10 +581,15 @@ async def test_a_task_is_set_on_the_stage_and_done_by_answering_it(clean_pool, e
             assert act["task_id"] == first_task["id"] and act["task_description"] == first_task["description"]
             assert act["script"][-1]["do"] == "ask" and act["script"][-1]["answer"] == "a"
             assert act["facts"]  # something to tell while they're idle
+            assert act["question"] == act["script"][-1]["question"] and act["form"] == "quiz"
+            assert sorted(c["id"] for c in act["choices"]) == ["a", "b"]  # the same ask, flat, for the chat
 
             wrong = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
                                        json={"activity_id": act["activity_id"], "picked": "b"})).json()
-            assert wrong == {"correct": False, "answer": "a", "progress": None}
+            assert wrong == {"correct": False, "answer": "a", "explain": "2 and 3 more make 5.", "progress": None}
+
+            # "try another": a new question, told what was already asked
+            await client.post(f"/api/lessons/{lesson_id}/activity")
             assert not (await client.get(f"/api/lessons/{lesson_id}")).json()["tasks"][0]["done"]
 
             right = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
@@ -444,6 +611,9 @@ async def test_a_task_is_set_on_the_stage_and_done_by_answering_it(clean_pool, e
             events = await conn.fetch("SELECT evidence FROM lesson_task_events WHERE task_id = $1",
                                       __import__("uuid").UUID(first_task["id"]))
         assert gen["input_json"]["prompt"].startswith("STAGE:TASK")  # recorded with its prompt
+        assert "CHECK that point with something the student answers by TAPPING" in gen["input_json"]["prompt"]
         assert len(events) == 1 and events[0]["evidence"].startswith("did it on the stage")
+        taps = await _signals(clean_pool, lid, "quiz_answered")
+        assert [t["payload"]["correct"] for t in taps] == [False, True, True]
     finally:
         await _stop(live)

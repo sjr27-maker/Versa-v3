@@ -31,13 +31,21 @@ void main() {
     expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, closeTo(360, 25));
     expect(kept, closeTo(360, 25));
 
-    // never more than half the screen, never less than a strip
+    // never so tall the chat loses its composer, never less than a strip
     await tester.drag(find.byKey(const ValueKey('stage-resize')), const Offset(0, 900));
     await tester.pumpAndSettle();
-    expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, 400);
+    expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, 800 - 260);
     await tester.drag(find.byKey(const ValueKey('stage-resize')), const Offset(0, -900));
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, 120);
+
+    // a tap stretches it all the way (room for the options), a second brings it back
+    await tester.tap(find.byKey(const ValueKey('stage-resize')));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, 800 - 260);
+    await tester.tap(find.byKey(const ValueKey('stage-resize')));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, StageSplit.defaultHeight);
     expect(tester.takeException(), isNull);
   });
 

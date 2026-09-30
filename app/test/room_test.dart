@@ -86,7 +86,14 @@ const _room = {
   'created_by': 'Asha',
 };
 
-Map<String, dynamic> board({List<Map<String, dynamic>> options = const [], bool benDone = false}) => {
+Map<String, dynamic> board(
+        {List<Map<String, dynamic>> options = const [],
+    bool benDone = false,
+    List<Map<String, dynamic>>? parts,
+    List<Map<String, dynamic>>? scores}) =>
+    {
+      if (parts != null) 'parts': parts,
+      if (scores != null) 'scores': scores,
       'members': [
         {'id': 'asha', 'name': 'Asha', 'online': true},
         {'id': 'ben', 'name': 'Ben', 'online': false},
@@ -428,6 +435,104 @@ void main() {
     expect((saved.single as Map)['seen_seq'], 7);
   });
 
+  testWidgets('a task is a quiz: tapped in the chat, For you or on the stage, graded, and the topic moves on',
+      (tester) async {
+    final h = RoomHarness();
+    await _boot(tester, h, prefs: {
+      'rooms.learner-Asha': jsonEncode([
+        {'code': 'calc-101', 'member_id': 'asha', 'name': 'Asha', 'seen_seq': 0},
+      ]),
+    });
+    await _openRooms(tester);
+    await tester.tap(find.byKey(const ValueKey('room-row-calc-101')));
+    await _enterRoom(tester);
+
+    final quiz = {
+      'set_id': 'q1', 'prompt': 'Which is the limit of 1/x as x grows?', 'for_everyone': false, 'task_id': 't1',
+      'options': [{'id': 'qa', 'text': '0'}, {'id': 'qb', 'text': 'Infinity'}],
+    };
+    final parts = [
+      {'title': 'Limits', 'done': false, 'current': true},
+      {'title': 'Rules', 'done': false, 'current': false},
+    ];
+    socket.emitJson(state([
+      msg(1, sender: 'versa', kind: 'content', text: 'A limit is where a value heads.'),
+      msg(2, sender: 'versa', kind: 'task', text: 'Which is the limit of 1/x as x grows?', to: 'asha', toName: 'Asha',
+          meta: {'task_kind': 'check', 'option_set_id': 'q1', 'options': ['0', 'Infinity']}),
+    ], b: board(options: [quiz], parts: parts)));
+    await tester.pumpAndSettle();
+
+    // the topic's parts, with where the group is
+    expect(find.byKey(const ValueKey('room-parts')), findsOneWidget);
+    expect(find.text('0/2 parts'), findsOneWidget);
+    // the task's choices are taps -- in the chat and in For you -- and nothing asks for typing
+    expect(find.byKey(const ValueKey('task-choice-qa')), findsOneWidget);
+    expect(find.text('Tap your answer'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('task-choice-qb')));
+    await tester.tap(find.byKey(const ValueKey('task-choice-qb')));
+    await tester.pump();
+    expect(socket.sent.last, {'type': 'pick', 'option_id': 'qb'});
+
+    // graded by the server: the tap shows how it went
+    socket.emitJson({'type': 'message', 'message': msg(3, memberId: 'asha', name: 'Asha', kind: 'pick', text: 'Infinity',
+        meta: {'prompt': 'Which is the limit of 1/x as x grows?', 'quiz': true, 'correct': false, 'right_answer': '0'})});
+    await tester.pumpAndSettle();
+    expect(find.text('NOT QUITE -- IT WAS "0"'), findsOneWidget);
+
+    // a part covered
+    socket.emitJson({'type': 'message', 'message': msg(4, sender: 'versa', kind: 'progress', text: 'Limits',
+        meta: {'part': 1, 'part_title': 'Limits'})});
+    socket.emitJson({'type': 'board', 'board': board(parts: [
+      {'title': 'Limits', 'done': true, 'current': false},
+      {'title': 'Rules', 'done': false, 'current': true},
+    ])});
+    await tester.pumpAndSettle();
+    expect(find.text('Part 1 covered: Limits'), findsOneWidget);
+    expect(find.text('1/2 parts'), findsOneWidget);
+  });
+
+  testWidgets('a race: one question for everyone, tapped in the chat; the winner and the scoreboard',
+      (tester) async {
+    final h = RoomHarness();
+    await _boot(tester, h, prefs: {
+      'rooms.learner-Asha': jsonEncode([
+        {'code': 'calc-101', 'member_id': 'asha', 'name': 'Asha', 'seen_seq': 0},
+      ]),
+    });
+    await _openRooms(tester);
+    await tester.tap(find.byKey(const ValueKey('room-row-calc-101')));
+    await _enterRoom(tester);
+
+    final race = {
+      'set_id': 'r1', 'prompt': 'Derivative of x squared?', 'for_everyone': true, 'race': true,
+      'options': [{'id': 'ra', 'text': '2x'}, {'id': 'rb', 'text': 'x'}],
+    };
+    socket.emitJson(state([
+      msg(1, sender: 'versa', kind: 'question', text: 'Derivative of x squared?',
+          meta: {'race': true, 'option_set_id': 'r1', 'options': ['2x', 'x']}),
+    ], b: board(options: [race])));
+    await tester.pumpAndSettle();
+    expect(find.text('Race for everyone · first right answer wins'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('race-choice-ra')));
+    await tester.tap(find.byKey(const ValueKey('race-choice-ra')));
+    await tester.pump();
+    expect(socket.sent.last, {'type': 'pick', 'option_id': 'ra'});
+
+    // Ben was faster
+    socket.emitJson({'type': 'message', 'message': msg(2, sender: 'versa', kind: 'progress', text: 'Ben won the race',
+        meta: {'race_set_id': 'r1', 'winner_id': 'ben', 'winner': 'Ben', 'right_answer': '2x'})});
+    socket.emitJson({'type': 'board', 'board': board(scores: [
+      {'member_id': 'ben', 'name': 'Ben', 'points': 3, 'wins': 1},
+      {'member_id': 'asha', 'name': 'Asha', 'points': 0, 'wins': 0},
+    ])});
+    await tester.pumpAndSettle();
+    expect(find.text('Ben won the race! (+3) -- "2x"'), findsOneWidget);
+    expect(find.byKey(const ValueKey('room-scores')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const ValueKey('room-scores')), matching: find.text('Asha (you)')),
+        findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const ValueKey('score-Ben'))).data, '3');
+  });
+
   testWidgets('on a phone the top boxes become tabs', (tester) async {
     final h = RoomHarness();
     await _boot(tester, h, size: const Size(420, 900), prefs: {
@@ -450,6 +555,13 @@ void main() {
     await tester.tap(find.text('For you'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('for-you-task')), findsOneWidget);
+
+    // the strip is resized by dragging the handle under it
+    final strip = find.ancestor(of: find.byType(IndexedStack).last, matching: find.byType(SizedBox)).first;
+    final before = tester.getSize(strip).height;
+    await tester.drag(find.byKey(const ValueKey('room-top-resize')), const Offset(0, 120));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(strip).height, greaterThan(before + 60));
     expect(tester.takeException(), isNull);
   });
 }
