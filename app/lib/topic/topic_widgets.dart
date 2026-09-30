@@ -5,11 +5,11 @@ import 'topic_models.dart';
 
 /// A rounded completion bar that animates to its new value.
 class TopicProgressBar extends StatelessWidget {
-  const TopicProgressBar({super.key, required this.percent, this.height = 8, this.color = Paper.accent});
+  const TopicProgressBar({super.key, required this.percent, this.height = 8, this.color});
 
   final int percent;
   final double height;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +24,7 @@ class TopicProgressBar extends StatelessWidget {
           builder: (context, value, _) => LinearProgressIndicator(
             value: value,
             backgroundColor: Paper.border,
-            valueColor: AlwaysStoppedAnimation(percent >= 100 ? Paper.olive : color),
+            valueColor: AlwaysStoppedAnimation(percent >= 100 ? Paper.olive : color ?? Paper.accent),
           ),
         ),
       ),
@@ -70,7 +70,7 @@ class ShapedByNote extends StatelessWidget {
       key: const ValueKey('shaped-by'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Icon(Icons.person_pin_outlined, size: 15, color: Paper.faint),
+        Icon(Icons.person_pin_outlined, size: 15, color: Paper.faint),
         const SizedBox(width: 6),
         Expanded(
           child: Text('Shaped by: ${sources.join(' · ')}',
@@ -113,7 +113,7 @@ class PageHeading extends StatelessWidget {
             key: backKey,
             tooltip: 'Back',
             onPressed: onBack,
-            icon: const Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
+            icon: Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
           ),
           const SizedBox(width: 6),
         ],
@@ -142,7 +142,7 @@ class RetryLine extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        const Icon(Icons.error_outline_rounded, size: 18, color: Paper.danger),
+        Icon(Icons.error_outline_rounded, size: 18, color: Paper.danger),
         const SizedBox(width: 8),
         Expanded(child: Text(message, style: sans(13, color: Paper.danger))),
         TextButton(onPressed: onRetry, child: const Text('Try again')),

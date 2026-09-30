@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../widgets/composer.dart';
 import 'room_api.dart';
@@ -90,7 +91,15 @@ class _RoomScreenState extends State<RoomScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 child: Composer(
                   enabled: _room.isLive,
-                  onSend: _room.send,
+                  // A room gets the picture as words (images.py): rooms are
+                  // walled off from the core tables (invariant 12).
+                  onSend: (text, picture) =>
+                      _room.send(picture == null ? text : withPicture(text, picture.reading)),
+                  uploadPicture: (bytes, name) {
+                    final app = context.read<AppState>();
+                    return app.api.uploadPicture(app.learner!.id, bytes, name);
+                  },
+
                   onChanged: _room.typing,
                   hint: _room.isLive ? 'Message the group · @Versa to ask Versa' : 'Connecting…',
                 ),
@@ -147,7 +156,7 @@ class _RoomScreenState extends State<RoomScreen> {
     final me = _room.memberId;
     final typing = _room.typingNames;
     if (_room.status == RoomStatus.connecting && _room.messages.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: Paper.accent));
+      return Center(child: CircularProgressIndicator(color: Paper.accent));
     }
     return Container(
       color: Paper.page,
@@ -239,7 +248,7 @@ class _Header extends StatelessWidget {
     final typing = room.typingNames.isNotEmpty && room.isLive;
     return Container(
       padding: const EdgeInsets.fromLTRB(6, 8, 10, 8),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.sliver,
         border: Border(bottom: BorderSide(color: Paper.border)),
       ),
@@ -249,14 +258,14 @@ class _Header extends StatelessWidget {
             key: const ValueKey('room-back'),
             tooltip: 'Back to your rooms',
             onPressed: () => Navigator.of(context).maybePop(),
-            icon: const Icon(Icons.arrow_back_rounded, color: Paper.body),
+            icon: Icon(Icons.arrow_back_rounded, color: Paper.body),
           ),
           Container(
             width: 38,
             height: 38,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(color: Paper.accentSoft, shape: BoxShape.circle),
-            child: const Icon(Icons.groups_rounded, color: Paper.accent, size: 22),
+            decoration: BoxDecoration(color: Paper.accentSoft, shape: BoxShape.circle),
+            child: Icon(Icons.groups_rounded, color: Paper.accent, size: 22),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -368,7 +377,7 @@ class InviteDialog extends StatelessWidget {
                   Clipboard.setData(ClipboardData(text: code));
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Room code copied')));
                 },
-                icon: const Icon(Icons.copy_rounded, color: Paper.body),
+                icon: Icon(Icons.copy_rounded, color: Paper.body),
               ),
             ]),
             const SizedBox(height: 14),
@@ -401,7 +410,7 @@ class _ErrorLine extends StatelessWidget {
           IconButton(
             visualDensity: VisualDensity.compact,
             onPressed: onClose,
-            icon: const Icon(Icons.close_rounded, size: 16, color: Paper.body),
+            icon: Icon(Icons.close_rounded, size: 16, color: Paper.body),
           ),
         ]),
       );

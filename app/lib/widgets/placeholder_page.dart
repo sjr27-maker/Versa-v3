@@ -67,7 +67,7 @@ class PlaceholderPage extends StatelessWidget {
                               child: Container(
                                 width: 5,
                                 height: 5,
-                                decoration: const BoxDecoration(
+                                decoration: BoxDecoration(
                                     color: Paper.faint, shape: BoxShape.circle),
                               ),
                             ),

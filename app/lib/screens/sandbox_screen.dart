@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../chat_controller.dart';
 import '../models.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../widgets/chat_history_rail.dart';
 import '../widgets/collapsed_rail.dart';
@@ -260,6 +261,10 @@ class _ChatColumnState extends State<_ChatColumn> {
                         ? 'Ask anything, quick answers…'
                         : 'Waiting for the connection…',
                     onSend: chat.send,
+                    uploadPicture: (bytes, name) {
+                      final app = context.read<AppState>();
+                      return app.api.uploadPicture(app.learner!.id, bytes, name);
+                    },
                   ),
                 ),
               ),
@@ -291,7 +296,7 @@ class _Header extends StatelessWidget {
       final compact = c.maxWidth < 620; // a phone: icons only, status as a dot
       return Container(
         padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 20, vertical: 12),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: Paper.surface,
           border: Border(bottom: BorderSide(color: Paper.border)),
         ),
@@ -301,7 +306,7 @@ class _Header extends StatelessWidget {
               key: const ValueKey('back-to-modes'),
               tooltip: 'All modes',
               onPressed: shell.closeSandbox,
-              icon: const Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
+              icon: Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
             ),
             if (compact)
               IconButton(
@@ -315,7 +320,7 @@ class _Header extends StatelessWidget {
                   onSelect: shell.openSandboxChat,
                   onNewChat: shell.newSandboxChat,
                 ),
-                icon: const Icon(Icons.history_rounded, color: Paper.faint, size: 20),
+                icon: Icon(Icons.history_rounded, color: Paper.faint, size: 20),
               ),
             if (compact && showStageToggle)
               IconButton(
@@ -335,7 +340,7 @@ class _Header extends StatelessWidget {
                 height: 36,
                 decoration:
                     BoxDecoration(color: Paper.ink, borderRadius: BorderRadius.circular(8)),
-                child: const Icon(Icons.bubble_chart_rounded, color: Paper.page, size: 20),
+                child: Icon(Icons.bubble_chart_rounded, color: Paper.page, size: 20),
               ),
               const SizedBox(width: 12),
             ],
@@ -358,7 +363,7 @@ class _Header extends StatelessWidget {
                 key: const ValueKey('knobs-button'),
                 tooltip: 'Length, depth, breadth',
                 onPressed: () => _showKnobsSheet(context, chat),
-                icon: const Icon(Icons.tune_rounded, color: Paper.faint, size: 20),
+                icon: Icon(Icons.tune_rounded, color: Paper.faint, size: 20),
               ),
             ],
             SizedBox(width: compact ? 4 : 12),
@@ -367,7 +372,7 @@ class _Header extends StatelessWidget {
                 key: const ValueKey('new-chat'),
                 tooltip: 'New chat',
                 onPressed: shell.newSandboxChat,
-                icon: const Icon(Icons.add_rounded, color: Paper.ink),
+                icon: Icon(Icons.add_rounded, color: Paper.ink),
               )
             else
               OutlinedButton.icon(
@@ -377,7 +382,7 @@ class _Header extends StatelessWidget {
                 label: const Text('New chat'),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Paper.ink,
-                  side: const BorderSide(color: Paper.borderStrong),
+                  side: BorderSide(color: Paper.borderStrong),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
                   textStyle: sans(12.5, weight: FontWeight.w500),
                 ),
@@ -429,10 +434,10 @@ class _Disconnected extends StatelessWidget {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 10),
-      color: const Color(0xFFFBECE8),
+      color: Paper.dangerSoft,
       child: Row(
         children: [
-          const Icon(Icons.wifi_off_rounded, size: 18, color: Paper.danger),
+          Icon(Icons.wifi_off_rounded, size: 18, color: Paper.danger),
           const SizedBox(width: 10),
           Expanded(
             child: Text(chat.problem ?? 'Disconnected.',
@@ -492,7 +497,7 @@ class _EmptyState extends StatelessWidget {
                       key: ValueKey('suggestion-$s'),
                       label: Text(s, style: sans(13)),
                       backgroundColor: Paper.card,
-                      side: const BorderSide(color: Paper.borderStrong),
+                      side: BorderSide(color: Paper.borderStrong),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
                       onPressed: chat.canSend ? () => chat.send(s) : null,
                     ),
@@ -520,7 +525,7 @@ class _KnobsRail extends StatelessWidget {
     return Container(
       width: 208,
       padding: const EdgeInsets.all(20),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.sliver,
         border: Border(left: BorderSide(color: Paper.border)),
       ),
@@ -536,7 +541,7 @@ class _KnobsRail extends StatelessWidget {
                   tooltip: 'Minimize knobs',
                   visualDensity: VisualDensity.compact,
                   onPressed: onCollapse,
-                  icon: const Icon(Icons.chevron_right_rounded, size: 18, color: Paper.faint),
+                  icon: Icon(Icons.chevron_right_rounded, size: 18, color: Paper.faint),
                 ),
               ],
             ),

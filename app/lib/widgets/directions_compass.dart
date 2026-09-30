@@ -88,7 +88,7 @@ class DirectionsCompass extends StatelessWidget {
             shape: BoxShape.circle,
             border: Border.all(color: Paper.borderStrong),
           ),
-          child: const Icon(Icons.explore_outlined, size: 20, color: Paper.muted),
+          child: Icon(Icons.explore_outlined, size: 20, color: Paper.muted),
         );
         return Column(
           key: const ValueKey('directions-compass'),

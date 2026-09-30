@@ -259,6 +259,11 @@ class StageEngine extends ChangeNotifier {
 
   bool _disposed = false;
 
+  /// The picture the learner sent with the message this performance is
+  /// about (picture.dart): what a `photo` prop shows. Null: the prop is an
+  /// empty frame.
+  Uint8List? photo;
+
   @override
   void dispose() {
     stop();
@@ -1467,6 +1472,9 @@ class StageEngine extends ChangeNotifier {
 
   /// Roughly where a prop shows on the stage, in stage fractions (null for
   /// what can't be placed: a graph piece whose axes are gone, say).
+  /// A photo prop's width at size 1, as a fraction of the stage width.
+  static const photoWidth = 0.3;
+
   Rect? propBounds(StageProp p) {
     if (p.kind == PropKind.link) return null;
     final wpx = size.width <= 0 ? 1.0 : size.width, hpx = size.height <= 0 ? 1.0 : size.height;
@@ -1497,6 +1505,9 @@ class StageEngine extends ChangeNotifier {
         final fs = 15.0 * p.size;
         final w = math.min(160.0, (p.label ?? '').length * fs * 0.6);
         return Rect.fromCenter(center: at, width: w * k / wpx, height: fs * 1.4 * k / hpx);
+      case PropKind.photo:
+        final w = photoWidth * wpx * p.size;
+        return px(w, w * 0.75).shift(Offset(0, w * 0.75 * k / 2 / hpx));
       case PropKind.math:
         final fs = 18.0 * p.size;
         final w = math.min(260.0, (p.tex ?? '').length * fs * 0.45);

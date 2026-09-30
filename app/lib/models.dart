@@ -1,5 +1,7 @@
 // Data shapes shared by the API client, the chat controller and the screens.
 
+import 'dart:typed_data';
+
 class Learner {
   const Learner({required this.id, required this.label});
   final String id;
@@ -419,6 +421,11 @@ class ChatMessage {
 
   /// A short reply to chatter ("ok", "thanks"): no turn behind it.
   bool chatter = false;
+
+  /// The picture sent with this (learner's) message, as picked on this
+  /// device. A chat loaded from history has only the words and what the
+  /// picture showed (picture.dart splitPicture).
+  Uint8List? picture;
 
   /// Being rewritten at new slider levels (the text streams in place).
   bool rewriting = false;

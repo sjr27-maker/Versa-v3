@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../models.dart';
+import '../picture.dart';
 import '../theme.dart';
 import 'directions_compass.dart';
+import 'rich_text.dart';
 import 'typing_dots.dart';
 
 /// One message in the conversation: the person's bubble, or the tutor's reply
@@ -67,9 +69,35 @@ class MessageView extends StatelessWidget {
               bottomRight: Radius.circular(4),
             ),
           ),
-          child: SelectableText(message.text, style: sans(14.5, height: 1.5)),
+          child: _userContent(),
         ),
       ),
+    );
+  }
+
+  /// The words, and the picture they sent: the picture itself when it was
+  /// picked on this device, else (a chat from history) what it showed.
+  Widget _userContent() {
+    final (words, reading) = splitPicture(message.text);
+    final picture = message.picture;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (picture != null)
+          ClipRRect(
+            key: ValueKey('msg-picture-${message.id}'),
+            borderRadius: BorderRadius.circular(10),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 260, maxHeight: 220),
+              child: Image.memory(picture, fit: BoxFit.contain, gaplessPlayback: true),
+            ),
+          )
+        else if (reading != null)
+          PictureNote(reading: reading),
+        if (picture != null || reading != null) if (words.trim().isNotEmpty) const SizedBox(height: 8),
+        if (words.trim().isNotEmpty) RichMessageText(words.trim(), style: sans(14.5, height: 1.5)),
+      ],
     );
   }
 
@@ -88,7 +116,7 @@ class MessageView extends StatelessWidget {
             width: 30,
             height: 30,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
             child: Text('V', style: sans(13, color: Colors.white, weight: FontWeight.w700)),
           ),
         const SizedBox(width: 12),
@@ -137,20 +165,20 @@ class MessageView extends StatelessWidget {
                       ? Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFFBECE8),
-                            border: Border.all(color: const Color(0xFFEFC9C0)),
+                            color: Paper.dangerSoft,
+                            border: Border.all(color: Paper.danger.withValues(alpha: 0.3)),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: SelectableText(message.text,
                               style: sans(14, color: Paper.danger, height: 1.5)),
                         )
-                      : SelectableText(message.text, style: sans(14.5, height: 1.65)),
+                      : RichMessageText(message.text, style: sans(14.5, height: 1.65)),
                 if (message.rewriting) ...[
                   const SizedBox(height: 6),
                   Row(
                     key: const ValueKey('rewriting'),
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 10,
                         height: 10,
                         child: CircularProgressIndicator(strokeWidth: 1.5, color: Paper.faint),
@@ -232,7 +260,7 @@ class MessageView extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        icon: const Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
+        icon: Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
         label: Text(waiting ? 'dealing\u2026' : 'other directions', style: sans(12, color: Paper.muted)),
       ),
     );
@@ -335,7 +363,7 @@ class _ClaimUpdateNote extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.psychology_alt_outlined, size: 14, color: Paper.accentDark),
+          Icon(Icons.psychology_alt_outlined, size: 14, color: Paper.accentDark),
           const SizedBox(width: 6),
           Expanded(child: Text(update.noteText, style: sans(11.5, color: Paper.accentDark))),
           if (onView != null)
@@ -436,10 +464,10 @@ class _DirectionsStrip extends StatelessWidget {
               ActionChip(
                 key: ValueKey('direction-${c.id}'),
                 label: Text(c.text, style: sans(13, color: Paper.ink)),
-                avatar: const Icon(Icons.north_east_rounded, size: 14, color: Paper.accent),
+                avatar: Icon(Icons.north_east_rounded, size: 14, color: Paper.accent),
                 onPressed: enabled ? () => onPick(c) : null,
                 backgroundColor: Paper.card,
-                side: const BorderSide(color: Paper.border),
+                side: BorderSide(color: Paper.border),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
               ),
           ],
@@ -485,6 +513,52 @@ class _DirectionsFork extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ],
+    );
+  }
+}
+
+/// A picture known only by what it showed (a chat from history, or a room
+/// message): a small chip that opens to the reading.
+class PictureNote extends StatefulWidget {
+  const PictureNote({super.key, required this.reading});
+  final String reading;
+
+  @override
+  State<PictureNote> createState() => _PictureNoteState();
+}
+
+class _PictureNoteState extends State<PictureNote> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          key: const ValueKey('picture-note'),
+          borderRadius: BorderRadius.circular(100),
+          onTap: () => setState(() => _open = !_open),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Paper.card,
+              border: Border.all(color: Paper.border),
+              borderRadius: BorderRadius.circular(100),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.image_outlined, size: 15, color: Paper.muted),
+              const SizedBox(width: 6),
+              Text(_open ? 'Picture · hide' : 'Picture · what it showed', style: sans(12, color: Paper.muted)),
+            ]),
+          ),
+        ),
+        if (_open) ...[
+          const SizedBox(height: 6),
+          RichMessageText(widget.reading, style: sans(12.5, color: Paper.body, height: 1.5)),
         ],
       ],
     );

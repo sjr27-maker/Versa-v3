@@ -59,6 +59,29 @@ class _VersaAppState extends State<VersaApp> {
       offerPlans: widget.offerPlans ?? widget.api == null,
       identity: widget.identity ?? const NoIdentity(),
     )..load();
+    _app.addListener(_onApp);
+  }
+
+  late String _themeId = Paper.palette.id;
+
+  /// A new theme: every screen reads its colours from Paper when it builds,
+  /// so rebuild all of them -- including const widgets, which a normal
+  /// rebuild would skip.
+  void _onApp() {
+    if (_app.themeId == _themeId) return;
+    void rebuild(Element e) {
+      e.markNeedsBuild();
+      e.visitChildren(rebuild);
+    }
+
+    (context as Element).visitChildren(rebuild);
+    setState(() => _themeId = _app.themeId);
+  }
+
+  @override
+  void dispose() {
+    _app.removeListener(_onApp);
+    super.dispose();
   }
 
   @override
@@ -88,7 +111,7 @@ class _Root extends StatelessWidget {
     final app = context.watch<AppState>();
     context.watch<SparksState>(); // a paid plan skips the plans screen
     if (!app.loaded) {
-      return const Scaffold(
+      return Scaffold(
         backgroundColor: Paper.page,
         body: Center(child: CircularProgressIndicator(color: Paper.accent)),
       );

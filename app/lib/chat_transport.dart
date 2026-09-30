@@ -15,7 +15,7 @@ abstract class ChatTransport {
   /// this turn out on it (server.py's "stage" frames). [directions]: how this
   /// chat shows "where this could go" ('fork' or 'strip'), so the server
   /// offers a set after the answer (a set is only evidence if it was seen).
-  void sendMessage(String text, {bool stage = false, String? directions});
+  void sendMessage(String text, {bool stage = false, String? directions, String? imageId});
   void selectOption(String optionId, {bool stage = false, String? directions});
 
   /// Take one of the directions under the latest answer. [continueAnswer]:
@@ -56,8 +56,14 @@ class WebSocketChatTransport implements ChatTransport {
       .cast<ServerEvent>();
 
   @override
-  void sendMessage(String text, {bool stage = false, String? directions}) => _channel.sink.add(
-      jsonEncode({'type': 'message', 'text': text, if (stage) 'stage': true, 'directions': ?directions}));
+  void sendMessage(String text, {bool stage = false, String? directions, String? imageId}) =>
+      _channel.sink.add(jsonEncode({
+        'type': 'message',
+        'text': text,
+        if (stage) 'stage': true,
+        'directions': ?directions,
+        'image_id': ?imageId,
+      }));
 
   @override
   void selectOption(String optionId, {bool stage = false, String? directions}) =>

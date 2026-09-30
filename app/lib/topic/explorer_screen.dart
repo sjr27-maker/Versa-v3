@@ -244,7 +244,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
     final n = _selected.length;
     return Container(
       padding: const EdgeInsets.fromLTRB(24, 14, 24, 16),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.card,
         border: Border(top: BorderSide(color: Paper.border)),
         boxShadow: [BoxShadow(color: Color(0x14000000), blurRadius: 16, offset: Offset(0, -4))],
@@ -320,7 +320,7 @@ class _Mapping extends StatelessWidget {
       key: const ValueKey('explorer-loading'),
       padding: const EdgeInsets.symmetric(vertical: 40),
       child: Row(children: [
-        const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Paper.accent)),
+        SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Paper.accent)),
         const SizedBox(width: 14),
         Expanded(
           child: Text('Mapping "$label" into branches…', style: sans(14, color: Paper.muted)),

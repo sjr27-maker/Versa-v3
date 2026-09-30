@@ -474,6 +474,10 @@ never delete or update rows. Concretely:
   add any other generator input without a guard for that -- in particular,
   never what `pick_prediction.py` has learned (its guess and the learner's
   way in shape the answer, never the cards).
+- (2026-09-30) A message with a picture (images.py, invariant 21) reaches
+  the set as the words plus the picture's written reading -- still the
+  message: what the learner gave, not anything concluded about them. A pass
+  is kept (`direction_misses`) with the typed words alone.
 - The model call goes through `SessionLoop._call_node` (invariant 2).
 - Verified by `tests/test_directions_append_only.py`, the same AST-based
   check used for invariants 1, 4, 6-13.
@@ -640,3 +644,28 @@ after the pick, or a miss that could be pruned, would make that curve mean
 nothing. And "what contributed to what must be seen": the breakdown is kept
 with the guess, not recomputed later from data that has since grown.
 
+### 21. Pictures are append-only
+
+`ImageStore` (`images`, migration `090_images.sql`, code in
+`src/versa/images.py`) must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `ImageStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `images.py` or its migration.
+- One row per upload, written once AFTER the reading call: the bytes, their
+  sniffed type and hash, the prompt the reader got, and its reading or error.
+  A picture that couldn't be read is still a row (reading NULL).
+- A picture is read ONCE, on upload, and only the reading goes further: a
+  Sandbox/lesson turn gets it with its message (the server looks it up by
+  `image_id`, only for the session learner's own picture); a room message
+  and an exam answer carry it as text the app wrote in (rooms and exams stay
+  walled off, invariants 12/13). Nothing downstream is given the pixels, so
+  what any turn was told about a picture is always readable afterwards.
+- The reading call is recorded on the row itself (prompt + output/error) --
+  invariant 2's payload in images' own table, since there may be no session.
+- Verified by `tests/test_images.py`, the same AST-based check used for
+  invariants 1, 4, 6-20.
+
+Why: a picture is evidence of what the learner was working on, and the
+reading is what Versa actually understood from it. If either could be
+edited or pruned, a later answer could no longer be traced to what it was
+shown.

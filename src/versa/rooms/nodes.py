@@ -26,6 +26,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from versa.formatting import MATH_STYLE_JSON
 from versa.llm import LLMClient
 from versa.rooms.store import TASK_KINDS
 
@@ -212,7 +213,8 @@ def room_prompt(
         "'- ' bullets are fine). Use \"question\" when you ask the group or someone "
         "something. Use options when a quick click helps (choose what to explore "
         "next, a multiple-choice check question): 2-4 short options. Address people "
-        "by their exact names. At most 3 actions; an empty list means you stay quiet.\n\n"
+        "by their exact names. At most 3 actions; an empty list means you stay quiet.\n"
+        f"{MATH_STYLE_JSON}\n\n"
         "Respond with JSON:\n"
         '{"reason": "one sentence: why you act or stay quiet", "actions": ['
         '{"type": "say", "to": "all" or a name, "private": false, "kind": "chat|content|question", "text": "..."}, '

@@ -56,6 +56,7 @@ from pydantic import BaseModel, Field
 from versa import profiles as _profiles
 from versa import resources as _resources
 from versa.audit import to_jsonable
+from versa.formatting import MATH_STYLE_JSON
 from versa.learner import LearnerStore
 from versa.llm import LLMClient
 from versa.sparks import passed
@@ -839,6 +840,7 @@ class WriteQuestions:
             "answer (`kind`: \"short\", answerable in one or two sentences, with the "
             "model `answer`). Every question has a one-or-two sentence `explanation` "
             "of why the answer is right.\n"
+            f"{MATH_STYLE_JSON}\n"
             'Respond with JSON: {"questions": [{"kind": "choice", "prompt": "...", '
             '"choices": ["...", "...", "...", "..."], "correct_index": 0, '
             '"explanation": "..."}, {"kind": "short", "prompt": "...", "answer": "...", '

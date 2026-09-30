@@ -38,7 +38,7 @@ class _TypingDotsState extends State<TypingDots> with SingleTickerProviderStateM
                     key: const ValueKey('typing-dot'),
                     width: 6,
                     height: 6,
-                    decoration: const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
+                    decoration: BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
                   ),
                 ),
               ),

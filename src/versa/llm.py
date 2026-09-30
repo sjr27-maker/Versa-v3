@@ -346,6 +346,11 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
         "facts": ["The next lesson has a trick that saves half the work.",
                   "People used this idea long before it had a name."],
     }),
+    # images.py ReadImage: what an uploaded picture shows.
+    "IMAGE:READ": (
+        "A photo of a handwritten maths problem. It reads: Solve $x^2 - 5x + 6 = 0$. "
+        "Below it, the student's working: $(x-2)(x-3)=0$, then $x = 2$ and $x = 3$."
+    ),
     # directions.py ReadMiss: a missed question the library can't place.
     "DIRECTIONS:READ_MISS": json.dumps(
         {"same_subject": True, "type": "none", "move": "where the rule stops working"}
@@ -444,6 +449,13 @@ class StubLLMClient:
             if prompt.startswith(prefix):
                 return response(prompt) if callable(response) else response
         return "[stub llm response]"
+
+    async def complete_with_image(self, prompt: str, data: bytes, mime_type: str) -> str:
+        """`complete`, with a picture beside the prompt (images.py). The stub
+        can't see it: it answers from the prompt like any other call, and
+        records what it was shown in `self.images`."""
+        self.images = [*getattr(self, "images", []), (len(data), mime_type)]
+        return await self.complete(prompt)
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
         """Same text `complete` would return, yielded a word at a time -- so
@@ -1233,6 +1245,27 @@ class GeminiLLMClient:
         # raises once attempts are exhausted.
         raise AssertionError("unreachable")
 
+    async def complete_with_image(self, prompt: str, data: bytes, mime_type: str) -> str:
+        """`complete` with an image part before the prompt (images.py reads
+        uploads with it). Same retry policy; free text out."""
+        config = (
+            types.GenerateContentConfig(thinking_config=self._thinking_config)
+            if self._thinking_config is not None else None
+        )
+        contents = [types.Part.from_bytes(data=data, mime_type=mime_type), prompt]
+        prompt_prefix = prompt[:_RETRY_LOG_PROMPT_CHARS]
+        delay = self._initial_delay
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=self._model, contents=contents, config=config,
+                )
+                text = getattr(response, "text", None)
+                return text if text is not None else ""
+            except (errors.ServerError, errors.ClientError, *_TRANSIENT_HTTPX_EXC) as exc:
+                delay = await self._backoff_or_raise(exc, attempt, prompt_prefix, delay)
+        raise AssertionError("unreachable")
+
     async def _backoff_or_raise(
         self, exc: Exception, attempt: int, prompt_prefix: str, delay: float
     ) -> float:
@@ -1337,6 +1370,11 @@ class _PooledGeminiLLMClient:
         delegate = self._delegates[self._next % len(self._delegates)]
         self._next += 1
         return await delegate.complete(prompt)
+
+    async def complete_with_image(self, prompt: str, data: bytes, mime_type: str) -> str:
+        delegate = self._delegates[self._next % len(self._delegates)]
+        self._next += 1
+        return await delegate.complete_with_image(prompt, data, mime_type)
 
     async def stream(self, prompt: str) -> AsyncIterator[str]:
         delegate = self._delegates[self._next % len(self._delegates)]

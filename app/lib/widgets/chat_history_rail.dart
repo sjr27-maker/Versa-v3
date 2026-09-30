@@ -36,7 +36,7 @@ class ChatHistoryRail extends StatelessWidget {
     return Container(
       key: const ValueKey('chat-history-rail'),
       width: 232,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.sliver,
         border: Border(right: BorderSide(color: Paper.border)),
       ),
@@ -54,14 +54,14 @@ class ChatHistoryRail extends StatelessWidget {
                   tooltip: 'New chat',
                   visualDensity: VisualDensity.compact,
                   onPressed: onNewChat,
-                  icon: const Icon(Icons.add_rounded, size: 18, color: Paper.faint),
+                  icon: Icon(Icons.add_rounded, size: 18, color: Paper.faint),
                 ),
                 IconButton(
                   key: const ValueKey('history-collapse'),
                   tooltip: 'Minimize chats',
                   visualDensity: VisualDensity.compact,
                   onPressed: onCollapse,
-                  icon: const Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
+                  icon: Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
                 ),
               ],
             ),
@@ -210,7 +210,7 @@ class _ChatRowState extends State<_ChatRow> {
           decoration: BoxDecoration(
             color: widget.active
                 ? Paper.accentSoft
-                : (_hover ? const Color(0x0F000000) : Colors.transparent),
+                : (_hover ? Paper.ink.withValues(alpha: 0.06) : Colors.transparent),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Column(

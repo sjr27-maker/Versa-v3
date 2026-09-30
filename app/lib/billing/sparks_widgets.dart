@@ -157,7 +157,7 @@ class SparksChip extends StatelessWidget {
           child: IntrinsicWidth(
             child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.bolt_rounded, size: 16, color: Paper.accent),
+                Icon(Icons.bolt_rounded, size: 16, color: Paper.accent),
                 const SizedBox(width: 4),
                 Text('${status.balance}', style: sans(13, color: Paper.accentDark, weight: FontWeight.w600)),
                 if (status.isPaid) ...[
@@ -337,7 +337,7 @@ class _SparksSheetState extends State<_SparksSheet> {
                       Text(subtitle, style: sans(12.5, color: Paper.body)),
                     ]),
                   ),
-                  if (onTap != null) const Icon(Icons.chevron_right_rounded, color: Paper.faint),
+                  if (onTap != null) Icon(Icons.chevron_right_rounded, color: Paper.faint),
                 ]),
               ),
             ),
@@ -359,7 +359,7 @@ class _SparksSheetState extends State<_SparksSheet> {
           ),
           const SizedBox(height: 16),
           Row(children: [
-            const Icon(Icons.bolt_rounded, color: Paper.accent, size: 26),
+            Icon(Icons.bolt_rounded, color: Paper.accent, size: 26),
             const SizedBox(width: 6),
             Text(status == null ? 'Sparks' : '${status.balance} Sparks',
                 key: const ValueKey('sparks-sheet-balance'), style: serif(24)),
@@ -424,7 +424,7 @@ class _SparksSheetState extends State<_SparksSheet> {
               padding: const EdgeInsets.only(top: 4),
               child: Text(billing.unsupportedReason, style: sans(12.5, color: Paper.muted)),
             ),
-          if (_busy) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator(color: Paper.accent)),
+          if (_busy) Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator(color: Paper.accent)),
           if (_message != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),

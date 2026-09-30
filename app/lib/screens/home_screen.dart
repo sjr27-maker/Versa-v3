@@ -154,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 key: const ValueKey('feed-refresh'),
                 tooltip: 'New suggestions',
                 onPressed: () => _load(refresh: true),
-                icon: const Icon(Icons.refresh_rounded, color: Paper.muted),
+                icon: Icon(Icons.refresh_rounded, color: Paper.muted),
               ),
       ],
     );
@@ -169,7 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
           ChoiceChip(
             key: ValueKey('feed-chip-${f.label}'),
             label: Text(f.label,
-                style: sans(12.5, color: _filter == f ? Colors.white : Paper.body)),
+                style: sans(12.5, color: _filter == f ? Paper.page : Paper.body)),
             selected: _filter == f,
             showCheckmark: false,
             selectedColor: Paper.ink,
@@ -294,7 +294,7 @@ class _StartSandboxCard extends StatelessWidget {
               height: 44,
               decoration:
                   BoxDecoration(color: Paper.accentSoft, borderRadius: BorderRadius.circular(12)),
-              child: const Icon(Icons.bubble_chart_rounded, color: Paper.accent),
+              child: Icon(Icons.bubble_chart_rounded, color: Paper.accent),
             ),
             const SizedBox(width: 16),
             Expanded(
@@ -308,7 +308,7 @@ class _StartSandboxCard extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_rounded, color: Paper.accent),
+            Icon(Icons.arrow_forward_rounded, color: Paper.accent),
           ],
         ),
       ),

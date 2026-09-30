@@ -170,7 +170,7 @@ class _ExamScreenState extends State<ExamScreen> {
         future: _exam,
         builder: (context, snap) {
           if (snap.connectionState != ConnectionState.done) {
-            return const Center(child: CircularProgressIndicator(color: Paper.accent));
+            return Center(child: CircularProgressIndicator(color: Paper.accent));
           }
           if (snap.hasError) {
             return Padding(
@@ -255,7 +255,7 @@ class _MockCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.timer_outlined, color: Paper.accent),
+            Icon(Icons.timer_outlined, color: Paper.accent),
             const SizedBox(width: 10),
             Expanded(child: Text('Mock test', style: serif(19))),
             FilledButton(
@@ -288,7 +288,7 @@ class _MockCard extends StatelessWidget {
                           ? Text('Not handed in -- continue', style: sans(13, color: Paper.warn))
                           : _ScoreLine(score: m.score, overTime: m.overTime),
                     ),
-                    const Icon(Icons.chevron_right_rounded, color: Paper.faint, size: 18),
+                    Icon(Icons.chevron_right_rounded, color: Paper.faint, size: 18),
                   ]),
                 ),
               ),
@@ -377,7 +377,7 @@ class _UnitCard extends StatelessWidget {
               onPressed: onQuiz,
               style: OutlinedButton.styleFrom(
                 foregroundColor: Paper.accent,
-                side: const BorderSide(color: Paper.accent),
+                side: BorderSide(color: Paper.accent),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
               ),
               child: Text(unit.quizzesTaken == 0 ? 'Take quiz' : 'Quiz again'),

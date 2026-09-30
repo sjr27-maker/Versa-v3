@@ -62,7 +62,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     height: 52,
                     alignment: Alignment.center,
                     decoration:
-                        const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
+                        BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
                     child: Text(
                       (learner?.label.isNotEmpty ?? false) ? learner!.label[0].toUpperCase() : '?',
                       style: sans(22, color: Colors.white, weight: FontWeight.w600),
@@ -92,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: Paper.ink,
-                      side: const BorderSide(color: Paper.borderStrong),
+                      side: BorderSide(color: Paper.borderStrong),
                       shape:
                           RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
                     ),
@@ -140,6 +140,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ]);
                   },
+                ),
+              ]),
+              card([
+                Text('Theme', style: serif(19)),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    for (final p in PaperPalette.all)
+                      _ThemeTile(
+                        palette: p,
+                        selected: app.themeId == p.id,
+                        onTap: () => app.setThemeId(p.id),
+                      ),
+                  ],
                 ),
               ]),
               card([
@@ -280,4 +296,83 @@ class _ProfileCardState extends State<_ProfileCard> {
           ]);
         },
       );
+}
+
+/// One theme to pick: a small preview drawn in that theme's own colours
+/// (not the current ones), and its name.
+class _ThemeTile extends StatelessWidget {
+  const _ThemeTile({required this.palette, required this.selected, required this.onTap});
+  final PaperPalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    Widget line(double width, Color color) => Container(
+          width: width,
+          height: 5,
+          margin: const EdgeInsets.only(bottom: 5),
+          decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(3)),
+        );
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '${p.name} theme',
+      child: GestureDetector(
+        key: ValueKey('theme-${p.id}'),
+        onTap: onTap,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              width: 120,
+              height: 80,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: p.page,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: selected ? Paper.accent : Paper.border, width: selected ? 2 : 1),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: p.card,
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(color: p.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    line(52, p.ink),
+                    line(70, p.faint),
+                    const Spacer(),
+                    Row(children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(color: p.accent, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 5),
+                      Expanded(child: line(double.infinity, p.accentLine)),
+                    ]),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(mainAxisSize: MainAxisSize.min, children: [
+              if (selected) ...[
+                Icon(Icons.check_rounded, size: 14, color: Paper.accent),
+                const SizedBox(width: 3),
+              ],
+              Text(p.name, style: sans(12.5, weight: selected ? FontWeight.w600 : FontWeight.w400)),
+              Text(p.brightness == Brightness.dark ? '  dark' : '  light', style: mono(10)),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
 }

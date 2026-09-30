@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../chat_controller.dart';
 import '../models.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../widgets/collapsed_rail.dart';
 import '../widgets/composer.dart';
@@ -118,7 +119,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
             if (_error != null)
               RetryLine(message: 'Could not open this lesson: $_error', onRetry: _open)
             else
-              const Center(child: CircularProgressIndicator(color: Paper.accent)),
+              Center(child: CircularProgressIndicator(color: Paper.accent)),
           ],
         ),
       );
@@ -166,7 +167,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
           if (wide)
             Container(
               width: 290,
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: Paper.sliver,
                 border: Border(left: BorderSide(color: Paper.border)),
               ),
@@ -264,7 +265,7 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
             Container(
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-              color: const Color(0xFFFBECE8),
+              color: Paper.dangerSoft,
               child: Row(children: [
                 Expanded(child: Text(chat.problem ?? 'Disconnected.', style: sans(13, color: Paper.danger))),
                 TextButton(onPressed: chat.reconnect, child: const Text('Reconnect')),
@@ -308,6 +309,10 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
                   enabled: chat.canSend,
                   hint: chat.canSend || chat.busy ? 'Answer, ask, or say what you want to do…' : 'Waiting for the connection…',
                   onSend: chat.send,
+                  uploadPicture: (bytes, name) {
+                    final app = context.read<AppState>();
+                    return app.api.uploadPicture(app.learner!.id, bytes, name);
+                  },
                 ),
               ),
             ),
@@ -337,7 +342,7 @@ class _LessonHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.surface,
         border: Border(bottom: BorderSide(color: Paper.border)),
       ),
@@ -346,7 +351,7 @@ class _LessonHeader extends StatelessWidget {
           key: const ValueKey('lesson-back'),
           tooltip: 'Back',
           onPressed: () => Navigator.of(context).maybePop(),
-          icon: const Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
+          icon: Icon(Icons.arrow_back_rounded, color: Paper.faint, size: 20),
         ),
         if (showStageToggle)
           IconButton(
@@ -538,7 +543,7 @@ class _TaskRow extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: Color.lerp(current ? Paper.accentSoft : Paper.card, const Color(0xFFE3F0DC), glow),
+          color: Color.lerp(current ? Paper.accentSoft : Paper.card, Paper.oliveSoft, glow),
           border: Border.all(color: current ? Paper.accent : Paper.border),
           borderRadius: BorderRadius.circular(10),
         ),
@@ -593,7 +598,7 @@ class _CompactTasks extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.sliver,
         border: Border(bottom: BorderSide(color: Paper.border)),
       ),

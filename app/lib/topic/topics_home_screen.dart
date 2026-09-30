@@ -129,7 +129,7 @@ class _TopicsHomeScreenState extends State<TopicsHomeScreen> {
                   future: _topics,
                   builder: (context, snap) {
                     if (snap.connectionState != ConnectionState.done) {
-                      return const Padding(
+                      return Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(child: CircularProgressIndicator(color: Paper.accent)),
                       );
@@ -199,7 +199,7 @@ class _TopicsHomeScreenState extends State<TopicsHomeScreen> {
                   fillColor: Paper.sliver,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Paper.border),
+                    borderSide: BorderSide(color: Paper.border),
                   ),
                 ),
               ),
@@ -261,7 +261,7 @@ class _SourceButton extends StatelessWidget {
         label: Text(label),
         style: OutlinedButton.styleFrom(
           foregroundColor: Paper.ink,
-          side: const BorderSide(color: Paper.borderStrong),
+          side: BorderSide(color: Paper.borderStrong),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
         ),
@@ -293,7 +293,7 @@ class _TopicCard extends StatelessWidget {
             children: [
               Row(children: [
                 Expanded(child: Text(topic.title, style: serif(18))),
-                const Icon(Icons.arrow_forward_rounded, size: 18, color: Paper.faint),
+                Icon(Icons.arrow_forward_rounded, size: 18, color: Paper.faint),
               ]),
               const SizedBox(height: 10),
               PercentRow(percent: topic.percent, labelKey: ValueKey('topic-percent-${topic.id}')),

@@ -43,6 +43,8 @@ enum PropKind {
   math,
   // a flowing connection between two props (`on` -> `to`)
   link,
+  // the learner's own attached picture, held up on the stage (picture.dart)
+  photo,
   // instruments: they SHOW a quantity changing (the engine animates them)
   clock, stopwatch, counter, gauge, bar, thermometer,
   // 3D solids (solids.dart), placed in the stage's world with depth

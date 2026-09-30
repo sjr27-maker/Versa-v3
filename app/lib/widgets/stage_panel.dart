@@ -127,6 +127,9 @@ class _StagePanelState extends State<StagePanel> {
         _turn = turnIndex;
         _live = true; // the compass waits until the performance is over
         _recording = [];
+        // the picture they sent with this message, if any: a `photo` prop
+        // holds it up
+        _engine.photo = widget.chat?.stagePicture;
         _engine.beginLive();
         // the answer just started: perk up at once, before the director's
         // first beats arrive
@@ -383,8 +386,8 @@ class _StagePanelState extends State<StagePanel> {
       decoration: BoxDecoration(
         color: Paper.sliver,
         border: Border(
-          right: compact ? BorderSide.none : const BorderSide(color: Paper.border),
-          bottom: compact ? const BorderSide(color: Paper.border) : BorderSide.none,
+          right: compact ? BorderSide.none : BorderSide(color: Paper.border),
+          bottom: compact ? BorderSide(color: Paper.border) : BorderSide.none,
         ),
       ),
       child: Column(
@@ -419,7 +422,7 @@ class _KeepInMind extends StatelessWidget {
     return Container(
       key: const ValueKey('keep-in-mind'),
       constraints: BoxConstraints(maxHeight: compact ? 120 : 220),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         color: Paper.card,
         border: Border(top: BorderSide(color: Paper.border)),
       ),
@@ -464,7 +467,7 @@ class _NoteBox extends StatelessWidget {
           boxShadow: const [BoxShadow(color: Color(0x14000000), blurRadius: 6, offset: Offset(0, 2))],
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Padding(
+          Padding(
             padding: EdgeInsets.only(top: 2),
             child: Icon(Icons.push_pin_rounded, size: 14, color: Paper.accent),
           ),

@@ -82,7 +82,7 @@ class _TopicScreenState extends State<TopicScreen> {
                 ),
                 const SizedBox(height: 16),
                 if (t == null && _error == null)
-                  const Center(child: CircularProgressIndicator(color: Paper.accent))
+                  Center(child: CircularProgressIndicator(color: Paper.accent))
                 else if (t == null)
                   RetryLine(message: 'Could not load this topic: $_error', onRetry: _reload)
                 else ...[
@@ -147,7 +147,7 @@ class _OverallCard extends StatelessWidget {
                 const Spacer(),
                 Text('See your path', style: sans(12.5, color: Paper.accent, weight: FontWeight.w600)),
                 const SizedBox(width: 4),
-                const Icon(Icons.route_rounded, size: 16, color: Paper.accent),
+                Icon(Icons.route_rounded, size: 16, color: Paper.accent),
               ]),
               const SizedBox(height: 10),
               PercentRow(percent: topic.percent, height: 12, labelKey: const ValueKey('topic-percent')),
@@ -236,7 +236,7 @@ class _ChapterCard extends StatelessWidget {
                   AnimatedRotation(
                     turns: folded ? -0.25 : 0,
                     duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more_rounded, color: Paper.faint),
+                    child: Icon(Icons.expand_more_rounded, color: Paper.faint),
                   ),
                 ],
               ),

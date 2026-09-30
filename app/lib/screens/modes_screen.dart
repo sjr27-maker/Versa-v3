@@ -147,8 +147,8 @@ class _ModeCardState extends State<_ModeCard> {
                       ? Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFEAF3E6),
-                            border: Border.all(color: const Color(0xFFCFE2C7)),
+                            color: Paper.oliveSoft,
+                            border: Border.all(color: Paper.oliveLine),
                             borderRadius: BorderRadius.circular(100),
                           ),
                           child: Text('LIVE',

@@ -497,7 +497,7 @@ class _Legend extends StatelessWidget {
           Container(
             width: 9,
             height: 9,
-            decoration: const BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Paper.accent, shape: BoxShape.circle),
           ),
           'a pick that bears it out',
         ),
@@ -505,7 +505,7 @@ class _Legend extends StatelessWidget {
           Container(
             width: 5,
             height: 5,
-            decoration: const BoxDecoration(color: Paper.faint, shape: BoxShape.circle),
+            decoration: BoxDecoration(color: Paper.faint, shape: BoxShape.circle),
           ),
           'your other picks',
         ),

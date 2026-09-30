@@ -54,19 +54,19 @@ InputDecoration paperInput(String hint, {String? label, Widget? suffix, String? 
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Paper.borderStrong),
+        borderSide: BorderSide(color: Paper.borderStrong),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Paper.ink, width: 1.5),
+        borderSide: BorderSide(color: Paper.ink, width: 1.5),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Paper.danger),
+        borderSide: BorderSide(color: Paper.danger),
       ),
       focusedErrorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: const BorderSide(color: Paper.danger, width: 1.5),
+        borderSide: BorderSide(color: Paper.danger, width: 1.5),
       ),
     );
 
@@ -112,7 +112,7 @@ class SecondaryButton extends StatelessWidget {
           style: OutlinedButton.styleFrom(
             foregroundColor: Paper.ink,
             backgroundColor: Paper.card,
-            side: const BorderSide(color: Paper.borderStrong),
+            side: BorderSide(color: Paper.borderStrong),
             padding: const EdgeInsets.symmetric(vertical: 15),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
             textStyle: sans(15, weight: FontWeight.w600),
@@ -146,12 +146,12 @@ class OrDivider extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 18),
         child: Row(children: [
-          const Expanded(child: Divider(color: Paper.border)),
+          Expanded(child: Divider(color: Paper.border)),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text('or', style: sans(12, color: Paper.faint)),
           ),
-          const Expanded(child: Divider(color: Paper.border)),
+          Expanded(child: Divider(color: Paper.border)),
         ]),
       );
 }
@@ -168,7 +168,7 @@ class FormMessage extends StatelessWidget {
         margin: const EdgeInsets.only(top: 14),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: error ? const Color(0xFFFBEAE6) : Paper.accentSoft,
+          color: error ? Paper.dangerSoft : Paper.accentSoft,
           borderRadius: BorderRadius.circular(10),
         ),
         child: Text(text, style: sans(13.5, color: error ? Paper.danger : Paper.ink, height: 1.4)),

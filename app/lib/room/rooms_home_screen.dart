@@ -143,7 +143,7 @@ class _RoomsHomeScreenState extends State<RoomsHomeScreen> {
                         onPressed: _join,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Paper.accentDark,
-                          side: const BorderSide(color: Paper.accent),
+                          side: BorderSide(color: Paper.accent),
                         ),
                         icon: const Icon(Icons.login_rounded, size: 18),
                         label: const Text('Join a room'),
@@ -167,7 +167,7 @@ class _RoomsHomeScreenState extends State<RoomsHomeScreen> {
     if (_error != null && _rooms == null) return RetryLine(message: _error!, onRetry: _load);
     final rooms = _rooms;
     if (rooms == null) {
-      return const Padding(
+      return Padding(
         padding: EdgeInsets.all(24),
         child: Center(child: CircularProgressIndicator(color: Paper.accent)),
       );
@@ -239,8 +239,8 @@ class _RoomRow extends StatelessWidget {
             width: 46,
             height: 46,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(color: Paper.accentSoft, shape: BoxShape.circle),
-            child: const Icon(Icons.groups_rounded, color: Paper.accent),
+            decoration: BoxDecoration(color: Paper.accentSoft, shape: BoxShape.circle),
+            child: Icon(Icons.groups_rounded, color: Paper.accent),
           ),
           const SizedBox(width: 12),
           Expanded(

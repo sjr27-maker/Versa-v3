@@ -76,7 +76,7 @@ class Shell extends StatelessWidget {
                     ),
               Expanded(
                 child: Container(
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     color: Paper.surface,
                     border: Border(left: BorderSide(color: Paper.border)),
                   ),
@@ -135,7 +135,7 @@ class _Rail extends StatelessWidget {
                     tooltip: 'Minimize menu',
                     visualDensity: VisualDensity.compact,
                     onPressed: onCollapse,
-                    icon: const Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
+                    icon: Icon(Icons.chevron_left_rounded, size: 18, color: Paper.faint),
                   ),
                 ],
               ),
@@ -198,7 +198,7 @@ class _RailItemState extends State<_RailItem> {
           decoration: BoxDecoration(
             color: widget.selected
                 ? Paper.accentSoft
-                : (_hover ? const Color(0x0F000000) : Colors.transparent),
+                : (_hover ? Paper.ink.withValues(alpha: 0.06) : Colors.transparent),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(

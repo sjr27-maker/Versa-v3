@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'api.dart';
 import 'chat_transport.dart';
 import 'models.dart';
+import 'picture.dart';
 
 enum ChatStatus {
   /// Creating the chat / opening the socket.
@@ -259,15 +260,20 @@ class ChatController extends ChangeNotifier {
 
   // ---------------------------------------------------------------- actions
 
-  void send(String text) {
+  /// The picture sent with the latest message, if it had one: the slime
+  /// holds it up on the stage (a `photo` prop, stage_view.dart).
+  Uint8List? stagePicture;
+
+  void send(String text, [AttachedPicture? picture]) {
     final trimmed = text.trim();
-    if (!canSend || trimmed.isEmpty) return;
+    if (!canSend || (trimmed.isEmpty && picture == null)) return;
     _parkOpenChoices();
     _invalidateStaleOptions();
     _closeDirections(); // asking their own question passes the strip
-    messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed));
+    messages.add(ChatMessage(id: _nextId++, role: Role.user, text: trimmed)..picture = picture?.bytes);
+    stagePicture = picture?.bytes;
     _beginTurn();
-    _transport!.sendMessage(trimmed, stage: stageEnabled, directions: directionsStyle);
+    _transport!.sendMessage(trimmed, stage: stageEnabled, directions: directionsStyle, imageId: picture?.id);
     _notify();
   }
 

@@ -9,6 +9,7 @@ import 'billing/billing.dart';
 import 'billing/sparks.dart';
 import 'chat_controller.dart';
 import 'models.dart';
+import 'theme.dart';
 
 /// Who is using the app, and the few settings that outlive a restart.
 class AppState extends ChangeNotifier {
@@ -40,6 +41,7 @@ class AppState extends ChangeNotifier {
   static const _kTiming = 'show_timing';
   static const _kStagePanel = 'show_stage_panel';
   static const _kDirections = 'directions_style';
+  static const _kTheme = 'theme';
   static String _kPlansSeen(String learnerId) => 'plans_seen_$learnerId';
 
   /// Show the plans (billing/plans_screen.dart) once to each learner before
@@ -82,6 +84,9 @@ class AppState extends ChangeNotifier {
   /// choice; every set records which one was actually shown.
   String directionsStyle = 'fork';
 
+  /// The colour theme (theme.dart's PaperPalette ids): this device's choice.
+  String get themeId => Paper.palette.id;
+
   /// Which sign-in the server offers (null until it has answered).
   AuthConfig? authConfig;
 
@@ -112,6 +117,7 @@ class AppState extends ChangeNotifier {
       'compass' => 'compass',
       _ => 'fork',
     };
+    Paper.palette = PaperPalette.byId(_prefs!.getString(_kTheme));
     _expiry ??= api.session.expired.listen((_) {
       if (learner != null) signOut();
     });
@@ -256,6 +262,14 @@ class AppState extends ChangeNotifier {
   void setShowStagePanel(bool value) {
     showStagePanel = value;
     _prefs?.setBool(_kStagePanel, value);
+    notifyListeners();
+  }
+
+  void setThemeId(String id) {
+    final next = PaperPalette.byId(id);
+    if (next == Paper.palette) return;
+    Paper.palette = next;
+    _prefs?.setString(_kTheme, next.id);
     notifyListeners();
   }
 

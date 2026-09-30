@@ -113,6 +113,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from versa.domain_config import DomainConfig
+from versa.formatting import MATH_STYLE
 from versa.llm import LLMClient
 from versa.models import (
     AmbiguityKind,
@@ -929,8 +930,9 @@ class FinalAnswer:
             "they clicked names the topic. Don't bring this up when they "
             "aren't asking about the past.\n"
             f"{d.final_answer_closing_line}"
-            "Respond with plain prose only -- never wrap your answer in "
-            "JSON or any other structured/markup format."
+            f"{MATH_STYLE}\n"
+            "Respond with prose -- never wrap your answer in JSON or any "
+            "other structured format."
         )
         # Streaming (streaming.py): if the caller installed a delta sink
         # for this turn, hand it the text as the model produces it. The

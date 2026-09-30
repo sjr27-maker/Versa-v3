@@ -152,6 +152,7 @@ from pydantic import BaseModel, Field
 
 from versa import chatter as _chatter
 from versa import directions as _directions
+from versa import images as _images
 from versa import pick_prediction as _pick_prediction
 from versa import style_patterns as _style_patterns
 from versa.accounts import (
@@ -513,6 +514,10 @@ def create_app(
     explain_item = ExplainItem(tiers.fast)
     answer_item_question = AnswerItemQuestion(tiers.fast)
     stage_director = StageDirector(tiers.stage or tiers.fast)
+    # Pictures attached to messages (images.py): read once on upload; a turn
+    # gets the reading with its message.
+    images_router = _images.build_images_router(pool, tiers.fast)
+    image_store = images_router.image_store
     stage_checks = StageCheckStore(pool)
     knob_events = KnobEventStore(pool)
     # Performances run alongside (and may outlive) their turn; hold a
@@ -1322,9 +1327,9 @@ def create_app(
         never the answer."""
 
         def __init__(self, session_id: UUID, turn_index: int, message: str, perf,
-                     continues: str | None) -> None:
+                     continues: str | None, photo: bool = False) -> None:
             self.session_id, self.turn_index, self.message = session_id, turn_index, message
-            self.perf, self.continues = perf, continues
+            self.perf, self.continues, self.photo = perf, continues, photo
             self.task = asyncio.create_task(self._work())
             stage_tasks.add(self.task)
             self.task.add_done_callback(stage_tasks.discard)
@@ -1340,6 +1345,9 @@ def create_app(
                         kwargs["previous_answer"] = previous.output_json
                 if self.continues:
                     kwargs["continues"] = self.continues
+                if self.photo:
+                    # the learner's own picture: the slime can hold it up
+                    kwargs["photo"] = True
                 await loop._call_node(stage_director, self.session_id, self.turn_index, **kwargs)
             except Exception:
                 logger.warning("stage direction failed on turn %d for session %s",
@@ -1560,16 +1568,20 @@ def create_app(
         kind = data.get("type")
         selected_option_id: UUID | None = None
         continues: str | None = None
+        picture = None
+        picture_id = None
         if kind == "message":
             text = str(data.get("text", "")).strip()
-            if not text:
+            picture_id = data.get("image_id")
+            if not text and not picture_id:
                 await send({"type": "error", "message": "empty message"})
                 return
             # "ok", "thanks!", "haha", "hi": a reaction, not a question
             # (chatter.py). A short reply, no model call, nothing stored, no
-            # Spark -- and the open cards and options stay open.
+            # Spark -- and the open cards and options stay open. Never with a
+            # picture: "hi" + a photo of a problem is a question.
             said = last_answer.get(session_id, "").rstrip(" \n*_)\"'")
-            chat_kind = _chatter.classify(text, after_question=said.endswith("?"))
+            chat_kind = None if picture_id else _chatter.classify(text, after_question=said.endswith("?"))
             if chat_kind is not None:
                 latest = await direction_store.latest_set(session_id)
                 directions_open = latest is not None and not await direction_store.is_settled(latest.id)
@@ -1612,6 +1624,15 @@ def create_app(
         # Asking needs a Spark in hand; whether one is spent depends on how
         # the turn ends (options are free, an answer costs one).
         learner_id = await transcript.get_learner_id(session_id)
+        if kind == "message" and picture_id:
+            # only the learner's own picture, and only one that was read
+            try:
+                picture = await image_store.get(UUID(str(picture_id)))
+            except ValueError:
+                picture = None
+            if picture is None or picture.learner_id != learner_id or not picture.reading:
+                await send({"type": "error", "message": "unknown picture"})
+                return
         try:
             await sparks.require(learner_id, "answer")
         except InsufficientSparks as exc:
@@ -1639,6 +1660,11 @@ def create_app(
             if kind == "direction":
                 await send({"type": "error", "message": "that suggestion is no longer available"})
                 return
+        if picture is not None:
+            # From here on the turn's message is the words + what the picture
+            # shows (images.py): the answer, memory and the stage all get it.
+            # (A miss above was kept with the words alone.)
+            text = _images.with_image(text, picture.reading or "")
         # the thinking style is analysed turn by turn: whatever they just did
         # counts in this turn's reading of it
         _style_patterns.forget(learner_id)
@@ -1660,7 +1686,8 @@ def create_app(
             if asked:
                 stage_text = f"{asked}\n(They clarified that they meant: {option.text})"
         stage = (
-            _StageRun(session_id, turn_index, stage_text, _Performance(turn_index, send), continues)
+            _StageRun(session_id, turn_index, stage_text, _Performance(turn_index, send), continues,
+                      photo=picture is not None)
             if data.get("stage") else None
         )
 
@@ -1764,6 +1791,7 @@ def create_app(
         ))
     # The sign-up profile (profiles.py): asked once after the first sign-in.
     app.include_router(build_profiles_router(pool, tiers.fast))
+    app.include_router(images_router)
     app.include_router(build_sparks_router(sparks, pool))
     app.include_router(build_billing_router(billing))
     app.include_router(build_feed_router(pool, tiers.fast))

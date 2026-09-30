@@ -62,7 +62,7 @@ class _PathScreenState extends State<PathScreen> {
           SliverToBoxAdapter(
             child: Container(
               padding: const EdgeInsets.fromLTRB(28, 28, 28, 18),
-              decoration: const BoxDecoration(
+              decoration: BoxDecoration(
                 color: Paper.surface,
                 border: Border(bottom: BorderSide(color: Paper.border)),
               ),
@@ -96,7 +96,7 @@ class _PathScreenState extends State<PathScreen> {
               ),
             )
           else if (t == null)
-            const SliverToBoxAdapter(
+            SliverToBoxAdapter(
               child: Padding(
                 padding: EdgeInsets.all(40),
                 child: Center(child: CircularProgressIndicator(color: Paper.accent)),
@@ -158,7 +158,7 @@ class _PathBody extends StatelessWidget {
       children.add(Padding(
         padding: const EdgeInsets.only(top: 12),
         child: Column(children: [
-          const Icon(Icons.emoji_events_rounded, size: 56, color: Paper.warn),
+          Icon(Icons.emoji_events_rounded, size: 56, color: Paper.warn),
           const SizedBox(height: 6),
           Text('Topic complete', key: const ValueKey('path-complete'), style: serif(20)),
         ]),
@@ -371,7 +371,7 @@ class _PathNodeState extends State<_PathNode> {
                 value: v,
                 strokeWidth: 5,
                 backgroundColor: Paper.border,
-                valueColor: const AlwaysStoppedAnimation(Paper.accent),
+                valueColor: AlwaysStoppedAnimation(Paper.accent),
               ),
             ),
           )
@@ -406,7 +406,7 @@ class _PathNodeState extends State<_PathNode> {
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: Paper.ink, borderRadius: BorderRadius.circular(100)),
             child: Text(l.status == LessonStatus.inProgress ? 'CONTINUE' : 'START',
-                style: mono(9, color: Colors.white, weight: FontWeight.w700)),
+                style: mono(9, color: Paper.page, weight: FontWeight.w700)),
           ),
         Text(
           l.title,

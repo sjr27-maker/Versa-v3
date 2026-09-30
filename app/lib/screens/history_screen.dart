@@ -68,7 +68,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   fillColor: Paper.card,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Paper.border),
+                    borderSide: BorderSide(color: Paper.border),
                   ),
                 ),
               ),
@@ -175,7 +175,7 @@ class _HistoryRow extends StatelessWidget {
             Text('${chat.turnCount} turns', style: sans(12, color: Paper.muted)),
             if (onTap != null) ...[
               const SizedBox(width: 8),
-              const Icon(Icons.arrow_forward_rounded, size: 16, color: Paper.faint),
+              Icon(Icons.arrow_forward_rounded, size: 16, color: Paper.faint),
             ],
           ],
         ),

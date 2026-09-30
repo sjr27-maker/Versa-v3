@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../picture.dart';
 import '../theme.dart';
+import '../widgets/message_view.dart' show PictureNote;
+import '../widgets/rich_text.dart';
 import 'room_models.dart';
 
 /// Each person keeps one colour for their name and avatar, like a group chat.
@@ -196,7 +199,7 @@ class _Bubble extends StatelessWidget {
     final question = m.kind == 'question';
     final bg = mine
         ? Paper.accentSoft
-        : (m.fromVersa && (content || question) ? const Color(0xFFFFFBF3) : Paper.card);
+        : (m.fromVersa && (content || question) ? Paper.surface : Paper.card);
     final border = mine ? Paper.accentLine : (m.fromVersa ? Paper.accentLine : Paper.border);
     final radius = BorderRadius.only(
       topLeft: Radius.circular(!mine && showName ? 4 : 14),
@@ -229,10 +232,22 @@ class _Bubble extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final h in header) Padding(padding: const EdgeInsets.only(bottom: 3), child: h),
-            SelectableText(
-              m.text,
-              style: sans(content ? 14.5 : 14, height: 1.45, weight: m.kind == 'pick' ? FontWeight.w600 : FontWeight.w400),
-            ),
+            ...() {
+              // a picture travels in a room as what it showed (picture.dart)
+              final (words, reading) = splitPicture(m.text);
+              return [
+                if (reading != null) ...[
+                  PictureNote(reading: reading),
+                  if (words.trim().isNotEmpty) const SizedBox(height: 6),
+                ],
+                if (words.trim().isNotEmpty)
+                  RichMessageText(
+                    words.trim(),
+                    style: sans(content ? 14.5 : 14,
+                        height: 1.45, weight: m.kind == 'pick' ? FontWeight.w600 : FontWeight.w400),
+                  ),
+              ];
+            }(),
             if (question && m.optionTexts.isNotEmpty) ...[
               const SizedBox(height: 6),
               Wrap(
@@ -274,7 +289,7 @@ class _Bubble extends StatelessWidget {
   Widget? _addressLine(RoomMessage m) {
     if (m.private && m.fromVersa) {
       return Row(mainAxisSize: MainAxisSize.min, children: [
-        const Icon(Icons.lock_rounded, size: 12, color: Paper.warn),
+        Icon(Icons.lock_rounded, size: 12, color: Paper.warn),
         const SizedBox(width: 4),
         Text(m.toMemberId == meId ? 'Only you can see this' : 'Private to ${m.toName}',
             style: sans(11.5, color: Paper.warn, weight: FontWeight.w600)),
@@ -315,9 +330,9 @@ class _SystemLine extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
           constraints: const BoxConstraints(maxWidth: 560),
           decoration: BoxDecoration(
-            color: color == null ? Paper.sliver : const Color(0xFFEFF5EC),
+            color: color == null ? Paper.sliver : Paper.oliveSoft,
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color == null ? Paper.border : const Color(0xFFCFE2C7)),
+            border: Border.all(color: color == null ? Paper.border : Paper.oliveLine),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             if (icon != null) ...[Icon(icon, size: 14, color: color), const SizedBox(width: 6)],
@@ -355,7 +370,7 @@ class _TaskCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(children: [
-              const Icon(Icons.push_pin_rounded, size: 14, color: Paper.accent),
+              Icon(Icons.push_pin_rounded, size: 14, color: Paper.accent),
               const SizedBox(width: 6),
               Expanded(
                 child: Text('New task for $who · ${m.meta['task_kind'] ?? 'learn'}',

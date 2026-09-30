@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../topic/topic_widgets.dart';
+import '../widgets/message_view.dart' show PictureNote;
+import '../widgets/rich_text.dart';
 import 'exam_api.dart';
 import 'exam_models.dart';
 
@@ -31,6 +34,38 @@ class _QuizScreenState extends State<QuizScreen> {
   bool _submitting = false;
   final Map<String, String> _answers = {};
   final Map<String, TextEditingController> _typed = {};
+
+  /// A photo of their working for a written answer (picture.dart): read on
+  /// upload, and handed in as part of the answer -- what the marker sees.
+  final Map<String, AttachedPicture> _pictures = {};
+  final Set<String> _pictureReading = {};
+  final Map<String, String> _pictureProblem = {};
+
+  Future<void> _attachPicture(String questionId) async {
+    final picked = await choosePicture(context);
+    if (picked == null || !mounted) return;
+    final app = context.read<AppState>();
+    setState(() {
+      _pictureReading.add(questionId);
+      _pictureProblem.remove(questionId);
+    });
+    try {
+      final picture = await app.api.uploadPicture(app.learner!.id, picked.bytes, picked.name);
+      if (!mounted) return;
+      setState(() => _pictures[questionId] = picture);
+    } catch (e) {
+      if (mounted) setState(() => _pictureProblem[questionId] = '$e');
+    } finally {
+      if (mounted) setState(() => _pictureReading.remove(questionId));
+    }
+  }
+
+  /// What is handed in for a question: the words, plus what their photo showed.
+  String _answerFor(String questionId) {
+    final words = (_answers[questionId] ?? '').trim();
+    final picture = _pictures[questionId];
+    return picture == null ? words : withPicture(words, picture.reading);
+  }
   Timer? _ticker;
   DateTime? _deadline;
   int? _secondsLeft;
@@ -97,8 +132,7 @@ class _QuizScreenState extends State<QuizScreen> {
         return c;
       });
 
-  int get _unanswered =>
-      _quiz!.questions.where((q) => (_answers[q.id] ?? '').trim().isEmpty).length;
+  int get _unanswered => _quiz!.questions.where((q) => _answerFor(q.id).isEmpty).length;
 
   Future<void> _submit({bool timeUp = false}) async {
     final quiz = _quiz;
@@ -131,8 +165,8 @@ class _QuizScreenState extends State<QuizScreen> {
     setState(() => _submitting = true);
     try {
       final done = await _api.submit(quiz.id, {
-        for (final e in _answers.entries)
-          if (e.value.trim().isNotEmpty) e.key: e.value.trim(),
+        for (final id in {..._answers.keys, ..._pictures.keys})
+          if (_answerFor(id).isNotEmpty) id: _answerFor(id),
       });
       if (!mounted) return;
       setState(() => _submitting = false);
@@ -163,7 +197,7 @@ class _QuizScreenState extends State<QuizScreen> {
     } else if (quiz == null) {
       body = Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const CircularProgressIndicator(color: Paper.accent),
+          CircularProgressIndicator(color: Paper.accent),
           const SizedBox(height: 16),
           Text(widget.label, key: const ValueKey('quiz-loading'), style: sans(14, color: Paper.body)),
         ]),
@@ -263,7 +297,7 @@ class _QuizScreenState extends State<QuizScreen> {
             Text(q.unitTitle.toUpperCase(), style: mono(9.5)),
             const SizedBox(height: 4),
           ],
-          Text('${i + 1}. ${q.prompt}', style: sans(15, weight: FontWeight.w600, height: 1.4)),
+          _numbered(i, q.prompt),
           const SizedBox(height: 12),
           if (q.isChoice)
             for (final (c, text) in q.choices.indexed) _choiceTile(q, c, text)
@@ -281,12 +315,56 @@ class _QuizScreenState extends State<QuizScreen> {
                 fillColor: Paper.sliver,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  borderSide: const BorderSide(color: Paper.border),
+                  borderSide: BorderSide(color: Paper.border),
                 ),
               ),
             ),
+          if (!q.isChoice) _workingPicture(q.id),
         ],
       ),
+    );
+  }
+
+  /// "3. " and the question, its maths typeset (one line of inline text: the
+  /// number must not read as a list).
+  Widget _numbered(int i, String prompt) {
+    final style = sans(15, weight: FontWeight.w600, height: 1.4);
+    return Text.rich(TextSpan(children: [TextSpan(text: '${i + 1}. ', style: style), ...inlineSpans(prompt, style)]));
+  }
+
+  Widget _workingPicture(String questionId) {
+    final picture = _pictures[questionId];
+    final reading = _pictureReading.contains(questionId);
+    final problem = _pictureProblem[questionId];
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(children: [
+        if (picture != null) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.memory(picture.bytes, width: 56, height: 56, fit: BoxFit.cover),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text('Your working is attached', style: sans(12.5, color: Paper.muted))),
+          IconButton(
+            key: ValueKey('quiz-picture-remove-$questionId'),
+            tooltip: 'Remove picture',
+            onPressed: _submitting ? null : () => setState(() => _pictures.remove(questionId)),
+            icon: Icon(Icons.close_rounded, size: 18, color: Paper.faint),
+          ),
+        ] else ...[
+          TextButton.icon(
+            key: ValueKey('quiz-picture-$questionId'),
+            onPressed: _submitting || reading ? null : () => _attachPicture(questionId),
+            icon: reading
+                ? SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Paper.accent))
+                : const Icon(Icons.add_photo_alternate_outlined, size: 18),
+            label: Text(reading ? 'Reading your picture…' : 'Add a photo of your working'),
+          ),
+          if (problem != null)
+            Expanded(child: Text(problem, style: sans(12, color: Paper.danger))),
+        ],
+      ]),
     );
   }
 
@@ -310,7 +388,7 @@ class _QuizScreenState extends State<QuizScreen> {
             Icon(picked ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
                 size: 18, color: picked ? Paper.accent : Paper.faint),
             const SizedBox(width: 10),
-            Expanded(child: Text(text, style: sans(14, height: 1.35))),
+            Expanded(child: RichMessageText(text, selectable: false, style: sans(14, height: 1.35))),
           ]),
         ),
       ),
@@ -391,7 +469,7 @@ class _QuizScreenState extends State<QuizScreen> {
                   Text(r.question.unitTitle.toUpperCase(), style: mono(9.5)),
                   const SizedBox(height: 4),
                 ],
-                Text('${i + 1}. ${r.question.prompt}', style: sans(15, weight: FontWeight.w600, height: 1.4)),
+                _numbered(i, r.question.prompt),
                 const SizedBox(height: 10),
                 _line('Your answer', answered.isEmpty ? 'No answer' : answered,
                     color: r.correct == true ? Paper.olive : Paper.body),
@@ -406,11 +484,19 @@ class _QuizScreenState extends State<QuizScreen> {
     );
   }
 
-  Widget _line(String label, String text, {Color color = Paper.body}) => Padding(
+  Widget _line(String label, String text, {Color? color}) => Padding(
         padding: const EdgeInsets.only(bottom: 6),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(width: 92, child: Text(label, style: sans(12.5, color: Paper.faint, weight: FontWeight.w600))),
-          Expanded(child: Text(text, style: sans(13.5, color: color, height: 1.45))),
+          Expanded(child: () {
+            // a handed-in photo of their working shows as what it showed
+            final (words, reading) = splitPicture(text);
+            final style = sans(13.5, color: color ?? Paper.body, height: 1.45);
+            return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (words.trim().isNotEmpty) RichMessageText(words.trim(), style: style),
+              if (reading != null) ...[const SizedBox(height: 4), PictureNote(reading: reading)],
+            ]);
+          }()),
         ]),
       );
 }

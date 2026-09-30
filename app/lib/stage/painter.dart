@@ -371,7 +371,7 @@ class StagePainter extends CustomPainter {
 
   void _paintProp(Canvas canvas, Size size, StageProp p, double t) {
     if (isGraphKind(p.kind)) return _paintGraph(canvas, size, p, t);
-    if (p.kind == PropKind.math) return; // typeset by StageView, over the canvas
+    if (p.kind == PropKind.math || p.kind == PropKind.photo) return; // StageView shows these, over the canvas
     final at = engine.propAt(p);
     final depthK = engine.propScale(p);
     var o = Offset(at.dx * size.width, at.dy * size.height);
@@ -624,7 +624,7 @@ class StagePainter extends CustomPainter {
             _stroke(Color.lerp(col, Colors.black, 0.35)!, 3)..style = PaintingStyle.stroke);
         canvas.drawPath(path, _stroke(col, 3)..style = PaintingStyle.stroke);
         if (p.label != null && grow >= 1) _label(canvas, p.label!, pts.last + const Offset(0, -14), 13, col, alpha);
-      case PropKind.axes || PropKind.plot || PropKind.dot || PropKind.tangent || PropKind.math:
+      case PropKind.axes || PropKind.plot || PropKind.dot || PropKind.tangent || PropKind.math || PropKind.photo:
         break; // drawn by _paintGraph / StageView
       case PropKind.link:
         break; // drawn by _paintLink
@@ -834,7 +834,7 @@ class StagePainter extends CustomPainter {
 
   // ------------------------------------------------------------ particles
 
-  static const _confetti = [Color(0xFFE2B33C), Paper.accent, Color(0xFF4F7CAC), Color(0xFF93D374), Color(0xFFE0708A)];
+  static final _confetti = [Color(0xFFE2B33C), Paper.accent, Color(0xFF4F7CAC), Color(0xFF93D374), Color(0xFFE0708A)];
 
   void _paintParticles(Canvas canvas, Size size, double t) {
     for (final q in engine.particles) {

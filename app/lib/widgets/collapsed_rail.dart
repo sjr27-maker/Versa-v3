@@ -33,10 +33,10 @@ class CollapsedRailStrip extends StatelessWidget {
         color: Paper.sliver,
         border: Border(
           right: side == RailSide.left
-              ? const BorderSide(color: Paper.border)
+              ? BorderSide(color: Paper.border)
               : BorderSide.none,
           left: side == RailSide.right
-              ? const BorderSide(color: Paper.border)
+              ? BorderSide(color: Paper.border)
               : BorderSide.none,
         ),
       ),

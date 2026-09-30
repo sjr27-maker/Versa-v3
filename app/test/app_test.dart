@@ -6,6 +6,7 @@ import 'package:versa_app/app_state.dart';
 import 'package:versa_app/chat_controller.dart';
 import 'package:versa_app/main.dart';
 import 'package:versa_app/models.dart';
+import 'package:versa_app/theme.dart';
 
 import 'support/fakes.dart';
 
@@ -380,6 +381,29 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('nav-Modes')));
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('timing')), findsNothing);
+    });
+
+    testWidgets('a theme picked in Settings re-colours the app and is remembered', (tester) async {
+      _size(tester, 1400, 900);
+      addTearDown(() => Paper.palette = PaperPalette.paper);
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
+      Color page() => (tester.widget(find.byType(MaterialApp)) as MaterialApp).theme!.scaffoldBackgroundColor;
+      expect(page(), PaperPalette.paper.page);
+
+      await tester.tap(find.byKey(const ValueKey('nav-Settings')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('theme-night')));
+      await tester.pumpAndSettle();
+      expect(Paper.palette, PaperPalette.night);
+      expect(page(), PaperPalette.night.page);
+      expect((await SharedPreferences.getInstance()).getString('theme'), 'night');
+
+      // a fresh start comes back in the same theme
+      Paper.palette = PaperPalette.paper;
+      await tester.pumpWidget(const SizedBox());
+      await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha', 'theme': 'mist'});
+      expect(Paper.palette, PaperPalette.mist);
+      expect(page(), PaperPalette.mist.page);
     });
 
     testWidgets('a lost connection shows a banner and Reconnect brings the chat back',

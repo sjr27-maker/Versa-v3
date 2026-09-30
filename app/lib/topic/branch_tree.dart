@@ -268,7 +268,7 @@ class _BranchTreeState extends State<BranchTree> with TickerProviderStateMixin {
               foregroundColor: Paper.muted,
               textStyle: sans(12),
               backgroundColor: Paper.card.withValues(alpha: 0.9),
-              shape: const StadiumBorder(side: BorderSide(color: Paper.border)),
+              shape: StadiumBorder(side: BorderSide(color: Paper.border)),
             ),
           ),
         ),
@@ -493,7 +493,7 @@ class _NodeCard extends StatelessWidget {
                 Align(
                   alignment: Alignment.bottomRight,
                   child: branching
-                      ? const Padding(
+                      ? Padding(
                           padding: EdgeInsets.all(8),
                           child: SizedBox(
                               width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Paper.accent)),

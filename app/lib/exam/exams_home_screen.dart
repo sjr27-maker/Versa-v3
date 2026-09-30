@@ -166,7 +166,7 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
                   future: _exams,
                   builder: (context, snap) {
                     if (snap.connectionState != ConnectionState.done) {
-                      return const Padding(
+                      return Padding(
                         padding: EdgeInsets.all(24),
                         child: Center(child: CircularProgressIndicator(color: Paper.accent)),
                       );
@@ -238,7 +238,7 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
                   fillColor: Paper.sliver,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Paper.border),
+                    borderSide: BorderSide(color: Paper.border),
                   ),
                 ),
               ),
@@ -269,7 +269,7 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
                 key: const ValueKey('exam-date-clear'),
                 tooltip: 'No date',
                 onPressed: () => setState(() => _examDate = null),
-                icon: const Icon(Icons.close_rounded, size: 16, color: Paper.faint),
+                icon: Icon(Icons.close_rounded, size: 16, color: Paper.faint),
               ),
           ]),
           const SizedBox(height: 8),
@@ -305,7 +305,7 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
           if (_busy != null) ...[
             const SizedBox(height: 16),
             Row(key: const ValueKey('exam-busy'), children: [
-              const SizedBox(
+              SizedBox(
                 width: 16,
                 height: 16,
                 child: CircularProgressIndicator(strokeWidth: 2, color: Paper.accent),
@@ -347,7 +347,7 @@ class _SourceButton extends StatelessWidget {
         label: Text(label),
         style: OutlinedButton.styleFrom(
           foregroundColor: Paper.ink,
-          side: const BorderSide(color: Paper.borderStrong),
+          side: BorderSide(color: Paper.borderStrong),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
         ),
@@ -381,7 +381,7 @@ class _ExamCard extends StatelessWidget {
             children: [
               Row(children: [
                 Expanded(child: Text(exam.title, style: serif(18))),
-                const Icon(Icons.arrow_forward_rounded, size: 18, color: Paper.faint),
+                Icon(Icons.arrow_forward_rounded, size: 18, color: Paper.faint),
               ]),
               const SizedBox(height: 8),
               if (when != null) ...[
@@ -473,7 +473,7 @@ class _CourseDialog extends StatelessWidget {
             future: load,
             builder: (context, snap) {
               if (snap.connectionState != ConnectionState.done) {
-                return const SizedBox(
+                return SizedBox(
                   height: 80,
                   child: Center(child: CircularProgressIndicator(color: Paper.accent)),
                 );
@@ -496,7 +496,7 @@ class _CourseDialog extends StatelessWidget {
                   for (final c in courses)
                     ListTile(
                       key: ValueKey('exam-course-${c.id}'),
-                      leading: const Icon(Icons.menu_book_outlined, color: Paper.accent),
+                      leading: Icon(Icons.menu_book_outlined, color: Paper.accent),
                       title: Text(c.title, style: sans(14.5, color: Paper.ink, weight: FontWeight.w600)),
                       subtitle: Text(
                         '${c.chapterCount} chapter${c.chapterCount == 1 ? '' : 's'} · ${c.percent}% done',

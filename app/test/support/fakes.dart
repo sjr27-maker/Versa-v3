@@ -24,8 +24,13 @@ class FakeTransport implements ChatTransport {
   Future<void> drop() => _controller.close();
 
   @override
-  void sendMessage(String text, {bool stage = false, String? directions}) =>
-      sent.add({'type': 'message', 'text': text, if (stage) 'stage': 'true', 'directions': ?directions});
+  void sendMessage(String text, {bool stage = false, String? directions, String? imageId}) => sent.add({
+        'type': 'message',
+        'text': text,
+        if (stage) 'stage': 'true',
+        'directions': ?directions,
+        'image_id': ?imageId,
+      });
 
   @override
   void selectOption(String optionId, {bool stage = false, String? directions}) => sent.add({
@@ -109,6 +114,10 @@ class FakeBackend {
   final Map<String, Map<String, dynamic>> profiles = {}; // learner id -> saved body
   final List<String> unauthorized = [];
   final List<Map<String, dynamic>> firebaseSignIns = [];
+
+  /// Pictures uploaded (POST /api/images), and what the "reader" says.
+  int picturesUploaded = 0;
+  String pictureReading = r'A worked problem: $x^2 - 5x + 6 = 0$.';
 
   /// Pretend this learner already filled in the sign-up questions.
   void seedProfile(String learnerId, Map<String, dynamic> answers) => profiles[learnerId] = answers;
@@ -273,6 +282,11 @@ class FakeBackend {
             body['occupation'] == 'school' && age > 22 ? "You said you're $age and at school." : null;
         return _json({'ok': true, 'warning': warning});
       }
+    }
+    if (request.url.path == '/api/images') {
+      // a picture for a message (server: images.py): read on upload
+      picturesUploaded++;
+      return _json({'id': 'img-$picturesUploaded', 'mime_type': 'image/png', 'reading': pictureReading});
     }
     if (request.url.path == '/api/learners') {
       final label = (jsonDecode(request.body) as Map)['label'] as String;

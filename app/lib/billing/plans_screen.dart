@@ -87,7 +87,7 @@ class _PlansScreenState extends State<PlansScreen> {
                   ),
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                     Row(children: [
-                      const Icon(Icons.workspace_premium_rounded, color: Paper.accent),
+                      Icon(Icons.workspace_premium_rounded, color: Paper.accent),
                       const SizedBox(width: 8),
                       Text('Versa Plus', style: serif(22)),
                       const Spacer(),
@@ -106,7 +106,7 @@ class _PlansScreenState extends State<PlansScreen> {
                       Padding(
                         padding: const EdgeInsets.only(bottom: 6),
                         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const Icon(Icons.check_rounded, size: 18, color: Paper.olive),
+                          Icon(Icons.check_rounded, size: 18, color: Paper.olive),
                           const SizedBox(width: 8),
                           Expanded(child: Text(line, style: sans(13.5, color: Paper.ink))),
                         ]),
@@ -135,7 +135,7 @@ class _PlansScreenState extends State<PlansScreen> {
                 Material(
                   color: Paper.card,
                   shape: RoundedRectangleBorder(
-                    side: const BorderSide(color: Paper.border),
+                    side: BorderSide(color: Paper.border),
                     borderRadius: BorderRadius.circular(14),
                   ),
                   child: InkWell(
@@ -145,7 +145,7 @@ class _PlansScreenState extends State<PlansScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Row(children: [
-                        const Icon(Icons.event_available_rounded, color: Paper.accent),
+                        Icon(Icons.event_available_rounded, color: Paper.accent),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -155,7 +155,7 @@ class _PlansScreenState extends State<PlansScreen> {
                                 style: sans(12.5, color: Paper.body)),
                           ]),
                         ),
-                        const Icon(Icons.chevron_right_rounded, color: Paper.faint),
+                        Icon(Icons.chevron_right_rounded, color: Paper.faint),
                       ]),
                     ),
                   ),
@@ -166,7 +166,7 @@ class _PlansScreenState extends State<PlansScreen> {
                 OutlinedButton(
                   key: const ValueKey('plans-continue-free'),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Paper.borderStrong),
+                    side: BorderSide(color: Paper.borderStrong),
                     padding: const EdgeInsets.symmetric(vertical: 14),
                   ),
                   onPressed: _busy ? null : widget.onDone,
@@ -175,7 +175,7 @@ class _PlansScreenState extends State<PlansScreen> {
                 ),
 
                 if (_busy)
-                  const Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator(color: Paper.accent)),
+                  Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator(color: Paper.accent)),
                 if (_message != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),

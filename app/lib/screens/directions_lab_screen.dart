@@ -226,7 +226,7 @@ class _HandMockState extends State<_HandMock> {
           child: TextButton.icon(
             key: const ValueKey('lab-more'),
             onPressed: _more,
-            icon: const Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
+            icon: Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
             label: Text('other directions', style: sans(12, color: Paper.muted)),
           ),
         ),
@@ -333,7 +333,7 @@ class _CompassMockState extends State<_CompassMock> {
                   shape: BoxShape.circle,
                   border: Border.all(color: Paper.borderStrong),
                 ),
-                child: const Icon(Icons.explore_outlined, size: 24, color: Paper.muted),
+                child: Icon(Icons.explore_outlined, size: 24, color: Paper.muted),
               )
             : Container(
                 width: 280,
@@ -387,7 +387,7 @@ class _CompassMockState extends State<_CompassMock> {
                   _points = _draw();
                   _taken = null;
                 }),
-                icon: const Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
+                icon: Icon(Icons.refresh_rounded, size: 14, color: Paper.muted),
                 label: Text('other directions', style: sans(12, color: Paper.muted)),
               ),
             ),

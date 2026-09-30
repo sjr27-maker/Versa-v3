@@ -121,7 +121,7 @@ class PlanCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            const Icon(Icons.calendar_month_outlined, color: Paper.accent),
+            Icon(Icons.calendar_month_outlined, color: Paper.accent),
             const SizedBox(width: 10),
             Expanded(child: Text('Study plan', style: serif(19))),
             if (p != null)

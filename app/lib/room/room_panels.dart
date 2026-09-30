@@ -144,7 +144,7 @@ class RoomBoardPanel extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(bottom: 6),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Padding(
+              Padding(
                 padding: EdgeInsets.only(top: 2),
                 child: Icon(Icons.help_outline_rounded, size: 14, color: Paper.accent),
               ),
@@ -238,7 +238,7 @@ class ForYouPanel extends StatelessWidget {
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(children: [
-                const Icon(Icons.push_pin_rounded, size: 14, color: Paper.accent),
+                Icon(Icons.push_pin_rounded, size: 14, color: Paper.accent),
                 const SizedBox(width: 6),
                 Text('YOUR TASK · ${current.kind.toUpperCase()}',
                     style: mono(9.5, color: Paper.accentDark, weight: FontWeight.w700)),
@@ -262,7 +262,7 @@ class ForYouPanel extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.only(bottom: 2),
               child: Row(children: [
-                const Icon(Icons.check_circle_rounded, size: 13, color: Paper.olive),
+                Icon(Icons.check_circle_rounded, size: 13, color: Paper.olive),
                 const SizedBox(width: 5),
                 Expanded(
                   child: Text(t.description,
@@ -314,7 +314,7 @@ class _OptionSetCard extends StatelessWidget {
                 onPressed: enabled ? () => controller.pick(set, o) : null,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: Paper.accentDark,
-                  side: const BorderSide(color: Paper.accent),
+                  side: BorderSide(color: Paper.accent),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   visualDensity: VisualDensity.compact,

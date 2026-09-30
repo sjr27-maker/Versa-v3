@@ -273,13 +273,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
               key: const ValueKey('profile-back'),
               tooltip: 'Back',
               onPressed: _busy ? null : _back,
-              icon: const Icon(Icons.arrow_back, color: Paper.ink),
+              icon: Icon(Icons.arrow_back, color: Paper.ink),
             )
           else if (widget.editing)
             IconButton(
               tooltip: 'Close',
               onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.close, color: Paper.ink),
+              icon: Icon(Icons.close, color: Paper.ink),
             ),
           Expanded(
             child: Padding(
@@ -586,7 +586,7 @@ class _ChoiceCard extends StatelessWidget {
                   Text(detail, style: sans(13, color: Paper.muted)),
                 ]),
               ),
-              if (selected) const Icon(Icons.check_circle, color: Paper.accent, size: 20),
+              if (selected) Icon(Icons.check_circle, color: Paper.accent, size: 20),
             ]),
           ),
         ),
@@ -619,7 +619,7 @@ class _Picker extends StatelessWidget {
         onTap: () => _open(context),
         borderRadius: BorderRadius.circular(10),
         child: InputDecorator(
-          decoration: paperInput('', label: label, suffix: const Icon(Icons.expand_more, color: Paper.muted)),
+          decoration: paperInput('', label: label, suffix: Icon(Icons.expand_more, color: Paper.muted)),
           isEmpty: value == null,
           child: Text(value ?? '', style: sans(15)),
         ),
@@ -663,7 +663,7 @@ class _PickerSheetState extends State<_PickerSheet> {
                   autofocus: false,
                   onChanged: (v) => setState(() => _query = v),
                   style: sans(15),
-                  decoration: paperInput('Search', suffix: const Icon(Icons.search, color: Paper.muted)),
+                  decoration: paperInput('Search', suffix: Icon(Icons.search, color: Paper.muted)),
                 ),
               ),
             Flexible(
@@ -674,7 +674,7 @@ class _PickerSheetState extends State<_PickerSheet> {
                     ListTile(
                       key: ValueKey('pick-$item'),
                       title: Text(item, style: sans(15)),
-                      trailing: item == widget.selected ? const Icon(Icons.check, color: Paper.accent) : null,
+                      trailing: item == widget.selected ? Icon(Icons.check, color: Paper.accent) : null,
                       onTap: () => Navigator.of(context).pop(item),
                     ),
                 ],

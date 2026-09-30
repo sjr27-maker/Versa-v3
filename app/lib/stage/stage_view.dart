@@ -69,6 +69,7 @@ class _StageViewState extends State<StageView> with SingleTickerProviderStateMix
             listenable: widget.engine,
             builder: (context, _) => Stack(
               children: [
+                ..._photos(size),
                 ..._formulas(size),
                 ..._speech(size),
                 ..._choices(size),
@@ -178,6 +179,71 @@ class _StageViewState extends State<StageView> with SingleTickerProviderStateMix
           child: Opacity(
             opacity: opacity,
             child: FractionalTranslation(translation: shift, child: _tex(text, fontSize, color)),
+          ),
+        ),
+      ));
+    }
+    return out;
+  }
+
+  // ------------------------------------------------------------ photos
+
+  /// The learner's own picture, held up on the stage where the director put
+  /// a `photo` prop: a framed print that pops in, dims with its scene and
+  /// fades when removed. Arrows and labels the director adds are painted or
+  /// typeset over it.
+  List<Widget> _photos(Size size) {
+    final e = widget.engine;
+    final out = <Widget>[];
+    for (final p in e.props.values) {
+      if (p.kind != PropKind.photo) continue;
+      final age = e.time - p.bornAt;
+      final fade = p.diedAt == null ? 1.0 : 1 - ((e.time - p.diedAt!) / 0.45).clamp(0.0, 1.0);
+      final pop = Curves.easeOutBack.transform((age / 0.4).clamp(0.0, 1.0));
+      final opacity = (fade * p.dim.at(e.time) * (age / 0.25).clamp(0.0, 1.0)).clamp(0.0, 1.0);
+      if (opacity <= 0) continue;
+      final at = e.propAt(p);
+      final k = e.propScale(p) * p.scale.at(e.time);
+      final width = (StageEngine.photoWidth * size.width * p.size * k).clamp(40.0, size.width * 0.6);
+      final bytes = e.photo;
+      out.add(Positioned(
+        key: ValueKey('photo-${p.id}'),
+        left: at.dx * size.width,
+        top: at.dy * size.height,
+        child: IgnorePointer(
+          child: Opacity(
+            opacity: opacity,
+            child: FractionalTranslation(
+              translation: const Offset(-0.5, -0.5),
+              child: Transform.scale(
+                scale: 0.6 + 0.4 * pop,
+                child: Transform.rotate(
+                  angle: -0.035,
+                  child: Container(
+                    width: width,
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(6),
+                      boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 12, offset: Offset(0, 5))],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(3),
+                      child: bytes != null
+                          ? ConstrainedBox(
+                              constraints: BoxConstraints(maxHeight: width * 1.1),
+                              child: Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true),
+                            )
+                          : SizedBox(
+                              height: width * 0.7,
+                              child: const Center(
+                                  child: Icon(Icons.image_outlined, size: 32, color: Color(0xFFB0A89A))),
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ));

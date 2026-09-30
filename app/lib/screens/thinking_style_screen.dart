@@ -247,7 +247,7 @@ class _PatternCardState extends State<_PatternCard> {
               ],
               const SizedBox(height: 6),
               Row(children: [
-                const Icon(Icons.auto_awesome_outlined, size: 13, color: Paper.faint),
+                Icon(Icons.auto_awesome_outlined, size: 13, color: Paper.faint),
                 const SizedBox(width: 5),
                 Text('See it drawn from your picks', style: sans(12, color: Paper.faint)),
               ]),
@@ -550,7 +550,7 @@ class _ItemDetailSheetState extends State<_ItemDetailSheet> {
                   else
                     OutlinedButton.icon(
                       onPressed: () => _act('archive'),
-                      icon: const Icon(Icons.archive_outlined, size: 16, color: Paper.danger),
+                      icon: Icon(Icons.archive_outlined, size: 16, color: Paper.danger),
                       label: Text('Delete', style: sans(13, color: Paper.danger)),
                     ),
                 ]),

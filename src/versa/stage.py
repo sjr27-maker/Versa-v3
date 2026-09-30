@@ -62,6 +62,8 @@ PROP_KINDS = {
     # 3D solids, placed in the stage's world with depth (2026-09-27: "make the
     # space around it 3d and new objects to spawn")
     "cube", "sphere", "cylinder", "cone", "pyramid", "prism", "torus", "planet", "atom",
+    # the learner's own attached picture, held up on the stage (images.py)
+    "photo",
 }
 GRAPH_KINDS = {"axes", "plot", "dot", "tangent"}
 
@@ -531,9 +533,21 @@ GRAPH KIT (for anything mathematical or quantitative -- plot it, don't draw a pi
 """
 
 
+PHOTO_RULES = (
+    "THE STUDENT ATTACHED A PICTURE: what it shows is in their message below, under "
+    "\"[Attached picture ...]\". Start from it -- the scene is about THEIR picture, not a "
+    "generic version of the topic:\n"
+    '{"do":"spawn","id":"pic","kind":"photo","x":0.7,"y":0.4,"size":1.2}   their actual picture, '
+    "shown on the stage (\"size\" scales it; ~0.3 of the stage wide at size 1). Open by holding it "
+    "up: spawn it, the slime looks at it and reacts to what is in it (a say naming it). Then point "
+    "at parts of it with arrows and labels, work through it beside it, and remove it (or move it "
+    "aside) when the scene moves on. Never describe what isn't in it.\n"
+)
+
+
 def stage_prompt(
     message: str, answer: str = "", previous_answer: str = "", continues: str = "", opening: str = "",
-    live: bool = False,
+    live: bool = False, photo: bool = False,
 ) -> str:
     """One continuous animation that explains the whole thing.
 
@@ -674,6 +688,7 @@ def stage_prompt(
         "- Timing: leave a 'wait' of 400-900 ms after an important beat so it lands.\n"
         "- End on a clear, happy takeaway beat (a proud emote, a label, a small effect).\n"
         f"{rules_extra}\n"
+        f"{PHOTO_RULES if photo else ''}"
         f"{task}"
     )
 
@@ -697,10 +712,10 @@ class StageDirector:
 
     async def run(
         self, message: str, answer: str = "", previous_answer: str = "", continues: str = "",
-        opening: str = "", live: bool = False,
+        opening: str = "", live: bool = False, photo: bool = False,
     ) -> list[dict]:
         self.last_call_count = 0
-        prompt = stage_prompt(message, answer, previous_answer, continues, opening, live)
+        prompt = stage_prompt(message, answer, previous_answer, continues, opening, live, photo)
         sink = stage_sink.get()
         stream = getattr(self._llm, "stream", None)
         actions: list[dict] = []
