@@ -452,6 +452,7 @@ OWNER_SQL: dict[str, str] = {
     ),
     "topic_id": "SELECT learner_id FROM topics WHERE id = $1",
     "image_id": "SELECT learner_id FROM images WHERE id = $1",
+    "note_id": "SELECT learner_id FROM notes WHERE id = $1",
     "lesson_id": (
         "SELECT t.learner_id FROM topic_lessons l JOIN topic_chapters c ON c.id = l.chapter_id "
         "JOIN topics t ON t.id = c.topic_id WHERE l.id = $1"

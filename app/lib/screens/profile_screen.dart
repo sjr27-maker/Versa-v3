@@ -48,7 +48,7 @@ const indianSchoolBoards = [
   'CBSE', 'CISCE (ICSE / ISC)', 'State Board', 'IB', 'Cambridge (IGCSE / A Level)', 'NIOS', 'Other',
 ];
 
-const universityYears = ['1st year', '2nd year', '3rd year', '4th year', '5th year', 'Postgraduate', 'PhD'];
+const universityYears = ['1st year', '2nd year', '3rd year', '4th year', 'Postgraduate', 'PhD'];
 
 const countries = [
   'India', 'United States', 'United Kingdom', 'Canada', 'Australia', 'United Arab Emirates', 'Saudi Arabia',

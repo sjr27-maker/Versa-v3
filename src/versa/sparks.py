@@ -61,6 +61,7 @@ ACTION_COSTS: dict[str, int] = {
     "create_exam": 3,  # an exam's syllabus units from a search, PDF, link or course
     "unit_quiz": 3,  # a 5-question unit quiz (marking included)
     "mock_test": 8,  # a timed mock across every unit (marking included)
+    "generate_notes": 2,  # revision notes of a chat, made when the learner asks (notes.py)
 }
 
 # What learning earns back.

@@ -346,6 +346,23 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
         "facts": ["The next lesson has a trick that saves half the work.",
                   "People used this idea long before it had a name."],
     }),
+    # notes.py WriteNotes: revision notes of a chat.
+    "NOTES:WRITE": json.dumps({
+        "title": "Solving quadratic equations",
+        "topics": [
+            {"name": "Factorising a quadratic",
+             "points": ["A quadratic $ax^2 + bx + c = 0$ can often be split into two brackets.",
+                        "If a product is **zero**, one of the factors must be zero."],
+             "formulas": ["x^2 - 5x + 6 = (x-2)(x-3)"],
+             "example": "$x^2 - 5x + 6 = 0$ gives $x = 2$ or $x = 3$."},
+            {"name": "The quadratic formula",
+             "points": ["It solves any quadratic, even ones that don't factorise."],
+             "formulas": ["x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}"],
+             "example": None},
+        ],
+        "summary": "You solved quadratics by factorising, then met the formula that always works.",
+        "stopped_at": "You were about to try the formula on $2x^2 + 3x - 2 = 0$.",
+    }),
     # images.py ReadImage: what an uploaded picture shows.
     "IMAGE:READ": (
         "A photo of a handwritten maths problem. It reads: Solve $x^2 - 5x + 6 = 0$. "
@@ -1005,6 +1022,25 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
             "move": {"type": "STRING"},
         },
         "required": ["same_subject", "type", "move"],
+    },
+    "NOTES:WRITE": {
+        "type": "OBJECT",
+        "properties": {
+            "title": {"type": "STRING"},
+            "topics": {"type": "ARRAY", "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "name": {"type": "STRING"},
+                    "points": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "formulas": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "example": {"type": "STRING", "nullable": True},
+                },
+                "required": ["name", "points", "formulas"],
+            }},
+            "summary": {"type": "STRING"},
+            "stopped_at": {"type": "STRING", "nullable": True},
+        },
+        "required": ["title", "topics", "summary"],
     },
     "PROFILE:EXTRACT": {
         "type": "OBJECT",

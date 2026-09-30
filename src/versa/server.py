@@ -16,6 +16,9 @@ transport:
                                           choices (style_patterns.py), every gate shown
     GET  /api/sessions/{id}/history         one chat's turn-by-turn record, to resume it
     POST /api/sessions/{id}/end            consolidate a finished chat in the background
+    Notes (notes.py): GET /api/sessions/{id}/notes (latest notes, answers so far,
+    up to date?), POST /api/sessions/{id}/notes (write them -- only when the
+    learner asks; priced), GET /api/sessions/{id}/notes/{note_id}/pdf
     Learn a topic (topics.py): /api/topic-explorations[/from-link|/from-pdf],
     /api/topic-nodes/{id}/expand, /api/topics, /api/learners/{id}/topics,
     /api/topics/{id}, /api/lessons/{id}[/start]
@@ -153,6 +156,7 @@ from pydantic import BaseModel, Field
 from versa import chatter as _chatter
 from versa import directions as _directions
 from versa import images as _images
+from versa import notes as _notes
 from versa import pick_prediction as _pick_prediction
 from versa import style_patterns as _style_patterns
 from versa.accounts import (
@@ -1792,6 +1796,13 @@ def create_app(
     # The sign-up profile (profiles.py): asked once after the first sign-in.
     app.include_router(build_profiles_router(pool, tiers.fast))
     app.include_router(images_router)
+    # Revision notes of a chat (notes.py): made only when the learner asks.
+    async def _chat_so_far(session_id: UUID) -> list[HistoryTurn]:
+        return await reconstruct_session_history(
+            transcript, node_calls, disambiguation, session_id, answer_versions=answer_versions,
+        )
+
+    app.include_router(_notes.build_notes_router(pool, tiers.best, _chat_so_far, sparks=sparks))
     app.include_router(build_sparks_router(sparks, pool))
     app.include_router(build_billing_router(billing))
     app.include_router(build_feed_router(pool, tiers.fast))

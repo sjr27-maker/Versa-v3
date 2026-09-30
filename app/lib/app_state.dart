@@ -328,6 +328,13 @@ class ShellState extends ChangeNotifier {
   bool historyRailCollapsed = false;
   bool stagePanelCollapsed = false;
 
+  /// Where the learner dragged the handle between the stage and the chat
+  /// (widgets/stage_split.dart): the stage's height above the chat on a
+  /// phone, and its share of the row beside the chat on a wide screen.
+  /// Ephemeral, like the collapsed flags above.
+  double stageHeight = 280;
+  double stageFraction = 0.5;
+
   /// The app's own main navigation rail (shell.dart) and, inside Sandbox,
   /// the session-knobs rail — same ephemeral, un-persisted minimize
   /// pattern as the two above, added so the stage panel can genuinely get

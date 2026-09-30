@@ -26,7 +26,8 @@ abstract class Billing {
   /// RevenueCat's Versa Plus paywall (the `default` offering).
   Future<PurchaseOutcome> showPlusPaywall();
 
-  /// Buy the first package of a one-time offering: `exam_pass` or `sparks`.
+  /// Buy the first package of a one-time offering: `exam_pass` or `sparks`
+  /// -- or `default:annual`, Versa Plus paid yearly.
   Future<PurchaseOutcome> buyOffering(String offeringId);
 
   /// Restore earlier purchases (required by the App Store).
@@ -175,11 +176,16 @@ class RevenueCatBilling implements Billing {
     }
   }
 
+  /// The package to buy for [offeringId]. `default:annual` is Plus paid
+  /// yearly (the `default` offering's annual package; no free month) --
+  /// null when the offering has no annual package.
   Future<Package?> _firstPackage(String offeringId) async {
     await _ensureConfigured();
     final offerings = await Purchases.getOfferings();
-    final offering = offerings.getOffering(offeringId);
+    final parts = offeringId.split(':');
+    final offering = offerings.getOffering(parts.first);
     if (offering == null) return null;
+    if (parts.length > 1 && parts[1] == 'annual') return offering.annual;
     // Plus (`default`): the monthly plan, the one with the free month.
     if (offering.monthly != null) return offering.monthly;
     final packages = offering.availablePackages;

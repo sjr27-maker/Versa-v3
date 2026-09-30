@@ -1,0 +1,152 @@
+import 'package:flutter/material.dart';
+
+import '../theme.dart';
+
+/// The stage and the chat with a handle between them that the learner drags
+/// to give either one more room -- a finger on a phone, the mouse on a
+/// laptop. Double-tap the handle to put it back in the middle.
+///
+///  * wide (a laptop): stage on the left, chat on the right; the handle is a
+///    vertical bar and sets how much of the row the stage takes.
+///  * phone: stage above, chat below; the handle is a horizontal bar and sets
+///    how tall the stage is.
+///
+/// The size lives here while dragging (so only this widget rebuilds each
+/// frame) and is handed to [onHeight] / [onFraction] when the drag ends --
+/// the screens keep it on ShellState, so it survives leaving the chat.
+class StageSplit extends StatefulWidget {
+  const StageSplit({
+    super.key,
+    required this.wide,
+    required this.stage,
+    required this.chat,
+    this.height = defaultHeight,
+    this.fraction = 0.5,
+    this.onHeight,
+    this.onFraction,
+  });
+
+  static const defaultHeight = 280.0;
+
+  final bool wide;
+
+  /// The stage's height on a phone, and its share of the row when wide.
+  final double height;
+  final double fraction;
+  final ValueChanged<double>? onHeight;
+  final ValueChanged<double>? onFraction;
+
+  /// The stage, given its height on a phone (null on a wide screen, where it
+  /// fills its column).
+  final Widget Function(double? height) stage;
+  final Widget chat;
+
+  @override
+  State<StageSplit> createState() => _StageSplitState();
+}
+
+class _StageSplitState extends State<StageSplit> {
+  late double _fraction = widget.fraction;
+  late double _height = widget.height;
+
+  static const _minStageWidth = 300.0;
+  static const _minChatWidth = 380.0;
+  static const _minStageHeight = 120.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, c) {
+      if (widget.wide) {
+        final room = c.maxWidth - ResizeHandle.thickness;
+        final lo = (_minStageWidth / room).clamp(0.15, 0.5).toDouble();
+        final hi = (1 - _minChatWidth / room).clamp(0.5, 0.85).toDouble();
+        final fraction = _fraction.clamp(lo, hi).toDouble();
+        final stageWidth = room * fraction;
+        return Row(children: [
+          SizedBox(width: stageWidth, child: widget.stage(null)),
+          ResizeHandle(
+            key: const ValueKey('stage-resize'),
+            axis: Axis.horizontal,
+            onDrag: (dx) => setState(() => _fraction = ((stageWidth + dx) / room).clamp(lo, hi).toDouble()),
+            onEnd: () => widget.onFraction?.call(_fraction),
+            onReset: () {
+              setState(() => _fraction = 0.5);
+              widget.onFraction?.call(_fraction);
+            },
+          ),
+          Expanded(child: widget.chat),
+        ]);
+      }
+      // A phone: keep room below for the chat's header, a few lines and the composer.
+      final maxHeight = (c.maxHeight * 0.5).clamp(_minStageHeight + 40, 640.0).toDouble();
+      final height = _height.clamp(_minStageHeight, maxHeight).toDouble();
+      return Column(children: [
+        widget.stage(height),
+        ResizeHandle(
+          key: const ValueKey('stage-resize'),
+          axis: Axis.vertical,
+          onDrag: (dy) => setState(() => _height = (height + dy).clamp(_minStageHeight, maxHeight).toDouble()),
+          onEnd: () => widget.onHeight?.call(_height),
+          onReset: () {
+            setState(() => _height = StageSplit.defaultHeight);
+            widget.onHeight?.call(_height);
+          },
+        ),
+        Expanded(child: widget.chat),
+      ]);
+    });
+  }
+}
+
+/// A grab bar for resizing. [axis] is the direction it moves: vertical for a
+/// bar between a top and a bottom pane, horizontal for one between left and
+/// right. The whole bar is the touch area, not just the drawn pill.
+class ResizeHandle extends StatelessWidget {
+  const ResizeHandle({
+    super.key,
+    required this.axis,
+    required this.onDrag,
+    this.onEnd,
+    this.onReset,
+  });
+
+  /// How much room the handle takes across the split -- enough for a thumb.
+  static const thickness = 20.0;
+
+  final Axis axis;
+  final ValueChanged<double> onDrag;
+  final VoidCallback? onEnd;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final vertical = axis == Axis.vertical;
+    final pill = Container(
+      width: vertical ? 44 : 4,
+      height: vertical ? 4 : 44,
+      decoration: BoxDecoration(color: Paper.borderStrong, borderRadius: BorderRadius.circular(2)),
+    );
+    final bar = Container(
+      width: vertical ? double.infinity : thickness,
+      height: vertical ? thickness : double.infinity,
+      color: Paper.sliver,
+      alignment: Alignment.center,
+      child: pill,
+    );
+    return Semantics(
+      label: 'Drag to resize the stage and the chat. Double-tap to reset.',
+      child: MouseRegion(
+        cursor: vertical ? SystemMouseCursors.resizeRow : SystemMouseCursors.resizeColumn,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTap: onReset,
+          onVerticalDragUpdate: vertical ? (d) => onDrag(d.delta.dy) : null,
+          onVerticalDragEnd: vertical ? (_) => onEnd?.call() : null,
+          onHorizontalDragUpdate: vertical ? null : (d) => onDrag(d.delta.dx),
+          onHorizontalDragEnd: vertical ? null : (_) => onEnd?.call(),
+          child: bar,
+        ),
+      ),
+    );
+  }
+}

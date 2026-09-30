@@ -669,3 +669,31 @@ Why: a picture is evidence of what the learner was working on, and the
 reading is what Versa actually understood from it. If either could be
 edited or pruned, a later answer could no longer be traced to what it was
 shown.
+
+### 22. Revision notes are append-only, and made only when asked
+
+`NoteStore` (`notes`, migration `091_notes.sql`, code in `src/versa/notes.py`)
+must never delete or update rows. Concretely:
+
+- No `delete` / `remove` / `update` / `set_` methods on `NoteStore`.
+- No `DELETE` or `UPDATE` SQL anywhere in `notes.py` or its migration.
+- One row per request that ran the model, written once AFTER the call: the
+  chat it covers and how far (`through_turn`, `answers`), the prompt, the raw
+  reply, and the parsed notes -- or the error. A failed attempt is still a
+  row (content NULL). The call's prompt and output live on the row
+  (invariant 2's payload in notes' own table; notes are not a turn).
+- Notes are made ONLY by `POST /api/sessions/{id}/notes` -- the learner
+  tapping "Generate notes". Nothing makes them on a schedule, at the end of a
+  chat, or in the background. Asking again when nothing new was studied
+  returns the latest notes and writes nothing (and charges nothing).
+- Notes are not evidence: nothing in claims, thinking styles, observations
+  or the direction cards reads the `notes` table. The profile and confirmed
+  thinking styles shape how notes are WRITTEN, never what they say is true.
+- The PDF is drawn from a row on request and never stored.
+- Verified by `tests/test_notes.py`, the same AST-based check used for
+  invariants 1, 4, 6-21.
+
+Why: notes are what the learner takes away from a chat. If they could be
+rewritten, what someone revised from could no longer be traced back to the
+chat and the prompt that produced it; and notes made without being asked
+would spend a learner's Sparks on something they never wanted.

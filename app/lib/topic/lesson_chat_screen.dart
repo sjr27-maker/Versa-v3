@@ -14,6 +14,7 @@ import '../widgets/depth_breadth_pad.dart';
 import '../widgets/level_slider.dart';
 import '../widgets/message_view.dart';
 import '../widgets/stage_panel.dart';
+import '../widgets/stage_split.dart';
 import 'topic_api.dart';
 import 'topic_models.dart';
 import 'topic_widgets.dart';
@@ -131,6 +132,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
       final stageOpen = showStage && !shell.stagePanelCollapsed;
       final tasks = _TaskPanel(lesson: lesson, chat: chat, justDone: _justDone);
       final column = _LessonChatColumn(
+        key: GlobalObjectKey(chat),
         lesson: lesson,
         chat: chat,
         optionsOnStage: stageOpen,
@@ -149,20 +151,30 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
       return Container(
         color: Paper.surface,
         child: Row(children: [
-          if (wide && showStage)
-            shell.stagePanelCollapsed
-                ? CollapsedRailStrip(
-                    icon: Icons.auto_awesome_rounded,
-                    tooltip: 'Show stage',
-                    onExpand: shell.toggleStagePanelCollapsed,
-                  )
-                : Expanded(child: StagePanel(chat: chat, onCollapse: shell.toggleStagePanelCollapsed)),
+          if (wide && showStage && shell.stagePanelCollapsed)
+            CollapsedRailStrip(
+              icon: Icons.auto_awesome_rounded,
+              tooltip: 'Show stage',
+              onExpand: shell.toggleStagePanelCollapsed,
+            ),
+          // stage and chat, split where the learner drags the handle (widgets/stage_split.dart)
           Expanded(
-            child: Column(children: [
-              if (!wide && stageOpen)
-                StagePanel(chat: chat, compact: true, onCollapse: shell.toggleStagePanelCollapsed),
-              Expanded(child: column),
-            ]),
+            child: stageOpen
+                ? StageSplit(
+                    wide: wide,
+                    height: shell.stageHeight,
+                    fraction: shell.stageFraction,
+                    onHeight: (h) => shell.stageHeight = h,
+                    onFraction: (f) => shell.stageFraction = f,
+                    stage: (height) => StagePanel(
+                      chat: chat,
+                      compact: !wide,
+                      compactHeight: height,
+                      onCollapse: shell.toggleStagePanelCollapsed,
+                    ),
+                    chat: column,
+                  )
+                : column,
           ),
           if (wide)
             Container(
@@ -181,6 +193,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
 
 class _LessonChatColumn extends StatefulWidget {
   const _LessonChatColumn({
+    super.key,
     required this.lesson,
     required this.chat,
     required this.optionsOnStage,

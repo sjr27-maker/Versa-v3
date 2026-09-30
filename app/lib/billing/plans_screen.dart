@@ -5,8 +5,10 @@ import '../theme.dart';
 import 'sparks.dart';
 
 /// The plans, shown once to a learner right after they first sign in
-/// (AppState.needsPlans): Versa Plus with its free month up front, the Exam
-/// Pass, or carry on with Free. Whatever they pick, [onDone] lets them in.
+/// (AppState.needsPlans): Versa Plus with its free month up front (or paid
+/// yearly, no free month), and the Exam Pass. Free is offered only where
+/// nothing can be bought (no store on this platform). Whatever they pick,
+/// [onDone] lets them in.
 class PlansScreen extends StatefulWidget {
   const PlansScreen({super.key, required this.name, required this.onDone});
 
@@ -21,6 +23,7 @@ class _PlansScreenState extends State<PlansScreen> {
   bool _busy = false;
   String? _message;
   String? _examPrice;
+  String? _yearPrice;
 
   @override
   void initState() {
@@ -29,6 +32,9 @@ class _PlansScreenState extends State<PlansScreen> {
     if (billing.supported) {
       billing.priceOf('exam_pass').then((p) {
         if (mounted && p != null) setState(() => _examPrice = p);
+      });
+      billing.priceOf('default:annual').then((p) {
+        if (mounted && p != null) setState(() => _yearPrice = p);
       });
     }
   }
@@ -112,7 +118,7 @@ class _PlansScreenState extends State<PlansScreen> {
                         ]),
                       ),
                     const SizedBox(height: 6),
-                    Text(r'Free for 1 month, then $4.99 a month or $39.99 a year. Cancel anytime.',
+                    Text(r'Free for 1 month, then $4.99 a month. Cancel anytime.',
                         style: sans(12.5, color: Paper.body)),
                     const SizedBox(height: 14),
                     SizedBox(
@@ -125,6 +131,28 @@ class _PlansScreenState extends State<PlansScreen> {
                         ),
                         onPressed: _busy ? null : () => _buy(() => sparks.buy(billing.showPlusPaywall)),
                         child: Text('Start your free month', style: sans(15, color: Colors.white, weight: FontWeight.w600)),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    // Plus paid yearly: the `default` offering's annual package.
+                    // The free month is only on the monthly plan.
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        key: const ValueKey('plans-yearly'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Paper.accentDark,
+                          backgroundColor: Paper.card,
+                          side: BorderSide(color: Paper.accent, width: 1.2),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
+                        onPressed: _busy ? null : () => _buy(() => sparks.buy(() => billing.buyOffering('default:annual'))),
+                        child: Column(children: [
+                          Text('Get the yearly pass · ${_yearPrice ?? r'$39.99'} a year',
+                              style: sans(14.5, color: Paper.accentDark, weight: FontWeight.w600)),
+                          const SizedBox(height: 2),
+                          Text('Save 33% · no free month, paid today', style: sans(11.5, color: Paper.body)),
+                        ]),
                       ),
                     ),
                   ]),
@@ -160,19 +188,22 @@ class _PlansScreenState extends State<PlansScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
 
-                // Free.
-                OutlinedButton(
-                  key: const ValueKey('plans-continue-free'),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: Paper.borderStrong),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                // Free is only offered where nothing can be bought here (no
+                // store on this platform) -- otherwise the free month is the way in.
+                if (!billing.supported) ...[
+                  const SizedBox(height: 12),
+                  OutlinedButton(
+                    key: const ValueKey('plans-continue-free'),
+                    style: OutlinedButton.styleFrom(
+                      side: BorderSide(color: Paper.borderStrong),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: _busy ? null : widget.onDone,
+                    child: Text('Continue with Free · $free Sparks, +10 every 12 hours',
+                        style: sans(14, color: Paper.ink)),
                   ),
-                  onPressed: _busy ? null : widget.onDone,
-                  child: Text('Continue with Free · $free Sparks, +10 every 12 hours',
-                      style: sans(14, color: Paper.ink)),
-                ),
+                ],
 
                 if (_busy)
                   Padding(padding: EdgeInsets.only(top: 12), child: LinearProgressIndicator(color: Paper.accent)),

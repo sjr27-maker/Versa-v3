@@ -90,6 +90,7 @@ void main() {
       expect(find.text('1 MONTH FREE'), findsOneWidget);
       expect(find.byKey(const ValueKey('plans-start-trial')), findsOneWidget);
       expect(find.byKey(const ValueKey('plans-exam-pass')), findsOneWidget);
+      expect(find.byKey(const ValueKey('plans-yearly')), findsOneWidget);
 
       // no store on this platform: says where to buy, stays on the plans
       await tester.tap(find.byKey(const ValueKey('plans-start-trial')));

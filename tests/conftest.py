@@ -61,6 +61,7 @@ async def pool():
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS stage_checks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS knob_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS notes CASCADE")
         await conn.execute("DROP TABLE IF EXISTS images CASCADE")
         for table in ("direction_miss_readings", "direction_misses", "direction_predictions", "direction_events",
                       "direction_cards", "direction_sets", "direction_pools"):

@@ -25,6 +25,7 @@ String _actionLabel(String action) => switch (action) {
       'create_exam' => 'setting up an exam',
       'unit_quiz' => 'a unit quiz',
       'mock_test' => 'a mock test',
+      'generate_notes' => 'revision notes',
       _ => action.replaceAll('_', ' '),
     };
 

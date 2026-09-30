@@ -24,13 +24,17 @@ import 'directions_compass.dart';
 /// without turning the feature off -- and a minimized stage hands the options
 /// back to the chat.
 class StagePanel extends StatefulWidget {
-  const StagePanel({super.key, required this.onCollapse, this.compact = false, this.chat, this.engine});
+  const StagePanel({super.key, required this.onCollapse, this.compact = false, this.compactHeight, this.chat, this.engine});
 
   final VoidCallback onCollapse;
 
   /// True on a phone: laid out as a short strip above the chat instead of
   /// a tall column beside it (see sandbox_screen.dart's compact layout).
   final bool compact;
+
+  /// The stage's height when [compact] -- set by dragging the handle under
+  /// it (widgets/stage_split.dart). Null: the usual 280.
+  final double? compactHeight;
 
   /// The chat this stage performs for. Null = the stage runs on its own
   /// (demo skit only).
@@ -394,7 +398,7 @@ class _StagePanelState extends State<StagePanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           header,
-          compact ? SizedBox(height: 280, child: stage) : Expanded(child: stage),
+          compact ? SizedBox(height: widget.compactHeight ?? 280, child: stage) : Expanded(child: stage),
           if (_notes.isNotEmpty || _flights.isNotEmpty)
             KeyedSubtree(key: _notesKey, child: _KeepInMind(notes: _notes, compact: compact)),
         ],

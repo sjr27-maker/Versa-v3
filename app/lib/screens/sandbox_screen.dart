@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../chat_controller.dart';
 import '../models.dart';
+import '../notes/notes_api.dart';
+import '../notes/notes_sheet.dart';
 import '../picture.dart';
 import '../theme.dart';
 import '../widgets/chat_history_rail.dart';
@@ -13,6 +15,7 @@ import '../widgets/depth_breadth_pad.dart';
 import '../widgets/level_slider.dart';
 import '../widgets/message_view.dart';
 import '../widgets/stage_panel.dart';
+import '../widgets/stage_split.dart';
 import 'thinking_style_screen.dart' show showItemDetail;
 
 /// The one live mode: a chat with the full Versa loop behind it (ambiguity
@@ -28,7 +31,18 @@ class SandboxScreen extends StatelessWidget {
     if (chat == null) return const SizedBox.shrink();
     return LayoutBuilder(builder: (context, c) {
       final wide = c.maxWidth >= 1000;
-      final stageOnTop = showStagePanel && !wide && !shell.stagePanelCollapsed;
+      final stageOpen = showStagePanel && !shell.stagePanelCollapsed;
+      final chatColumn = _ChatColumn(
+        // one chat column per chat, kept when the layout around it changes
+        key: GlobalObjectKey(chat),
+        chat: chat,
+        shell: shell,
+        showStageToggle: showStagePanel && !wide,
+        showKnobsButton: !wide,
+        stageCollapsed: shell.stagePanelCollapsed,
+        optionsOnStage: stageOpen,
+        compassOnStage: wide && stageOpen,
+      );
       return Row(
         children: [
           if (wide)
@@ -46,36 +60,32 @@ class SandboxScreen extends StatelessWidget {
                     onNewChat: shell.newSandboxChat,
                     onCollapse: shell.toggleHistoryRailCollapsed,
                   ),
-          // Equal room for the stage and the chat -- both flex:1, not a
-          // fixed-width stage panel squeezed beside an Expanded chat --
-          // per the design fix: "make both the animation space and the
-          // content space equal."
-          if (wide && showStagePanel)
-            shell.stagePanelCollapsed
-                ? CollapsedRailStrip(
-                    icon: Icons.auto_awesome_rounded,
-                    tooltip: 'Show stage',
-                    onExpand: shell.toggleStagePanelCollapsed,
-                  )
-                : Expanded(child: StagePanel(chat: chat, onCollapse: shell.toggleStagePanelCollapsed)),
-          Expanded(
-            child: Column(
-              children: [
-                if (stageOnTop)
-                  StagePanel(chat: chat, compact: true, onCollapse: shell.toggleStagePanelCollapsed),
-                Expanded(
-                  child: _ChatColumn(
-                    chat: chat,
-                    shell: shell,
-                    showStageToggle: showStagePanel && !wide,
-                    showKnobsButton: !wide,
-                    stageCollapsed: shell.stagePanelCollapsed,
-                    optionsOnStage: showStagePanel && !shell.stagePanelCollapsed,
-                    compassOnStage: wide && showStagePanel && !shell.stagePanelCollapsed,
-                  ),
-                ),
-              ],
+          // The stage and the chat share the room, split where the learner
+          // drags the handle between them (widgets/stage_split.dart) --
+          // half and half to start.
+          if (wide && showStagePanel && shell.stagePanelCollapsed)
+            CollapsedRailStrip(
+              icon: Icons.auto_awesome_rounded,
+              tooltip: 'Show stage',
+              onExpand: shell.toggleStagePanelCollapsed,
             ),
+          Expanded(
+            child: stageOpen
+                ? StageSplit(
+                    wide: wide,
+                    height: shell.stageHeight,
+                    fraction: shell.stageFraction,
+                    onHeight: (h) => shell.stageHeight = h,
+                    onFraction: (f) => shell.stageFraction = f,
+                    stage: (height) => StagePanel(
+                      chat: chat,
+                      compact: !wide,
+                      compactHeight: height,
+                      onCollapse: shell.toggleStagePanelCollapsed,
+                    ),
+                    chat: chatColumn,
+                  )
+                : chatColumn,
           ),
           if (wide)
             shell.knobsRailCollapsed
@@ -94,6 +104,7 @@ class SandboxScreen extends StatelessWidget {
 
 class _ChatColumn extends StatefulWidget {
   const _ChatColumn({
+    super.key,
     required this.chat,
     required this.shell,
     this.showStageToggle = false,
@@ -364,6 +375,27 @@ class _Header extends StatelessWidget {
                 tooltip: 'Length, depth, breadth',
                 onPressed: () => _showKnobsSheet(context, chat),
                 icon: Icon(Icons.tune_rounded, color: Paper.faint, size: 20),
+              ),
+            ],
+            // Revision notes of this chat -- written only when asked (notes.py).
+            if (compact)
+              IconButton(
+                key: const ValueKey('notes-button'),
+                tooltip: 'Notes',
+                onPressed: chat.sessionId == null ? null : () => _openNotes(context, chat),
+                icon: Icon(Icons.sticky_note_2_outlined, color: Paper.faint, size: 20),
+              )
+            else ...[
+              const SizedBox(width: 8),
+              TextButton.icon(
+                key: const ValueKey('notes-button'),
+                onPressed: chat.sessionId == null ? null : () => _openNotes(context, chat),
+                icon: const Icon(Icons.sticky_note_2_outlined, size: 18),
+                label: const Text('Notes'),
+                style: TextButton.styleFrom(
+                  foregroundColor: Paper.ink,
+                  textStyle: sans(12.5, weight: FontWeight.w500),
+                ),
               ),
             ],
             SizedBox(width: compact ? 4 : 12),
@@ -650,6 +682,9 @@ class _KnobControls extends StatelessWidget {
 
 /// The knobs rail doesn't fit below the wide layout: the header's tune
 /// button opens the same controls in a sheet.
+Future<void> _openNotes(BuildContext context, ChatController chat) =>
+    showNotesSheet(context, api: NotesApi.of(chat.api), sessionId: chat.sessionId!);
+
 Future<void> _showKnobsSheet(BuildContext context, ChatController chat) {
   return showModalBottomSheet<void>(
     context: context,
