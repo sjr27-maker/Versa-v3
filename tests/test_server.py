@@ -315,7 +315,7 @@ async def test_bad_frames_get_an_error_and_the_socket_stays_usable(live, new_cha
         assert (await _turn(ws, {"type": "select_option", "option_id": "not-a-uuid"}))[-1][
             "type"
         ] == "error"
-        assert (await _turn(ws, {"type": "message", "text": "hello"}))[-1]["type"] == "done"
+        assert (await _turn(ws, {"type": "message", "text": "what is a limit?"}))[-1]["type"] == "done"
 
 
 @pytest.mark.asyncio(loop_scope="session")

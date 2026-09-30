@@ -307,7 +307,7 @@ async def test_a_learner_can_only_reach_their_own_things(clean_pool, embedding_c
                     pass
             with pytest.raises((websockets.exceptions.InvalidStatus, websockets.exceptions.ConnectionClosed)):
                 async with websockets.connect(url, subprotocols=["versa", b["token"]]) as ws:
-                    await ws.send(json.dumps({"type": "message", "text": "hi"}))
+                    await ws.send(json.dumps({"type": "message", "text": "what is a limit?"}))
                     await asyncio.wait_for(ws.recv(), timeout=5)
             async with websockets.connect(url, subprotocols=["versa", a["token"]]) as ws:
                 assert ws.subprotocol == "versa"

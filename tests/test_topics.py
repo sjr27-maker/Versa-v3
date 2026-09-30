@@ -394,3 +394,56 @@ async def test_lesson_chats_are_consolidated_like_any_other_chat(clean_pool, emb
             assert (await client.post(f"/api/sessions/{sid}/end")).json()["status"] == "scheduled"
     finally:
         await _stop(live)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_task_is_set_on_the_stage_and_done_by_answering_it(clean_pool, embedding_client):
+    """The lesson's current task, set by the stage: a scene ending in the
+    challenge, plus facts about the next lesson for idle moments. A wrong
+    answer does nothing; the right one (checked against the answer kept with
+    the activity, not the client's) completes the task and moves the bars."""
+    live = await _start(clean_pool, _llm(), embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+            lid = (await client.post("/api/learners", json={"label": "stager"})).json()["id"]
+            ex = (await client.post("/api/topic-explorations", json={"learner_id": lid, "query": "waves"})).json()
+            topic = (await client.post("/api/topics", json={
+                "learner_id": lid, "exploration_id": ex["id"], "selected_node_ids": [ex["root_nodes"][0]["id"]],
+            })).json()
+            lesson_id = topic["chapters"][0]["lessons"][0]["id"]
+            await client.post(f"/api/lessons/{lesson_id}/start")
+            lesson = (await client.get(f"/api/lessons/{lesson_id}")).json()
+            first_task = lesson["tasks"][0]
+
+            act = (await client.post(f"/api/lessons/{lesson_id}/activity")).json()
+            assert act["task_id"] == first_task["id"] and act["task_description"] == first_task["description"]
+            assert act["script"][-1]["do"] == "ask" and act["script"][-1]["answer"] == "a"
+            assert act["facts"]  # something to tell while they're idle
+
+            wrong = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                       json={"activity_id": act["activity_id"], "picked": "b"})).json()
+            assert wrong == {"correct": False, "answer": "a", "progress": None}
+            assert not (await client.get(f"/api/lessons/{lesson_id}")).json()["tasks"][0]["done"]
+
+            right = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                       json={"activity_id": act["activity_id"], "picked": "a"})).json()
+            assert right["correct"] and right["progress"]["task_id"] == first_task["id"]
+            assert right["progress"]["lesson_percent"] > 0
+            assert (await client.get(f"/api/lessons/{lesson_id}")).json()["tasks"][0]["done"]
+            again = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                       json={"activity_id": act["activity_id"], "picked": "a"})).json()
+            assert again["progress"] is None  # done once, not twice
+
+            # an activity only answers for its own lesson
+            other = (await client.post(f"/api/lessons/{uuid4()}/activity-result",
+                                       json={"activity_id": act["activity_id"], "picked": "a"}))
+            assert other.status_code == 404
+        async with clean_pool.acquire() as conn:
+            gen = await conn.fetchrow("SELECT input_json FROM topic_generations WHERE id = $1",
+                                      __import__("uuid").UUID(act["activity_id"]))
+            events = await conn.fetch("SELECT evidence FROM lesson_task_events WHERE task_id = $1",
+                                      __import__("uuid").UUID(first_task["id"]))
+        assert gen["input_json"]["prompt"].startswith("STAGE:TASK")  # recorded with its prompt
+        assert len(events) == 1 and events[0]["evidence"].startswith("did it on the stage")
+    finally:
+        await _stop(live)

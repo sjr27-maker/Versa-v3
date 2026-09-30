@@ -593,4 +593,28 @@ void main() {
       expect(transport.sent.last['type'], 'message');
     });
   });
+
+  test('chatter gets a short reply and the cards come back, still takeable', () async {
+    final (chat, transport, _) = await _started();
+    chat.send('what is a derivative?');
+    transport.emit(const TurnStart(0));
+    transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'A rate of change.', firstOutputMs: 1, totalMs: 2));
+    transport.emit(const DirectionsEvent(0, [DirectionCard(id: 'd1', text: 'Where is it used?')], setId: 's1'));
+    await _tick();
+    final answer = chat.messages.last;
+    expect(answer.directions, hasLength(1));
+
+    chat.send('thanks!');
+    expect(answer.directions, isEmpty, reason: 'typing closes them at once, as before');
+    transport.emit(const ChatterEvent("You're welcome! Pick a direction below, or ask me anything."));
+    await _tick();
+    final reply = chat.messages.last;
+    expect(reply.chatter, isTrue);
+    expect(reply.text, startsWith("You're welcome!"));
+    expect(reply.directions.map((c) => c.id), ['d1'], reason: 'nothing was passed: they come back');
+    expect(chat.canSend, isTrue);
+
+    chat.pickDirection(reply, reply.directions.first);
+    expect(transport.sent.last, {'type': 'direction', 'card_id': 'd1', 'directions': 'fork', 'continue': 'true'});
+  });
 }

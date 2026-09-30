@@ -333,8 +333,8 @@ void main() {
     expect(find.byKey(const ValueKey('chapter-percent-c1')), findsOneWidget);
     expect(tester.widget<Text>(find.byKey(const ValueKey('chapter-percent-c1'))).data, '75%');
     expect(tester.widget<Text>(find.byKey(const ValueKey('chapter-percent-c2'))).data, '0%');
-    expect(find.byKey(const ValueKey('lesson-row-l1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('lesson-row-l3')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lesson-node-l1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lesson-node-l3')), findsOneWidget);
 
     await _tapKey(tester, 'topic-progress');
     expect(find.text('YOUR PATH'), findsOneWidget);
@@ -365,7 +365,7 @@ void main() {
     final transport = await _boot(tester, h);
     await _openTopics(tester);
     await _tapKey(tester, 'topic-card-topic-1');
-    await _tapKey(tester, 'lesson-row-l3');
+    await _tapKey(tester, 'lesson-node-l3');
 
     expect(h.topicRequests.any((r) => r.url.path == '/api/lessons/l3/start'), isTrue);
     expect(find.byKey(const ValueKey('lesson-tasks')), findsOneWidget);
@@ -409,7 +409,7 @@ void main() {
     await tester.pumpAndSettle();
     await _tapKey(tester, 'mode-learn');
     await _tapKey(tester, 'topic-card-topic-1');
-    await _tapKey(tester, 'lesson-row-l3');
+    await _tapKey(tester, 'lesson-node-l3');
 
     expect(find.text('TASKS 1/4'), findsOneWidget);
     expect(find.byKey(const ValueKey('lesson-tasks')), findsOneWidget);

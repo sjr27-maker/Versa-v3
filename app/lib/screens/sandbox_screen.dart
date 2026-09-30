@@ -67,6 +67,7 @@ class SandboxScreen extends StatelessWidget {
                     chat: chat,
                     shell: shell,
                     showStageToggle: showStagePanel && !wide,
+                    showKnobsButton: !wide,
                     stageCollapsed: shell.stagePanelCollapsed,
                     optionsOnStage: showStagePanel && !shell.stagePanelCollapsed,
                     compassOnStage: wide && showStagePanel && !shell.stagePanelCollapsed,
@@ -95,6 +96,7 @@ class _ChatColumn extends StatefulWidget {
     required this.chat,
     required this.shell,
     this.showStageToggle = false,
+    this.showKnobsButton = false,
     this.stageCollapsed = false,
     this.optionsOnStage = false,
     this.compassOnStage = false,
@@ -105,6 +107,10 @@ class _ChatColumn extends StatefulWidget {
   /// Whether the header should show the phone-only icon to expand/collapse
   /// the stage panel above the chat (see sandbox_screen.dart's build).
   final bool showStageToggle;
+
+  /// No room for the knobs rail (below the wide layout): the header opens
+  /// them in a sheet instead.
+  final bool showKnobsButton;
   final bool stageCollapsed;
 
   /// The stage is open, so the character asks the ambiguity question and
@@ -200,6 +206,7 @@ class _ChatColumnState extends State<_ChatColumn> {
               chat: chat,
               shell: widget.shell,
               showStageToggle: widget.showStageToggle,
+              showKnobsButton: widget.showKnobsButton,
               stageCollapsed: widget.stageCollapsed,
             ),
             if (chat.status == ChatStatus.disconnected) _Disconnected(chat: chat),
@@ -269,11 +276,13 @@ class _Header extends StatelessWidget {
     required this.chat,
     required this.shell,
     this.showStageToggle = false,
+    this.showKnobsButton = false,
     this.stageCollapsed = false,
   });
   final ChatController chat;
   final ShellState shell;
   final bool showStageToggle;
+  final bool showKnobsButton;
   final bool stageCollapsed;
 
   @override
@@ -343,6 +352,15 @@ class _Header extends StatelessWidget {
               ),
             ),
             _StatusPill(status: chat.status, compact: compact),
+            if (showKnobsButton) ...[
+              SizedBox(width: compact ? 0 : 4),
+              IconButton(
+                key: const ValueKey('knobs-button'),
+                tooltip: 'Length, depth, breadth',
+                onPressed: () => _showKnobsSheet(context, chat),
+                icon: const Icon(Icons.tune_rounded, color: Paper.faint, size: 20),
+              ),
+            ],
             SizedBox(width: compact ? 4 : 12),
             if (compact)
               IconButton(
@@ -499,7 +517,6 @@ class _KnobsRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final app = context.watch<AppState>();
     return Container(
       width: 208,
       padding: const EdgeInsets.all(20),
@@ -524,66 +541,132 @@ class _KnobsRail extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 14),
-            _LiveKnob(
-              knobKey: const ValueKey('animations-knob'),
-              label: 'Animations',
-              detail: 'Shows the stage panel this mode reserves for it.',
-              value: app.showStagePanel,
-              onChanged: app.setShowStagePanel,
-            ),
-            const SizedBox(height: 18),
-            ListenableBuilder(
-              listenable: chat,
-              builder: (context, _) => Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  LevelSlider(
-                    sliderKey: const ValueKey('knob-length'),
-                    label: 'Length',
-                    lowLabel: 'short',
-                    highLabel: 'long',
-                    value: chat.knobs.answerLength,
-                    onChanged: (v) => chat.setKnobs(answerLength: v),
-                  ),
-                  DepthBreadthPad(
-                    padKey: const ValueKey('knob-pad'),
-                    depth: chat.knobs.depth,
-                    breadth: chat.knobs.breadth,
-                    onChanged: (d, b) => chat.setKnobs(depth: d, breadth: b),
-                  ),
-                  Text('WHERE NEXT', style: mono(10)),
-                  const SizedBox(height: 6),
-                  SegmentedButton<String>(
-                    key: const ValueKey('directions-style'),
-                    showSelectedIcon: false,
-                    style: SegmentedButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      textStyle: sans(12),
-                      selectedBackgroundColor: Paper.accentSoft,
-                      selectedForegroundColor: Paper.accentDark,
-                    ),
-                    segments: const [
-                      ButtonSegment(value: 'fork', label: Text('Fork'), tooltip: 'Links the answer ends with'),
-                      ButtonSegment(value: 'strip', label: Text('Cards'), tooltip: 'Cards below the answer'),
-                      ButtonSegment(
-                          value: 'compass', label: Text('Compass'), tooltip: 'Four ways out of the answer'),
-                    ],
-                    selected: {app.directionsStyle},
-                    onSelectionChanged: (v) => app.setDirectionsStyle(v.first),
-                  ),
-                  const SizedBox(height: 14),
-                  Text(
-                    'Moving a slider or the pad rewrites the latest answer.',
-                    style: sans(11, color: Paper.faint, height: 1.4),
-                  ),
-                ],
-              ),
-            ),
+            _KnobControls(chat: chat, pad: true),
           ],
         ),
       ),
     );
   }
+}
+
+/// The knobs themselves, shared by the rail (depth and breadth as one pad)
+/// and the phone sheet (three plain sliders -- the pad is too fiddly there).
+class _KnobControls extends StatelessWidget {
+  const _KnobControls({required this.chat, required this.pad});
+  final ChatController chat;
+  final bool pad;
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _LiveKnob(
+          knobKey: const ValueKey('animations-knob'),
+          label: 'Animations',
+          detail: 'Shows the stage panel this mode reserves for it.',
+          value: app.showStagePanel,
+          onChanged: app.setShowStagePanel,
+        ),
+        const SizedBox(height: 18),
+        ListenableBuilder(
+          listenable: chat,
+          builder: (context, _) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              LevelSlider(
+                sliderKey: const ValueKey('knob-length'),
+                label: 'Length',
+                lowLabel: 'short',
+                highLabel: 'long',
+                value: chat.knobs.answerLength,
+                onChanged: (v) => chat.setKnobs(answerLength: v),
+              ),
+              if (pad)
+                DepthBreadthPad(
+                  padKey: const ValueKey('knob-pad'),
+                  depth: chat.knobs.depth,
+                  breadth: chat.knobs.breadth,
+                  onChanged: (d, b) => chat.setKnobs(depth: d, breadth: b),
+                )
+              else ...[
+                LevelSlider(
+                  sliderKey: const ValueKey('knob-depth'),
+                  label: 'Depth',
+                  lowLabel: 'gist',
+                  highLabel: 'rigorous',
+                  value: chat.knobs.depth,
+                  onChanged: (v) => chat.setKnobs(depth: v),
+                ),
+                LevelSlider(
+                  sliderKey: const ValueKey('knob-breadth'),
+                  label: 'Breadth',
+                  lowLabel: 'focused',
+                  highLabel: 'wide',
+                  value: chat.knobs.breadth,
+                  onChanged: (v) => chat.setKnobs(breadth: v),
+                ),
+              ],
+              Text('WHERE NEXT', style: mono(10)),
+              const SizedBox(height: 6),
+              SegmentedButton<String>(
+                key: const ValueKey('directions-style'),
+                showSelectedIcon: false,
+                style: SegmentedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: sans(12),
+                  selectedBackgroundColor: Paper.accentSoft,
+                  selectedForegroundColor: Paper.accentDark,
+                ),
+                segments: const [
+                  ButtonSegment(value: 'fork', label: Text('Fork'), tooltip: 'Links the answer ends with'),
+                  ButtonSegment(value: 'strip', label: Text('Cards'), tooltip: 'Cards below the answer'),
+                  ButtonSegment(
+                      value: 'compass', label: Text('Compass'), tooltip: 'Four ways out of the answer'),
+                ],
+                selected: {app.directionsStyle},
+                onSelectionChanged: (v) => app.setDirectionsStyle(v.first),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                pad
+                    ? 'Moving a slider or the pad rewrites the latest answer.'
+                    : 'Moving a slider rewrites the latest answer.',
+                style: sans(11, color: Paper.faint, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The knobs rail doesn't fit below the wide layout: the header's tune
+/// button opens the same controls in a sheet.
+Future<void> _showKnobsSheet(BuildContext context, ChatController chat) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Paper.sliver,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (sheetContext) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('SESSION KNOBS', style: mono(10)),
+            const SizedBox(height: 14),
+            _KnobControls(chat: chat, pad: false),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 /// One real, working knob: a label, a switch, and a one-line detail — the

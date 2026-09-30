@@ -232,7 +232,7 @@ async def test_no_directions_are_offered_when_generation_fails(clean_pool, embed
             lid = (await client.post("/api/learners", json={"label": "quiet"})).json()["id"]
             sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
         async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
-            await _turn(ws, {"type": "message", "directions": True, "text": "hello"})
+            await _turn(ws, {"type": "message", "directions": True, "text": "what is a limit?"})
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(_directions_event(ws), timeout=1.5)
         async with clean_pool.acquire() as conn:
@@ -255,7 +255,7 @@ async def test_a_client_that_does_not_show_the_strip_gets_none_and_nothing_is_re
             lid = (await client.post("/api/learners", json={"label": "plain"})).json()["id"]
             sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
         async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
-            await _turn(ws, {"type": "message", "text": "hello"})
+            await _turn(ws, {"type": "message", "text": "what is a limit?"})
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(_directions_event(ws), timeout=1.5)
         async with clean_pool.acquire() as conn:
@@ -355,7 +355,7 @@ async def test_nothing_to_go_from_offers_no_strip_and_records_nothing(clean_pool
             lid = (await client.post("/api/learners", json={"label": "greeter"})).json()["id"]
             sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
         async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
-            await _turn(ws, {"type": "message", "directions": "fork", "text": "hi"})
+            await _turn(ws, {"type": "message", "directions": "fork", "text": "what is a limit?"})
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(_directions_event(ws), timeout=1.5)
         prompt = next(p for p in live.app.state.loop.suggest_directions._llm.prompts
@@ -640,5 +640,52 @@ async def test_a_miss_the_library_cannot_place_is_read_as_a_new_move(clean_pool,
             out = (await client.get(f"/api/learners/{lid}/style-patterns")).json()
         assert [(m["label"], m["times"], m["others"]) for m in out["new_moves"]] == [
             ("where the rule stops working", 1, 0)]
+    finally:
+        await _stop(live)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_chatter_gets_a_short_reply_and_leaves_everything_open(clean_pool, embedding_client, fixed_hands):
+    """"thanks!" is a reaction, not a question (chatter.py): a short reply
+    with no model call and nothing stored -- the cards stay takeable and no
+    miss is counted. An "ok" after the tutor asked something is an answer
+    and runs a normal turn."""
+    llm = _llm(**{"FINAL:ANSWER": "A derivative is a rate of change. Want an example?"})
+    live = await _start(clean_pool, llm, embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http) as client:
+            lid = (await client.post("/api/learners", json={"label": "chatty"})).json()["id"]
+            sid = (await client.post("/api/sessions", json={"learner_id": lid})).json()["session_id"]
+        async with websockets.connect(f"{live.ws}/api/sessions/{sid}/chat") as ws:
+            await _turn(ws, {"type": "message", "directions": True, "text": "what is a derivative?"})
+            offered = await _directions_event(ws)
+            prompts_before = len(llm.prompts)
+            async with clean_pool.acquire() as conn:
+                calls_before = await conn.fetchval("SELECT count(*) FROM node_calls WHERE session_id = $1",
+                                                   UUID(sid))
+
+            await ws.send(json.dumps({"type": "message", "directions": True, "text": "thanks!"}))
+            frame = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
+            assert frame["type"] == "chatter" and frame["kind"] == "thanks"
+            assert "Pick a direction below" in frame["text"]  # the cards are still there
+            await live.loop.wait_for_background_tasks()
+            assert len(llm.prompts) == prompts_before  # no model call
+            async with clean_pool.acquire() as conn:
+                assert await conn.fetchval("SELECT count(*) FROM node_calls WHERE session_id = $1",
+                                           UUID(sid)) == calls_before
+                assert not await conn.fetchval(
+                    "SELECT count(*) FROM direction_events e JOIN direction_sets s ON s.id = e.set_id "
+                    "WHERE s.session_id = $1", UUID(sid))  # not a pass
+                assert not await conn.fetchval("SELECT count(*) FROM direction_misses")  # not a miss
+
+            # the cards are still takeable
+            events = await _turn(ws, {"type": "direction", "directions": True,
+                                      "card_id": offered["cards"][0]["id"]})
+            assert events[0] == {"type": "turn_start", "turn_index": 1} and events[-1]["type"] == "done"
+            await _directions_event(ws)
+
+            # "Want an example?" -> "ok" is a yes: a normal turn
+            events = await _turn(ws, {"type": "message", "directions": True, "text": "ok"})
+            assert events[0] == {"type": "turn_start", "turn_index": 2} and events[-1]["type"] == "done"
     finally:
         await _stop(live)

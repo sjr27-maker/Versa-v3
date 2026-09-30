@@ -17,7 +17,7 @@ from versa.chatter import classify, reply
     ("hi", "greeting"), ("hello there", None), ("hey", "greeting"), ("good morning", "greeting"),
     ("bye", "farewell"), ("see you", "farewell"), ("good night", "farewell"),
     ("hmm", "filler"), ("oh", "filler"), ("wow", "filler"),
-    ("nice", "praise"), ("great, well explained", "praise"), ("oh wow so cool", "filler"),
+    ("nice", "praise"), ("great, well explained", "praise"), ("oh wow so cool", "ack"),
     ("👍", "emoji"), ("🙂🙂", "emoji"), ("!!!", "emoji"),
 ])
 def test_reactions_are_chatter(text, kind):

@@ -613,6 +613,40 @@ void main() {
       expect(find.byKey(const ValueKey('rewriting')), findsNothing);
     });
 
+    testWidgets('on a phone, the knobs open from a header icon as three plain sliders',
+        (tester) async {
+      _size(tester, 400, 800);
+      final backend = FakeBackend();
+      final transport = FakeTransport();
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await tester.tap(find.byType(NavigationDestination).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('mode-sandbox')));
+      await tester.pumpAndSettle();
+
+      await _type(tester, 'what is a derivative?');
+      transport.emit(const Done(turnIndex: 0, kind: 'answer', text: 'the original answer', firstOutputMs: 1, totalMs: 2));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('knob-length')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('knobs-button')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('knob-length')), findsOneWidget);
+      expect(find.byKey(const ValueKey('knob-depth')), findsOneWidget);
+      expect(find.byKey(const ValueKey('knob-breadth')), findsOneWidget);
+      expect(find.byKey(const ValueKey('knob-pad')), findsNothing);
+
+      await tester.drag(find.byKey(const ValueKey('knob-breadth')), const Offset(-60, 0));
+      await tester.pump();
+      final shown = int.parse(
+          (tester.widget(find.byKey(const ValueKey("[<'knob-breadth'>]-value"))) as Text).data!);
+      expect(shown, lessThan(50));
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump();
+      expect(backend.patchedKnobs.single['breadth'], shown);
+      expect(transport.sent.last['type'], 'regenerate');
+    });
+
     testWidgets('the depth x breadth pad moves both levels at once and rewrites with new directions',
         (tester) async {
       _size(tester, 1400, 900);

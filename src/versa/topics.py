@@ -65,6 +65,7 @@ from pydantic import BaseModel, Field
 from versa import embeddings as _embeddings
 from versa import profiles as _profiles
 from versa import resources as _resources
+from versa import stage as _stage
 from versa.audit import TranscriptStore, to_jsonable
 from versa.claims import ClaimStore
 from versa.embeddings import EmbeddingClient
@@ -1159,6 +1160,44 @@ class PlanLessons:
         return lessons
 
 
+class ActivityOut(BaseModel):
+    """A lesson task set by the stage: the scene that leads into it (ending
+    in the challenge, an `ask`), and facts about the next lesson for the
+    slime to tell while the learner is idle."""
+    activity_id: UUID
+    task_id: UUID
+    task_description: str
+    script: list[dict]
+    facts: list[str]
+    next_lesson: str | None = None
+
+
+class ActivityResultIn(BaseModel):
+    activity_id: UUID
+    picked: str
+
+
+class ActivityResultOut(BaseModel):
+    correct: bool
+    answer: str
+    # the same payload a `progress` frame carries, when the task got done
+    progress: dict | None = None
+
+
+class LessonActivity:
+    """One fast-tier call: the lesson's CURRENT task turned into something the
+    learner does on the stage (stage.task_stage_prompt), plus idle facts
+    about the next lesson. Recorded to topic_generations with its prompt and
+    output (the precedent every topic-mode call follows)."""
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+
+    async def run(self, prompt: str) -> tuple[str, tuple | None]:
+        raw = await self._llm.complete(prompt)
+        return raw, _stage.parse_task_activity(raw)
+
+
 class LessonJudgement(BaseModel):
     completed: bool = False
     evidence: str = ""
@@ -1826,6 +1865,88 @@ def build_topics_router(
             },
         )
         return LessonStartOut(session_id=session_id)
+
+    activity = LessonActivity(llm)
+
+    def _next_lesson_title(course: CourseProgress, lesson_id: UUID) -> str | None:
+        order = list(course.lessons)
+        i = order.index(lesson_id)
+        return course.lessons[order[i + 1]].lesson.title if i + 1 < len(order) else None
+
+    @router.post("/lessons/{lesson_id}/activity", response_model=ActivityOut)
+    async def lesson_activity(lesson_id: UUID) -> ActivityOut:
+        """The lesson's current task, set by the stage: the slime acts out a
+        scene and ends by asking the learner to do the task (an on-stage
+        question with one right answer). Answer it with /activity-result."""
+        course, _ = await lesson_view(lesson_id)
+        lp = course.lessons[lesson_id]
+        current = lp.current_task
+        if current is None:
+            raise HTTPException(status_code=409, detail="every task in this lesson is done")
+        context, _ = render_lesson_context(course, lesson_id)
+        upcoming = _next_lesson_title(course, lesson_id)
+        prompt = _stage.task_stage_prompt(context, current.kind, current.description, upcoming or "")
+        learner_id = course.topic.learner_id
+        inputs = {"lesson_id": lesson_id, "task_id": current.id, "prompt": prompt}
+        try:
+            raw, parsed = await activity.run(prompt)
+        except Exception as exc:  # noqa: BLE001 -- recorded, then reported
+            await store.record_generation(learner_id=learner_id, exploration_id=None, node_name="LessonActivity",
+                                          input_json=inputs, output_json=None, error=repr(exc))
+            raise HTTPException(status_code=502, detail="could not set this task on the stage") from None
+        if parsed is None:
+            await store.record_generation(learner_id=learner_id, exploration_id=None, node_name="LessonActivity",
+                                          input_json=inputs, output_json={"raw": raw}, error="no answerable ask")
+            raise HTTPException(status_code=502, detail="could not set this task on the stage")
+        script, ask, facts = parsed
+        gid = await store.record_generation(
+            learner_id=learner_id, exploration_id=None, node_name="LessonActivity", input_json=inputs,
+            output_json={"raw": raw, "script": script, "facts": facts, "question": ask["question"],
+                         "answer": ask["answer"]},
+            error=None,
+        )
+        return ActivityOut(activity_id=gid, task_id=current.id, task_description=current.description,
+                           script=script, facts=facts, next_lesson=upcoming)
+
+    @router.post("/lessons/{lesson_id}/activity-result", response_model=ActivityResultOut)
+    async def lesson_activity_result(lesson_id: UUID, body: ActivityResultIn) -> ActivityResultOut:
+        """The learner answered a stage-set task. Right: the task is done --
+        what they did on the stage is the evidence -- and the bars move.
+        The right answer is the one kept with the activity, never the
+        client's word for it."""
+        row = await pool.fetchrow(
+            "SELECT learner_id, node_name, input_json, output_json FROM topic_generations WHERE id = $1",
+            body.activity_id,
+        )
+        if (row is None or row["node_name"] != "LessonActivity" or row["output_json"] is None
+                or str(row["input_json"].get("lesson_id")) != str(lesson_id)):
+            raise HTTPException(status_code=404, detail="unknown activity")
+        out = row["output_json"]
+        correct = body.picked == out.get("answer")
+        course, lesson = await lesson_view(lesson_id)
+        task_id = UUID(str(row["input_json"]["task_id"]))
+        lp = course.lessons[lesson_id]
+        if not correct or task_id in lp.done_task_ids:
+            return ActivityResultOut(correct=correct, answer=str(out.get("answer")))
+        choice = next((c.get("text") for c in (out.get("script") or [{}])[-1].get("choices", [])
+                       if c.get("id") == body.picked), body.picked)
+        await store.add_task_event(
+            lesson_id=lesson_id, task_id=task_id, session_id=lesson.session_id, turn_index=None,
+            event="completed", evidence=_clip(f"did it on the stage: {out.get('question')} -> {choice}", 300),
+        )
+        task = next(t for t in lp.tasks if t.id == task_id)
+        await store.add_signal(
+            learner_id=course.topic.learner_id, kind="task_completed", topic_id=course.topic.id,
+            payload={"lesson_id": lesson_id, "task_id": task_id, "task_kind": task.kind, "on_stage": True,
+                     "evidence": f"answered the stage's challenge: {choice}"},
+        )
+        updated = await load_course(store, course.topic.id)
+        ulp = updated.lessons[lesson_id]
+        return ActivityResultOut(correct=True, answer=str(out.get("answer")), progress={
+            "lesson_id": str(lesson_id), "task_id": str(task_id), "lesson_percent": ulp.percent,
+            "chapter_percent": updated.chapter_percent(ulp.lesson.chapter_id),
+            "topic_percent": updated.percent, "lesson_status": ulp.status,
+        })
 
     router.topic_service = service  # type: ignore[attr-defined]  # exposed for tests
     return router

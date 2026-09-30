@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import 'path_screen.dart';
 import 'topic_api.dart';
 import 'topic_models.dart';
 import 'topic_widgets.dart';
@@ -97,6 +98,9 @@ class _TopicScreenState extends State<TopicScreen> {
                     _ChapterCard(
                       number: i + 1,
                       chapter: t.chapters[i],
+                      // the road keeps winding across chapters
+                      startIndex: [for (final c in t.chapters.take(i)) c.lessons.length].fold(0, (a, b) => a + b),
+                      nextLessonId: nextLessonIdOf(t),
                       folded: _folded.contains(t.chapters[i].id),
                       onFold: () => setState(() {
                         final id = t.chapters[i].id;
@@ -169,10 +173,14 @@ class _ChapterCard extends StatelessWidget {
     required this.folded,
     required this.onFold,
     required this.onLesson,
+    required this.startIndex,
+    required this.nextLessonId,
   });
 
   final int number;
   final Chapter chapter;
+  final int startIndex;
+  final String? nextLessonId;
   final bool folded;
   final VoidCallback onFold;
   final void Function(String lessonId) onLesson;
@@ -241,55 +249,21 @@ class _ChapterCard extends StatelessWidget {
             child: folded
                 ? const SizedBox(width: double.infinity)
                 : Padding(
+                    // the chapter's lessons as circles on a winding path;
+                    // any of them opens (nothing is locked)
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                    child: Column(children: [
-                      for (final l in chapter.lessons) _LessonRow(lesson: l, onTap: () => onLesson(l.id)),
-                    ]),
+                    child: LessonPath(
+                      lessons: chapter.lessons,
+                      startIndex: startIndex,
+                      nextLessonId: nextLessonId,
+                      onOpen: onLesson,
+                      keyPrefix: 'lesson',
+                      nodeSize: 60,
+                      rowHeight: 124,
+                    ),
                   ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _LessonRow extends StatelessWidget {
-  const _LessonRow({required this.lesson, required this.onTap});
-  final LessonSummary lesson;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      key: ValueKey('lesson-row-${lesson.id}'),
-      borderRadius: BorderRadius.circular(10),
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(children: [
-          LessonStatusIcon(status: lesson.status),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(lesson.title, style: sans(14, weight: FontWeight.w500)),
-                if (lesson.objective.isNotEmpty)
-                  Text(lesson.objective,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: sans(12, color: Paper.muted)),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          SizedBox(width: 90, child: TopicProgressBar(percent: lesson.percent, height: 6)),
-          SizedBox(
-            width: 44,
-            child: Text('${lesson.percent}%',
-                textAlign: TextAlign.right, style: sans(12, color: Paper.body)),
-          ),
-          const SizedBox(width: 4),
-          const Icon(Icons.chevron_right_rounded, size: 18, color: Paper.faint),
-        ]),
       ),
     );
   }

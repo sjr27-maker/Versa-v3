@@ -766,3 +766,66 @@ class StageCheckStore:
             "SELECT * FROM stage_checks WHERE session_id = $1 ORDER BY created_at", session_id,
         )
         return [dict(r) for r in rows]
+
+
+# ------------------------------------------------------- a lesson task, set on stage
+
+TASK_FACTS = 3
+
+
+def task_stage_prompt(lesson_context: str, task_kind: str, task_description: str, next_lesson: str) -> str:
+    """A lesson's current task, SET by the stage instead of listed: the slime
+    acts out a short scene that leads into a challenge, and the learner does
+    it by answering on the stage. Plus a few true facts about the next lesson
+    for the slime to tell while the learner is idle."""
+    upcoming = (
+        f"The NEXT lesson is {next_lesson!r}. Write {TASK_FACTS} short, true, surprising facts that make "
+        "someone curious about it (one sentence each, under 110 characters, no questions).\n"
+        if next_lesson else "There is no next lesson: facts may be about this lesson's idea instead.\n"
+    )
+    return (
+        "STAGE:TASK\n"
+        "You direct a tiny animated stage beside a lesson. The star is a cute, expressive green slime: "
+        "funny, a bit dramatic, endearing.\n\n"
+        f"{_VOCABULARY}\n"
+        f"{lesson_context}\n"
+        f"The student's CURRENT task ({task_kind}): {task_description}\n\n"
+        "Turn this task into something the student DOES on the stage, instead of reading it as an "
+        "instruction. Act out a short scene (8-16 actions) that sets up the situation the task is about "
+        "-- the slime runs into a problem it needs help with -- then end with ONE ask: the challenge "
+        "itself, phrased as the slime asking the student for help, with 2-4 short choices and exactly "
+        "one right (named in \"answer\"). Answering it right must show the student did what the task "
+        "asks (understood it, applied it, or worked it out). In \"then\", react to each choice (right: "
+        "proud + a small effect; wrong: a kind one-line hint that ends happy).\n"
+        "- Show first, then ask: the scene must give everything needed to answer, and the ask comes "
+        "last. Keep 2-4 things on stage, the same ids throughout.\n"
+        "- For maths, show the real thing (graph kit, typeset math), never emoji for numbers.\n"
+        f"{upcoming}\n"
+        'Respond with ONE JSON object: {"script": [ ...stage actions, the ask last... ], '
+        '"facts": ["...", "..."]}'
+    )
+
+
+def parse_task_activity(raw: str) -> tuple[list[dict], dict, list[str]] | None:
+    """The model's reply -> (the script, its final ask, the idle facts), or
+    None when there is no answerable ask at the end (then there is no task to
+    do on stage, and the lesson falls back to the chat)."""
+    text = _strip_fences(raw or "")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start:end + 1])
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("script"), list):
+        return None
+    actions = [a for a in (sanitize_action(r) for r in data["script"][:MAX_ACTIONS]) if a is not None]
+    asks = [a for a in actions if a["do"] == "ask"]
+    if not asks or "answer" not in asks[-1]:
+        return None
+    ask = asks[-1]
+    # only the last ask counts, and nothing after it
+    actions = [a for a in actions[:actions.index(ask)] if a["do"] != "ask"] + [ask]
+    facts = [" ".join(str(f).split())[:140] for f in (data.get("facts") or []) if isinstance(f, str) and f.strip()]
+    return actions, ask, facts[:TASK_FACTS + 2]

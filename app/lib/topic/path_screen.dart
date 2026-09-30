@@ -52,19 +52,6 @@ class _PathScreenState extends State<PathScreen> {
     _reload();
   }
 
-  /// The lesson to point at: the first one in progress, else the first one
-  /// not started.
-  String? _nextLessonId(Topic t) {
-    final lessons = [for (final c in t.chapters) ...c.lessons];
-    for (final l in lessons) {
-      if (l.status == LessonStatus.inProgress) return l.id;
-    }
-    for (final l in lessons) {
-      if (l.status == LessonStatus.notStarted) return l.id;
-    }
-    return null;
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = _topic;
@@ -122,7 +109,7 @@ class _PathScreenState extends State<PathScreen> {
                   constraints: const BoxConstraints(maxWidth: 720),
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 20, 20, 80),
-                    child: _PathBody(topic: t, nextLessonId: _nextLessonId(t), onOpen: _open),
+                    child: _PathBody(topic: t, nextLessonId: nextLessonIdOf(t), onOpen: _open),
                   ),
                 ),
               ),
@@ -131,6 +118,19 @@ class _PathScreenState extends State<PathScreen> {
       ),
     );
   }
+}
+
+/// The lesson to point at: the first one in progress, else the first one
+/// not started.
+String? nextLessonIdOf(Topic t) {
+  final lessons = [for (final c in t.chapters) ...c.lessons];
+  for (final l in lessons) {
+    if (l.status == LessonStatus.inProgress) return l.id;
+  }
+  for (final l in lessons) {
+    if (l.status == LessonStatus.notStarted) return l.id;
+  }
+  return null;
 }
 
 class _PathBody extends StatelessWidget {
@@ -146,7 +146,7 @@ class _PathBody extends StatelessWidget {
     for (var i = 0; i < topic.chapters.length; i++) {
       final c = topic.chapters[i];
       children.add(_ChapterBanner(number: i + 1, chapter: c));
-      children.add(_PathSection(
+      children.add(LessonPath(
         lessons: c.lessons,
         startIndex: offsetIndex,
         nextLessonId: nextLessonId,
@@ -211,14 +211,25 @@ class _ChapterBanner extends StatelessWidget {
   }
 }
 
-/// One chapter's stretch of road.
-class _PathSection extends StatelessWidget {
-  const _PathSection({
+/// One chapter's stretch of road: its lessons as circles on a winding path
+/// (Duolingo as the reference). Used on the path page and under every chapter
+/// of the course. `keyPrefix` names the nodes (`path` gives `path-node-<id>`,
+/// `path-state-<status>-<id>`).
+class LessonPath extends StatelessWidget {
+  const LessonPath({
+    super.key,
     required this.lessons,
     required this.startIndex,
     required this.nextLessonId,
     required this.onOpen,
+    this.keyPrefix = 'path',
+    this.nodeSize = 72,
+    this.rowHeight = 150,
   });
+
+  final String keyPrefix;
+  final double nodeSize;
+  final double rowHeight;
 
   final List<LessonSummary> lessons;
 
@@ -228,8 +239,6 @@ class _PathSection extends StatelessWidget {
   final String? nextLessonId;
   final void Function(String lessonId) onOpen;
 
-  static const _rowHeight = 150.0;
-  static const _nodeSize = 72.0;
   static const _top = 36.0;
 
   // The road's sway, one step per lesson.
@@ -243,9 +252,9 @@ class _PathSection extends StatelessWidget {
       final centers = [
         for (var i = 0; i < lessons.length; i++)
           Offset(width / 2 + _sway[(startIndex + i) % _sway.length] * amplitude,
-              _top + _nodeSize / 2 + i * _rowHeight),
+              _top + nodeSize / 2 + i * rowHeight),
       ];
-      final height = lessons.isEmpty ? 24.0 : _top + lessons.length * _rowHeight;
+      final height = lessons.isEmpty ? 24.0 : _top + lessons.length * rowHeight;
       return SizedBox(
         height: height,
         child: Stack(
@@ -262,9 +271,11 @@ class _PathSection extends StatelessWidget {
             for (var i = 0; i < lessons.length; i++)
               Positioned(
                 left: centers[i].dx - 80,
-                top: centers[i].dy - (_nodeSize + 16) / 2,
+                top: centers[i].dy - (nodeSize + 16) / 2,
                 width: 160,
                 child: _PathNode(
+                  size: nodeSize,
+                  keyPrefix: keyPrefix,
                   lesson: lessons[i],
                   isNext: lessons[i].id == nextLessonId,
                   onTap: () => onOpen(lessons[i].id),
@@ -307,7 +318,15 @@ class _RoadPainter extends CustomPainter {
 }
 
 class _PathNode extends StatefulWidget {
-  const _PathNode({required this.lesson, required this.isNext, required this.onTap});
+  const _PathNode({
+    required this.lesson,
+    required this.isNext,
+    required this.onTap,
+    required this.size,
+    required this.keyPrefix,
+  });
+  final double size;
+  final String keyPrefix;
   final LessonSummary lesson;
   final bool isNext;
   final VoidCallback onTap;
@@ -322,7 +341,7 @@ class _PathNodeState extends State<_PathNode> {
   @override
   Widget build(BuildContext context) {
     final l = widget.lesson;
-    const size = _PathSection._nodeSize;
+    final size = widget.size;
     final (Color fill, Color rim, IconData icon, Color iconColor) = switch (l.status) {
       LessonStatus.done => (Paper.olive, const Color(0xFF557A47), Icons.check_rounded, Colors.white),
       LessonStatus.inProgress => (Paper.accent, Paper.accentDark, Icons.play_arrow_rounded, Colors.white),
@@ -339,7 +358,7 @@ class _PathNodeState extends State<_PathNode> {
         border: Border.all(color: rim, width: 2),
         boxShadow: _pressed ? null : [BoxShadow(color: rim, offset: const Offset(0, 5))],
       ),
-      child: Icon(icon, color: iconColor, size: 32),
+      child: Icon(icon, color: iconColor, size: size * 0.44),
     );
     final ring = l.status == LessonStatus.inProgress
         ? SizedBox(
@@ -356,14 +375,14 @@ class _PathNodeState extends State<_PathNode> {
               ),
             ),
           )
-        : const SizedBox(width: size + 16, height: size + 16);
+        : SizedBox(width: size + 16, height: size + 16);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         MouseRegion(
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
-            key: ValueKey('path-node-${l.id}'),
+            key: ValueKey('${widget.keyPrefix}-node-${l.id}'),
             onTapDown: (_) => setState(() => _pressed = true),
             onTapCancel: () => setState(() => _pressed = false),
             onTapUp: (_) => setState(() => _pressed = false),
@@ -371,7 +390,7 @@ class _PathNodeState extends State<_PathNode> {
             child: Tooltip(
               message: '${l.title} · ${l.percent}%',
               child: SizedBox(
-                key: ValueKey('path-state-${l.status.name}-${l.id}'),
+                key: ValueKey('${widget.keyPrefix}-state-${l.status.name}-${l.id}'),
                 width: size + 16,
                 height: size + 16,
                 child: Stack(alignment: Alignment.center, children: [ring, circle]),
@@ -382,7 +401,7 @@ class _PathNodeState extends State<_PathNode> {
         const SizedBox(height: 2),
         if (widget.isNext)
           Container(
-            key: const ValueKey('path-next'),
+            key: ValueKey('${widget.keyPrefix}-next'),
             margin: const EdgeInsets.only(bottom: 3),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(color: Paper.ink, borderRadius: BorderRadius.circular(100)),

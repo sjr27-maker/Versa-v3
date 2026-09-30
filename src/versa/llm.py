@@ -333,6 +333,19 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
             "age_fits_stage": True, "note": None,
         }
     ),
+    # topics.LessonActivity: a lesson task set on the stage (stage.task_stage_prompt).
+    "STAGE:TASK": json.dumps({
+        "script": [
+            {"do": "plan", "cast": {"box": "a box of apples"}, "shows": "counting the apples"},
+            {"do": "spawn", "id": "box", "kind": "emoji", "label": "\U0001F34E", "x": 0.6},
+            {"do": "say", "text": "How many do I have now?"},
+            {"do": "ask", "question": "Help me count: 2 apples plus 3 more?",
+             "choices": [{"id": "a", "text": "5"}, {"id": "b", "text": "6"}], "answer": "a",
+             "then": {"a": [{"do": "emote", "mood": "proud"}], "b": [{"do": "say", "text": "Count again!"}]}},
+        ],
+        "facts": ["The next lesson has a trick that saves half the work.",
+                  "People used this idea long before it had a name."],
+    }),
     # directions.py ReadMiss: a missed question the library can't place.
     "DIRECTIONS:READ_MISS": json.dumps(
         {"same_subject": True, "type": "none", "move": "where the rule stops working"}

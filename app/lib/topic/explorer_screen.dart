@@ -1,8 +1,11 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import 'branch_tree.dart';
 import 'topic_api.dart';
 import 'topic_models.dart';
 import 'topic_screen.dart';
@@ -35,6 +38,9 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
 
   /// Nodes waiting on the server for (more) children.
   final Set<String> _branching = {};
+
+  /// The branch whose new children are growing in right now.
+  String? _growing;
   final _title = TextEditingController();
   bool _building = false;
 
@@ -86,7 +92,11 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
 
   Future<void> _branch(TopicNode node, {bool more = false}) async {
     if (!more && node.expanded) {
-      setState(() => _open.contains(node.id) ? _open.remove(node.id) : _open.add(node.id));
+      setState(() {
+        if (_open.remove(node.id)) return;
+        _open.add(node.id);
+        _growing = node.id; // showing again grows them back in
+      });
       return;
     }
     setState(() => _branching.add(node.id));
@@ -98,6 +108,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
         node.children.addAll(children.where((c) => !known.contains(c.id)));
         node.expanded = true;
         _open.add(node.id);
+        _growing = node.id;
       });
     } catch (e) {
       if (mounted) {
@@ -153,100 +164,80 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
 
   Widget _body() {
     final e = _exploration;
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(32, 32, 32, 40),
-      child: Align(
-        alignment: Alignment.topLeft,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 900),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              PageHeading(
-                eyebrow: switch (e?.sourceKind) {
-                  'pdf' => 'FROM YOUR PDF',
-                  'link' => 'FROM A WEB PAGE',
-                  _ => 'EXPLORE A TOPIC',
-                },
-                title: e?.suggestedTitle ?? widget.label,
-                onBack: () => Navigator.of(context).maybePop(),
-                backKey: const ValueKey('explorer-back'),
+    final header = Padding(
+      padding: const EdgeInsets.fromLTRB(32, 32, 32, 12),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            PageHeading(
+              eyebrow: switch (e?.sourceKind) {
+                'pdf' => 'FROM YOUR PDF',
+                'link' => 'FROM A WEB PAGE',
+                _ => 'EXPLORE A TOPIC',
+              },
+              title: e?.suggestedTitle ?? widget.label,
+              onBack: () => Navigator.of(context).maybePop(),
+              backKey: const ValueKey('explorer-back'),
+            ),
+            const SizedBox(height: 10),
+            if (_loading)
+              _Mapping(label: widget.label)
+            else if (_error != null)
+              RetryLine(message: 'Could not map this: $_error', onRetry: _start)
+            else ...[
+              Text(
+                'Tap a branch to tick it into your course. Branch any of them further and watch it grow; '
+                'branches can keep branching.',
+                style: sans(13.5, color: Paper.muted, height: 1.5),
               ),
-              const SizedBox(height: 10),
-              if (_loading)
-                _Mapping(label: widget.label)
-              else if (_error != null)
-                RetryLine(message: 'Could not map this: $_error', onRetry: _start)
-              else ...[
-                Text(
-                  'Tick what you want in your course. Open any branch to see what\'s inside it; '
-                  'branches can keep branching.',
-                  style: sans(13.5, color: Paper.muted, height: 1.5),
-                ),
-                const SizedBox(height: 8),
-                ShapedByNote(sources: e!.personalizedBy),
+              const SizedBox(height: 8),
+              ShapedByNote(sources: e!.personalizedBy),
+              if (e.rootNodes.isEmpty) ...[
                 const SizedBox(height: 18),
-                if (e.rootNodes.isEmpty)
-                  Text('Nothing came back for this. Try other words.', style: sans(13.5, color: Paper.muted))
-                else
-                  for (var i = 0; i < e.rootNodes.length; i++)
-                    _Appear(index: i, child: _nodeTree(e.rootNodes[i])),
+                Text('Nothing came back for this. Try other words.', style: sans(13.5, color: Paper.muted)),
               ],
             ],
-          ),
+          ],
         ),
       ),
     );
-  }
-
-  Widget _nodeTree(TopicNode node) {
-    final open = _open.contains(node.id);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _NodeRow(
-          node: node,
-          selected: _selected.contains(node.id),
-          open: open,
-          branching: _branching.contains(node.id),
-          onToggle: () => _toggle(node),
-          onBranch: () => _branch(node),
-        ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topLeft,
-          child: !open
-              ? const SizedBox(width: double.infinity)
-              : Container(
-                  margin: const EdgeInsets.only(left: 21, bottom: 6),
-                  padding: const EdgeInsets.only(left: 16),
-                  decoration: const BoxDecoration(
-                    border: Border(left: BorderSide(color: Paper.accentLine, width: 2)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      for (var i = 0; i < node.children.length; i++)
-                        _Appear(key: ValueKey('appear-${node.children[i].id}'), index: i, child: _nodeTree(node.children[i])),
-                      if (node.children.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Text('This branch doesn\'t split further.', style: sans(12.5, color: Paper.faint)),
-                        ),
-                      TextButton.icon(
-                        key: ValueKey('more-${node.id}'),
-                        onPressed: _branching.contains(node.id) ? null : () => _branch(node, more: true),
-                        icon: const Icon(Icons.add_rounded, size: 16),
-                        label: const Text('More branches'),
-                        style: TextButton.styleFrom(foregroundColor: Paper.muted, textStyle: sans(12.5)),
-                      ),
-                    ],
+    final showTree = !_loading && _error == null && e != null && e.rootNodes.isNotEmpty;
+    return LayoutBuilder(builder: (context, c) {
+      return SingleChildScrollView(
+        key: const ValueKey('branch-tree-scroll'),
+        padding: const EdgeInsets.only(bottom: 40),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Align(alignment: Alignment.topLeft, child: header),
+            if (showTree)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: ConstrainedBox(
+                  // a narrow tree sits in the middle of the screen
+                  constraints: BoxConstraints(minWidth: math.max(0, c.maxWidth - 24)),
+                  child: Center(
+                    child: BranchTree(
+                      title: e.suggestedTitle.isEmpty ? widget.label : e.suggestedTitle,
+                      roots: e.rootNodes,
+                      open: _open,
+                      selected: _selected,
+                      branching: _branching,
+                      growing: _growing,
+                      onToggle: _toggle,
+                      onBranch: (n) => _branch(n),
+                      onMore: (n) => _branch(n, more: true),
+                    ),
                   ),
                 ),
+              ),
+          ],
         ),
-      ],
-    );
+      );
+    });
   }
 
   Widget _bottomBar() {
@@ -315,109 +306,6 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
           hint,
         ]);
       }),
-    );
-  }
-}
-
-class _NodeRow extends StatelessWidget {
-  const _NodeRow({
-    required this.node,
-    required this.selected,
-    required this.open,
-    required this.branching,
-    required this.onToggle,
-    required this.onBranch,
-  });
-
-  final TopicNode node;
-  final bool selected;
-  final bool open;
-  final bool branching;
-  final VoidCallback onToggle;
-  final VoidCallback onBranch;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.fromLTRB(4, 8, 8, 8),
-      decoration: BoxDecoration(
-        color: selected ? Paper.accentSoft : Paper.card,
-        border: Border.all(color: selected ? Paper.accent : Paper.border, width: selected ? 1.5 : 1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Checkbox(
-            key: ValueKey('select-${node.id}'),
-            value: selected,
-            activeColor: Paper.accent,
-            onChanged: (_) => onToggle(),
-          ),
-          Expanded(
-            child: InkWell(
-              onTap: onToggle,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 10, right: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(node.title, style: sans(14.5, weight: FontWeight.w600)),
-                    if (node.summary.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(node.summary, style: sans(12.5, color: Paper.muted, height: 1.45)),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: branching
-                ? const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: SizedBox(
-                        width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Paper.accent)),
-                  )
-                : TextButton.icon(
-                    key: ValueKey('branch-${node.id}'),
-                    onPressed: onBranch,
-                    icon: AnimatedRotation(
-                      turns: open ? 0.5 : 0,
-                      duration: const Duration(milliseconds: 220),
-                      child: const Icon(Icons.expand_more_rounded, size: 18),
-                    ),
-                    label: Text(open ? 'Hide' : (node.expanded ? 'Show branches' : 'Branch further')),
-                    style: TextButton.styleFrom(foregroundColor: Paper.accent, textStyle: sans(12.5)),
-                  ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// A child fading and rising into place, a little after the one above it.
-class _Appear extends StatelessWidget {
-  const _Appear({super.key, required this.index, required this.child});
-  final int index;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final ms = 240 + 60 * index.clamp(0, 8);
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: ms),
-      curve: Interval((60 * index.clamp(0, 8)) / ms, 1, curve: Curves.easeOutCubic),
-      builder: (context, v, child) => Opacity(
-        opacity: v,
-        child: Transform.translate(offset: Offset(0, (1 - v) * 10), child: child),
-      ),
-      child: child,
     );
   }
 }
