@@ -464,20 +464,20 @@ async def test_finishing_a_lesson_pays_back(clean_pool, embedding_client):
                     quiz = (await client.post(f"/api/lessons/{lesson_id}/activity")).json()
                     if "activity_id" not in quiz:
                         break
-                    await client.post(f"/api/lessons/{lesson_id}/activity-result",
-                                      json={"activity_id": quiz["activity_id"], "picked": "a"})
-                await live.loop.wait_for_background_tasks()
-                while True:
-                    try:
-                        event = json.loads(await asyncio.wait_for(ws.recv(), timeout=1.5))
-                    except TimeoutError:
-                        break
-                    if event["type"] == "progress":
-                        statuses.append(event["lesson_status"])
-                    elif event["type"] == "sparks_reward":
-                        rewards.append(event)
-                if "done" in statuses:
+                    res = (await client.post(f"/api/lessons/{lesson_id}/activity-result",
+                                             json={"activity_id": quiz["activity_id"], "picked": "a"})).json()
+                statuses.append(res["progress"]["lesson_status"])
+                if statuses[-1] == "done":
                     break
+            # the reward for finishing arrives on the chat, a moment after the tap
+            await live.loop.wait_for_background_tasks()
+            while not rewards:
+                try:
+                    event = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
+                except TimeoutError:
+                    break
+                if event["type"] == "sparks_reward":
+                    rewards.append(event)
         assert statuses[-1] == "done"
         assert rewards == [{"type": "sparks_reward", "reason": "lesson_completed",
                             "amount": REWARDS["lesson_completed"]}]

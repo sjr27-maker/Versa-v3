@@ -42,6 +42,7 @@ class AppState extends ChangeNotifier {
   static const _kStagePanel = 'show_stage_panel';
   static const _kDirections = 'directions_style';
   static const _kTheme = 'theme';
+  static const _kProfileSkipped = 'profile_skipped_';
   static String _kPlansSeen(String learnerId) => 'plans_seen_$learnerId';
 
   /// Show the plans (billing/plans_screen.dart) once to each learner before
@@ -79,10 +80,12 @@ class AppState extends ChangeNotifier {
   bool showStagePanel = false;
 
   /// How "where this could go" shows under answers (server: directions.py):
-  /// 'fork' -- links the answer ends with, a tap continues the same answer --
-  /// or 'strip' -- cards below it, a tap asks as a new message. This device's
-  /// choice; every set records which one was actually shown.
-  String directionsStyle = 'fork';
+  /// 'compass' -- one card per family around the answer, the default on a
+  /// first open (2026-10-01) -- 'fork' -- links the answer ends with, a tap
+  /// continues the same answer -- or 'strip' -- cards below it, a tap asks as
+  /// a new message. This device's choice, kept once made; every set records
+  /// which one was actually shown.
+  String directionsStyle = 'compass';
 
   /// The colour theme (theme.dart's PaperPalette ids): this device's choice.
   String get themeId => Paper.palette.id;
@@ -103,10 +106,21 @@ class AppState extends ChangeNotifier {
   /// The account's email, when it signed in with one.
   String? email;
 
+  /// How this account signed in: 'dev' (a Versa team tester), 'judge', or
+  /// Firebase's method. Null on an open server.
+  String? signInMethod;
+
+  /// A tester or judge -- signed in by name -- may skip the sign-up profile.
+  bool get isTester => signInMethod == 'dev' || signInMethod == 'judge';
+
+  /// They chose "Skip for now" on this device (kept per account).
+  bool _profileSkipped = false;
+
   StreamSubscription<void>? _expiry;
 
   /// Asked once after the first sign-in, before the plans and the app.
-  bool get needsProfile => learner != null && (authConfig?.required ?? false) && !profileComplete;
+  bool get needsProfile =>
+      learner != null && (authConfig?.required ?? false) && !profileComplete && !(isTester && _profileSkipped);
 
   Future<void> load() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -114,8 +128,8 @@ class AppState extends ChangeNotifier {
     showStagePanel = _prefs!.getBool(_kStagePanel) ?? false;
     directionsStyle = switch (_prefs!.getString(_kDirections)) {
       'strip' => 'strip',
-      'compass' => 'compass',
-      _ => 'fork',
+      'fork' => 'fork',
+      _ => 'compass', // nothing chosen yet: the compass
     };
     Paper.palette = PaperPalette.byId(_prefs!.getString(_kTheme));
     _expiry ??= api.session.expired.listen((_) {
@@ -150,7 +164,7 @@ class AppState extends ChangeNotifier {
       api.session.token = token;
       try {
         final me = await api.me();
-        _become(me.learner, profileComplete: me.profileComplete, email: me.email);
+        _become(me.learner, profileComplete: me.profileComplete, email: me.email, signInMethod: me.signInMethod);
       } on SignedOut {
         await _forget();
       } catch (_) {
@@ -171,10 +185,12 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _become(Learner who, {required bool profileComplete, String? email}) {
+  void _become(Learner who, {required bool profileComplete, String? email, String? signInMethod}) {
     learner = who;
     this.profileComplete = profileComplete;
     this.email = email;
+    this.signInMethod = signInMethod;
+    _profileSkipped = _prefs?.getBool('$_kProfileSkipped${who.id}') ?? false;
     sparks.signedIn(who.id);
   }
 
@@ -189,7 +205,8 @@ class AppState extends ChangeNotifier {
   Future<void> _signedIn(SignInResult result, {String? email}) async {
     api.session.token = result.token;
     await _prefs!.setString(_kToken, result.token);
-    _become(result.learner, profileComplete: result.profileComplete, email: email);
+    _become(result.learner, profileComplete: result.profileComplete, email: email,
+        signInMethod: result.signInMethod);
     notifyListeners();
   }
 
@@ -218,6 +235,20 @@ class AppState extends ChangeNotifier {
   /// The Versa team's testers, by name.
   Future<void> signInAsTester(String name, {String? code}) async {
     await _signedIn(await api.signInAsTester(name.trim(), code: code));
+  }
+
+  /// A judge: any name, plus the shared judge code.
+  Future<void> signInAsJudge(String name, String code) async {
+    await _signedIn(await api.signInAsJudge(name.trim(), code.trim()));
+  }
+
+  /// A tester or judge skips the sign-up profile (on this device, for this
+  /// account); it stays reachable from Settings.
+  Future<void> skipProfile() async {
+    if (!isTester || learner == null) return;
+    _profileSkipped = true;
+    await _prefs?.setBool('$_kProfileSkipped${learner!.id}', true);
+    notifyListeners();
   }
 
   /// The sign-up profile was saved: on to the plans and the app.
@@ -274,7 +305,7 @@ class AppState extends ChangeNotifier {
   }
 
   void setDirectionsStyle(String value) {
-    directionsStyle = value == 'strip' || value == 'compass' ? value : 'fork';
+    directionsStyle = value == 'strip' || value == 'fork' ? value : 'compass';
     _prefs?.setString(_kDirections, directionsStyle);
     notifyListeners();
   }

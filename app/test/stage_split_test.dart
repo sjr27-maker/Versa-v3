@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:versa_app/widgets/stage_split.dart';
@@ -41,9 +42,11 @@ void main() {
 
     // a tap stretches it all the way (room for the options), a second brings it back
     await tester.tap(find.byKey(const ValueKey('stage-resize')));
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50)); // a tap waits out a double-tap
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, 800 - 260);
     await tester.tap(find.byKey(const ValueKey('stage-resize')));
+    await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50)); // a tap waits out a double-tap
     await tester.pumpAndSettle();
     expect(tester.getSize(find.byKey(const ValueKey('stage'))).height, StageSplit.defaultHeight);
     expect(tester.takeException(), isNull);

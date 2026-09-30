@@ -544,6 +544,11 @@ PHOTO_RULES = (
     "up: spawn it, the slime looks at it and reacts to what is in it (a say naming it). Then point "
     "at parts of it with arrows and labels, work through it beside it, and remove it (or move it "
     "aside) when the scene moves on. Never describe what isn't in it.\n"
+    "If it is the student's HANDWRITTEN NOTES: the scene explains THEIR notes. Hold the page "
+    "up, then take its points in the order they wrote them -- for each, point at it on the "
+    "page and rebuild it on the stage (their formula, their diagram, their arrow between two "
+    "ideas) so it comes alive. Where the answer finds a slip in the notes, show it on their "
+    "version and then the fix; never swap their notes for a different outline.\n"
 )
 
 
@@ -934,3 +939,123 @@ def parse_task_activity(raw: str) -> tuple[list[dict], dict, list[str]] | None:
         ask["form"] = data["kind"]
     facts = [" ".join(str(f).split())[:140] for f in (data.get("facts") or []) if isinstance(f, str) and f.strip()]
     return actions, ask, facts[:TASK_FACTS + 2]
+
+
+# ------------------------------------------------------- an exam question, set on stage
+
+
+def exam_scene_prompt(exam_title: str, unit_title: str, question: str, choices: list[str],
+                      skill: str | None, form: str | None, mock: bool) -> str:
+    """Exam preparation (exams.py): one question set up on the stage -- a short,
+    FOCUSED scene that makes the situation visible, ending with the slime
+    asking it. It never shows, hints at or reacts to the answer: the question
+    is graded elsewhere (and in a mock not until hand-in)."""
+    tested = f"It tests {skill}" + (f", as a {form}" if form else "") + ".\n" if skill else ""
+    if choices:
+        listing = "".join(f"  {i}. {c}\n" for i, c in enumerate(choices))
+        ending = (
+            "End with ONE ask: the question itself, as the slime asks it, with exactly these choices "
+            "in this order, their ids \"0\", \"1\", ... -- no \"answer\", no \"then\":\n" + listing
+        )
+    else:
+        ending = ("It is a written answer: end with the slime turning to the student with a short say "
+                  "inviting their answer (no ask).\n")
+    return (
+        "EXAM:SCENE\n"
+        "You direct a tiny animated stage beside an exam practice question. The star is a green slime -- "
+        "here calm and focused: exam mode, no gags, at most one small smile.\n\n"
+        f"{_VOCABULARY}\n"
+        f"Exam: {exam_title}. Unit: {unit_title}.\n"
+        f"The question: {question}\n{tested}"
+        + ("This is a timed MOCK TEST: keep it brief (6-10 actions).\n" if mock else
+           "Keep it short (8-14 actions).\n")
+        + "Set the question up visually: show the situation it is about -- the objects, the graph, the "
+        "diagram, the steps -- so the student can SEE what is being asked. Label what the question names. "
+        "NEVER show, hint at or act out the answer, never mark any choice, never react as if something "
+        "were right. For maths use the graph kit and typeset math.\n"
+        f"{ending}"
+        'Respond with ONE JSON object: {"script": [ ...stage actions... ]}'
+    )
+
+
+def parse_exam_scene(raw: str, choices: list[str], question: str) -> list[dict]:
+    """The scene, made safe for an exam: every action sanitized, any ask the
+    model wrote dropped, and -- for a choice question -- the ask put back at
+    the end with the question's OWN choices and no answer or reactions, so
+    the stage can never give the answer away. Empty on an unreadable reply."""
+    text = _strip_fences(raw or "")
+    start, end = text.find("{"), text.rfind("}")
+    actions: list[dict] = []
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(repair_latex_escapes(text[start:end + 1]))
+        except ValueError:
+            data = {}
+        script = data.get("script") if isinstance(data, dict) else None
+        actions = [a for a in (sanitize_action(r) for r in (script or [])[:MAX_ACTIONS])
+                   if a is not None and a["do"] != "ask"]
+    if not actions:
+        # the model wrote the stage's usual one-action-per-line form instead
+        actions = [a for a in parse_script_lines(text) if a["do"] != "ask"]
+    if choices:
+        actions.append({
+            "do": "ask", "question": question[:200],
+            "choices": [{"id": str(i), "text": c[:80]} for i, c in enumerate(choices)],
+        })
+    return actions
+
+
+# ------------------------------------------------------- an exam warm-up, before the questions
+
+
+def exam_warmup_prompt(exam_title: str, unit_title: str, unit_summary: str, detail: str, excerpt: str,
+                       brief: bool) -> str:
+    """Exam preparation (exams.py): before a quiz or test on a chapter, a short
+    warm-up -- the few things to have fresh in mind, one worked example, and
+    the slime acting the central idea out -- so the student starts warm, not
+    cold. It explains; it never asks (the questions come next)."""
+    source = f"The exam is based on this material -- stay inside it:\n<<<\n{excerpt}\n>>>\n" if excerpt else ""
+    extra = f"It includes: {detail}\n" if detail else ""
+    size = ("3 points and a one-line example (this is one of several chapters before a mock test)"
+            if brief else "3-5 points and one short worked example")
+    return (
+        "EXAM:WARMUP\n"
+        "A student is about to be tested on one chapter. Warm them up first: a quick, clear refresher of "
+        "what they need fresh in mind -- not a full lesson, and never a question.\n"
+        f"Exam: {exam_title}\nChapter: {unit_title} -- {unit_summary}\n{extra}{source}\n"
+        f"- `points`: {size}: the key ideas, rules or definitions this chapter is tested on, each ONE short "
+        "sentence that states it, most important first.\n"
+        "- `formula`: the chapter's central formula as LaTeX without dollar signs, or null if it has none.\n"
+        "- `example`: a short worked example applying the main idea (numbers and steps when it is "
+        "quantitative), or null.\n"
+        "- `script`: 10-18 stage actions in which the slime -- calm and clear, one small smile at most -- "
+        "shows the central idea: the objects involved, cause and effect, a graph for anything quantitative, "
+        "a pinned note for each key point. No ask, no quiz: this part explains.\n\n"
+        f"{_VOCABULARY}\n"
+        'Respond with ONE JSON object: {"points": ["..."], "formula": "..." or null, '
+        '"example": "..." or null, "script": [ ...stage actions... ]}'
+    )
+
+
+def parse_exam_warmup(raw: str) -> dict | None:
+    """The warm-up: points (at least one), formula, example and a safe script
+    with no asks. None when the reply has no usable points."""
+    text = _strip_fences(raw or "")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(repair_latex_escapes(text[start:end + 1]))
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    points = [" ".join(str(p).split())[:300] for p in (data.get("points") or []) if isinstance(p, str) and p.strip()]
+    if not points:
+        return None
+    formula = " ".join(str(data.get("formula") or "").split()).strip("$ ") or None
+    example = " ".join(str(data.get("example") or "").split())[:800] or None
+    raw_script = data.get("script") if isinstance(data.get("script"), list) else []
+    script = [a for a in (sanitize_action(r) for r in raw_script[:MAX_ACTIONS])
+              if a is not None and a["do"] != "ask"]
+    return {"points": points[:5], "formula": formula, "example": example, "script": script}

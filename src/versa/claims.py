@@ -825,9 +825,9 @@ class ClaimStore:
         """Every claim, across every learner -- for cross-learner batch
         analysis (score_predictions.py's calibration check) where the
         question is "does confidence track correctness in general,"
-        not "what does this one learner's model look like." Same
-        precedent as population_patterns.py reading across learners for
-        its own batch job."""
+        not "what does this one learner's model look like." An operator
+        report only: nothing it computes is written back or fed into any
+        learner's model."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("SELECT * FROM claims ORDER BY created_at")
         return [self._row_to_claim(r) for r in rows]

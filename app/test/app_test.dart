@@ -151,13 +151,14 @@ void main() {
       expect(find.byKey(const ValueKey('nav-Home')), findsNothing);
     });
 
-    testWidgets('Modes: all four are live', (tester) async {
+    testWidgets('Modes: all four are open, with no badge', (tester) async {
       _size(tester, 1400, 900);
       await _boot(tester, backend: FakeBackend(), prefs: {'learner_label': 'Asha'});
       await tester.tap(find.byKey(const ValueKey('nav-Modes')));
       await tester.pumpAndSettle();
 
-      expect(find.text('LIVE'), findsNWidgets(4));
+      expect(find.text('LIVE'), findsNothing);
+      expect(find.byKey(const ValueKey('mode-learn')), findsOneWidget);
       expect(find.text('COMING SOON'), findsNothing);
     });
 
@@ -233,7 +234,7 @@ void main() {
       // a facet is folded into its fact: one card, "also seen as"
       expect(find.text('Takes the more concrete card on offer (lean +0.55).'), findsNothing);
       expect(find.byKey(const ValueKey('facets-way_in-example')), findsOneWidget);
-      expect(find.text('CONFIRMED'), findsOneWidget);
+      expect(find.text('CLEAR PATTERN'), findsOneWidget);
       expect(find.text('EMERGING · 0 OF 1 CHECKS'), findsOneWidget);
       expect(find.textContaining('4 different topics'), findsNothing);
       // tapping a fact opens it drawn as a sky, with its checks beneath
@@ -293,7 +294,7 @@ void main() {
       _size(tester, 1400, 900);
       final transport = FakeTransport();
       await _boot(tester,
-          backend: FakeBackend(), transport: transport, prefs: {'learner_label': 'Asha'});
+          backend: FakeBackend(), transport: transport, prefs: {'learner_label': 'Asha', 'directions_style': 'fork'});
       await _openSandbox(tester);
 
       await _type(tester, 'can you help me with derivatives?');
@@ -677,7 +678,7 @@ void main() {
       _size(tester, 1400, 900);
       final backend = FakeBackend();
       final transport = FakeTransport();
-      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha', 'directions_style': 'fork'});
       await _openSandbox(tester);
       await tester.pumpAndSettle();
 
@@ -710,7 +711,7 @@ void main() {
       _size(tester, 1400, 900);
       final backend = FakeBackend();
       final transport = FakeTransport();
-      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha'});
+      await _boot(tester, backend: backend, transport: transport, prefs: {'learner_label': 'Asha', 'directions_style': 'fork'});
       await _openSandbox(tester);
       await tester.pumpAndSettle();
 
@@ -846,6 +847,20 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('more-directions')), findsNothing);
       expect(find.text('Where engineers use it'), findsOneWidget, reason: 'the last hand stays');
+    });
+
+    test('a first open explores with the compass; a style once chosen is kept', () async {
+      SharedPreferences.setMockInitialValues({});
+      final fresh = AppState(api: FakeBackend().api);
+      await fresh.load();
+      expect(fresh.directionsStyle, 'compass');
+
+      SharedPreferences.setMockInitialValues({'directions_style': 'fork'});
+      final chosen = AppState(api: FakeBackend().api);
+      await chosen.load();
+      expect(chosen.directionsStyle, 'fork');
+      chosen.setDirectionsStyle('nonsense');
+      expect(chosen.directionsStyle, 'compass');
     });
 
     testWidgets('the compass puts one card per family around the answer, and a tap takes it', (tester) async {

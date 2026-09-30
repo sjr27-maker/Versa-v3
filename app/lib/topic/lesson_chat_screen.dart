@@ -152,7 +152,10 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
     return LayoutBuilder(builder: (context, c) {
       final wide = c.maxWidth >= 1000;
       final stageOpen = showStage && !shell.stagePanelCollapsed;
-      final tasks = _TaskPanel(lesson: lesson, chat: chat, justDone: _justDone);
+      // On a phone the sliders move to a sheet behind the header's tune button:
+      // in the task strip the depth x breadth pad took the whole screen and
+      // pushed the chat out of sight.
+      final tasks = _TaskPanel(lesson: lesson, chat: chat, justDone: _justDone, knobs: wide);
       final column = _LessonChatColumn(
         key: GlobalObjectKey(chat),
         lesson: lesson,
@@ -160,6 +163,7 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
         quiz: _quiz,
         optionsOnStage: stageOpen,
         showStageToggle: showStage && !wide,
+        showKnobsButton: !wide,
         stageCollapsed: shell.stagePanelCollapsed,
         onToggleStage: shell.toggleStagePanelCollapsed,
         compactTasks: wide
@@ -225,6 +229,7 @@ class _LessonChatColumn extends StatefulWidget {
     required this.stageCollapsed,
     required this.onToggleStage,
     this.compactTasks,
+    this.showKnobsButton = false,
     this.quiz,
   });
 
@@ -236,6 +241,7 @@ class _LessonChatColumn extends StatefulWidget {
   final bool stageCollapsed;
   final VoidCallback onToggleStage;
   final Widget? compactTasks;
+  final bool showKnobsButton;
 
   @override
   State<_LessonChatColumn> createState() => _LessonChatColumnState();
@@ -304,6 +310,7 @@ class _LessonChatColumnState extends State<_LessonChatColumn> {
             lesson: lesson,
             chat: chat,
             showStageToggle: widget.showStageToggle,
+            showKnobsButton: widget.showKnobsButton,
             stageCollapsed: widget.stageCollapsed,
             onToggleStage: widget.onToggleStage,
           ),
@@ -385,11 +392,13 @@ class _LessonHeader extends StatelessWidget {
     required this.showStageToggle,
     required this.stageCollapsed,
     required this.onToggleStage,
+    this.showKnobsButton = false,
   });
 
   final Lesson lesson;
   final ChatController chat;
   final bool showStageToggle;
+  final bool showKnobsButton;
   final bool stageCollapsed;
   final VoidCallback onToggleStage;
 
@@ -437,9 +446,16 @@ class _LessonHeader extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         SizedBox(
-          width: 120,
+          width: showKnobsButton ? 72 : 120,
           child: PercentRow(percent: lesson.percent, height: 6, labelKey: const ValueKey('lesson-header-percent')),
         ),
+        if (showKnobsButton)
+          IconButton(
+            key: const ValueKey('lesson-knobs'),
+            tooltip: 'Length, depth and breadth',
+            onPressed: () => _showLessonKnobs(context, chat),
+            icon: Icon(Icons.tune_rounded, color: Paper.faint, size: 20),
+          ),
         // Revision notes of this lesson chat -- written only when asked (notes.py).
         IconButton(
           key: const ValueKey('lesson-notes'),
@@ -514,10 +530,14 @@ class _LessonIntro extends StatelessWidget {
 /// The lesson's tasks (the last is always the end-of-lesson questions), its
 /// progress, where it sits in the course, and the sliders.
 class _TaskPanel extends StatelessWidget {
-  const _TaskPanel({required this.lesson, required this.chat, required this.justDone});
+  const _TaskPanel({required this.lesson, required this.chat, required this.justDone, required this.knobs});
   final Lesson lesson;
   final ChatController chat;
   final String? justDone;
+
+  /// The sliders under the tasks (the wide side panel); on a phone they are
+  /// in a sheet instead (_showLessonKnobs).
+  final bool knobs;
 
   @override
   Widget build(BuildContext context) {
@@ -555,35 +575,88 @@ class _TaskPanel extends StatelessWidget {
             PercentRow(percent: lesson.topicPercent!, height: 5, labelKey: const ValueKey('lesson-topic-percent')),
           ],
         ],
-        const SizedBox(height: 16),
-        const Divider(),
-        const SizedBox(height: 10),
-        ListenableBuilder(
-          listenable: chat,
-          builder: (context, _) => Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              LevelSlider(
-                sliderKey: const ValueKey('lesson-knob-length'),
-                label: 'Length',
-                lowLabel: 'short',
-                highLabel: 'long',
-                value: chat.knobs.answerLength,
-                onChanged: (v) => chat.setKnobs(answerLength: v),
-              ),
+        if (knobs) ...[
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 10),
+          _LessonKnobs(chat: chat, pad: true),
+        ],
+      ],
+    );
+  }
+}
+
+/// The lesson's length / depth / breadth: the pad beside the chat on a wide
+/// screen, plain sliders in the phone sheet.
+class _LessonKnobs extends StatelessWidget {
+  const _LessonKnobs({required this.chat, required this.pad});
+  final ChatController chat;
+  final bool pad;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: chat,
+        builder: (context, _) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LevelSlider(
+              sliderKey: const ValueKey('lesson-knob-length'),
+              label: 'Length',
+              lowLabel: 'short',
+              highLabel: 'long',
+              value: chat.knobs.answerLength,
+              onChanged: (v) => chat.setKnobs(answerLength: v),
+            ),
+            if (pad)
               DepthBreadthPad(
                 padKey: const ValueKey('lesson-knob-pad'),
                 depth: chat.knobs.depth,
                 breadth: chat.knobs.breadth,
                 onChanged: (d, b) => chat.setKnobs(depth: d, breadth: b),
+              )
+            else ...[
+              LevelSlider(
+                sliderKey: const ValueKey('lesson-knob-depth'),
+                label: 'Depth',
+                lowLabel: 'gist',
+                highLabel: 'rigorous',
+                value: chat.knobs.depth,
+                onChanged: (v) => chat.setKnobs(depth: v),
               ),
+              LevelSlider(
+                sliderKey: const ValueKey('lesson-knob-breadth'),
+                label: 'Breadth',
+                lowLabel: 'focused',
+                highLabel: 'wide',
+                value: chat.knobs.breadth,
+                onChanged: (v) => chat.setKnobs(breadth: v),
+              ),
+            ],
+          ],
+        ),
+      );
+}
+
+Future<void> _showLessonKnobs(BuildContext context, ChatController chat) => showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Paper.sliver,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          key: const ValueKey('lesson-knobs-sheet'),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('LENGTH, DEPTH AND BREADTH', style: mono(10)),
+              const SizedBox(height: 14),
+              _LessonKnobs(chat: chat, pad: false),
             ],
           ),
         ),
-      ],
+      ),
     );
-  }
-}
 
 class _TaskRow extends StatelessWidget {
   const _TaskRow({required this.task, required this.current, required this.flash});

@@ -1,7 +1,7 @@
 """retrieval.py — deterministic, no LLM. Covers stage1's inspectable
 SQL construction, stage2's tagging by embedding column, stage3's
-dedup/scoring, and the unified retrieve()'s fixed 4+1 quota assembly
-and population readability gate.
+dedup/scoring, and the unified retrieve() -- this learner's own history
+only (the population scope was removed 2026-10-01).
 """
 
 from datetime import UTC
@@ -267,9 +267,12 @@ async def test_stage2_excludes_interactions_with_no_abstract_from_abstract_key(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_retrieve_assembles_fixed_quotas_not_a_merged_top_five(
+async def test_retrieve_returns_only_this_learners_own_history_never_population_patterns(
     interaction_recorder, transcript, learner_id, clean_pool
 ):
+    """2026-10-01: no learner's data feeds another's. Even a stored,
+    highly-supported population pattern matching the query exactly is never
+    retrieved -- only this learner's own interactions, up to the quota."""
     session_id = await transcript.create_session(learner_id)
     q = "what is a derivative?"
     last = None
@@ -279,10 +282,6 @@ async def test_retrieve_assembles_fixed_quotas_not_a_merged_top_five(
             question_text=q, question_author=QuestionAuthor.LEARNER,
             originating_question=None, did_branch=False, response_text=f"answer {i}",
         )
-
-    # A population pattern with the SAME vector and very high support --
-    # if scopes were pooled and truncated to 5, this alone (highest
-    # support) could crowd out all personal candidates.
     async with clean_pool.acquire() as conn:
         await conn.execute(
             """
@@ -294,36 +293,9 @@ async def test_retrieve_assembles_fixed_quotas_not_a_merged_top_five(
         )
 
     result = await retrieve(clean_pool, learner_id, last.question_embedding, config=RetrievalConfig())
-    scopes = [c.scope for c in result.candidates]
-    assert scopes.count("personal") == 4, "personal quota must be filled independently of population support"
-    assert scopes.count("population") == 1
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_retrieve_excludes_unreadable_population_patterns(
-    interaction_recorder, transcript, learner_id, clean_pool
-):
-    session_id = await transcript.create_session(learner_id)
-    interaction = await interaction_recorder.record(
-        learner_id=learner_id, session_id=session_id, turn_number=0,
-        question_text="q", question_author=QuestionAuthor.LEARNER,
-        originating_question=None, did_branch=False, response_text="a",
-    )
-    async with clean_pool.acquire() as conn:
-        # too few distinct learners
-        await conn.execute(
-            "INSERT INTO population_patterns (id, abstract_form, embedding, support_count, distinct_learner_count, max_per_learner_share) VALUES ($1,$2,$3,$4,$5,$6)",
-            uuid4(), "unreadable: too few learners", interaction.question_embedding, 100, 3, 0.1,
-        )
-        # one learner dominates
-        await conn.execute(
-            "INSERT INTO population_patterns (id, abstract_form, embedding, support_count, distinct_learner_count, max_per_learner_share) VALUES ($1,$2,$3,$4,$5,$6)",
-            uuid4(), "unreadable: one learner dominates", interaction.question_embedding, 100, 25, 0.9,
-        )
-    result = await retrieve(clean_pool, learner_id, interaction.question_embedding, config=RetrievalConfig())
-    texts = [c.text for c in result.candidates]
-    assert "unreadable: too few learners" not in texts
-    assert "unreadable: one learner dominates" not in texts
+    assert [c.scope for c in result.candidates] == ["personal"] * 4
+    assert all(c.learner_id == learner_id for c in result.candidates)
+    assert "a readable population pattern" not in [c.text for c in result.candidates]
 
 
 @pytest.mark.asyncio(loop_scope="session")

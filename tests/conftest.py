@@ -35,6 +35,15 @@ MIGRATIONS_DIR = (
 MIGRATIONS = sorted(MIGRATIONS_DIR.glob("*.sql"))
 
 
+@pytest.fixture(autouse=True)
+def _exam_choices_in_order(monkeypatch):
+    """Exam choices keep the order they were written in, so a test knows
+    which one is right (exams.SHUFFLE_CHOICES; test_exams checks the shuffle)."""
+    import versa.exams
+
+    monkeypatch.setattr(versa.exams, "SHUFFLE_CHOICES", False)
+
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     return "asyncio"
@@ -67,7 +76,7 @@ async def pool():
                       "direction_cards", "direction_sets", "direction_pools"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         for table in ("exam_plan_item_events", "exam_plan_items", "exam_plans",
-                      "exam_answers", "exam_submissions", "exam_questions", "exam_quizzes",
+                      "exam_checks", "exam_answers", "exam_submissions", "exam_questions", "exam_quizzes",
                       "exam_generations", "exam_units", "exams"):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         await conn.execute("DROP TABLE IF EXISTS lesson_task_events CASCADE")
@@ -180,7 +189,7 @@ async def clean_pool(pool):
             "direction_miss_readings, direction_misses, direction_predictions, direction_events, direction_cards, "
             "direction_sets, direction_pools, "
             "exam_plan_item_events, exam_plan_items, exam_plans, "
-            "exam_answers, exam_submissions, exam_questions, exam_quizzes, exam_generations, "
+            "exam_checks, exam_answers, exam_submissions, exam_questions, exam_quizzes, exam_generations, "
             "exam_units, exams, "
             "claim_statements, claim_evidence, claims, stated_preferences, reference_bindings, "
             "turn_outcomes, "

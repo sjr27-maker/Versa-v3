@@ -11,6 +11,7 @@ import '../widgets/message_view.dart' show PictureNote;
 import '../widgets/rich_text.dart';
 import 'exam_api.dart';
 import 'exam_models.dart';
+import 'exam_stage.dart';
 
 /// The wall clock a mock counts down against (not the number of timer ticks,
 /// which a browser throttles in a background tab). Replaceable in tests.
@@ -18,11 +19,14 @@ DateTime Function() quizClock = DateTime.now;
 
 /// Taking a unit quiz or a mock test, then its marked results. [load]
 /// starts a new sitting (or reopens one), so the questions are written while
-/// [label] shows.
+/// [label] shows. [warmUp], for a new sitting: every chapter it covers is
+/// warmed up first -- key points, formula, a worked example, the slime acting
+/// it out -- and the sitting (and a mock's clock) starts only after it.
 class QuizScreen extends StatefulWidget {
-  const QuizScreen({super.key, required this.label, required this.load});
+  const QuizScreen({super.key, required this.label, required this.load, this.warmUp});
   final String label;
   final Future<Quiz> Function() load;
+  final Future<List<WarmUp>> Function()? warmUp;
 
   @override
   State<QuizScreen> createState() => _QuizScreenState();
@@ -31,6 +35,11 @@ class QuizScreen extends StatefulWidget {
 class _QuizScreenState extends State<QuizScreen> {
   Quiz? _quiz;
   Object? _error;
+
+  /// The warm-up before the questions: every chapter, one at a time.
+  List<WarmUp>? _warm;
+  int _warmAt = 0;
+  bool _warmedUp = false;
   bool _submitting = false;
   final Map<String, String> _answers = {};
   final Map<String, TextEditingController> _typed = {};
@@ -70,6 +79,20 @@ class _QuizScreenState extends State<QuizScreen> {
   DateTime? _deadline;
   int? _secondsLeft;
 
+  /// The question showing (one at a time).
+  int _at = 0;
+
+  /// Unit quiz: taps checked so far, and ones being checked.
+  final Map<String, QuizCheck> _checks = {};
+  final Set<String> _checking = {};
+
+  /// Questions the stage has asked (the card then offers the choices), and
+  /// each question's scene, fetched once.
+  final Set<String> _asked = {};
+  final Map<String, Future<List<Map<String, dynamic>>>> _scenes = {};
+  Timer? _askFallback;
+  final _stageKey = GlobalKey<ExamStageState>();
+
   ExamApi get _api => ExamApi.of(context.read<AppState>().api);
 
   @override
@@ -81,6 +104,7 @@ class _QuizScreenState extends State<QuizScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _askFallback?.cancel();
     for (final c in _typed.values) {
       c.dispose();
     }
@@ -90,10 +114,25 @@ class _QuizScreenState extends State<QuizScreen> {
   Future<void> _start() async {
     setState(() => _error = null);
     try {
+      final warmUp = widget.warmUp;
+      if (warmUp != null && !_warmedUp) {
+        final warm = await warmUp();
+        if (mounted) setState(() => _warm = warm);
+        return;
+      }
       _show(await widget.load());
     } catch (e) {
       if (mounted) setState(() => _error = e);
     }
+  }
+
+  /// Warmed up: now the questions are written (and a mock's clock starts).
+  void _begin() {
+    setState(() {
+      _warmedUp = true;
+      _warm = null;
+    });
+    _start();
   }
 
   void _show(Quiz quiz) {
@@ -101,6 +140,15 @@ class _QuizScreenState extends State<QuizScreen> {
     _ticker?.cancel();
     setState(() {
       _quiz = quiz;
+      for (final c in quiz.checks) {
+        _checks[c.questionId] = c;
+        _answers[c.questionId] = c.response;
+      }
+      if (!quiz.submitted && _at == 0 && quiz.checks.isNotEmpty) {
+        // reopened: carry on from the first question not yet answered
+        final next = quiz.questions.indexWhere((q) => !_checks.containsKey(q.id));
+        _at = next < 0 ? quiz.questions.length - 1 : next;
+      }
       final left = quiz.secondsLeft;
       if (!quiz.submitted && left != null) {
         // count down from what the server says is left, not from our own clock
@@ -112,6 +160,7 @@ class _QuizScreenState extends State<QuizScreen> {
         _secondsLeft = null;
       }
     });
+    if (!quiz.submitted) _startAskFallback();
     if (!quiz.submitted && quiz.secondsLeft == 0) _submit(timeUp: true);
   }
 
@@ -194,12 +243,21 @@ class _QuizScreenState extends State<QuizScreen> {
         padding: const EdgeInsets.all(32),
         child: RetryLine(message: '$_error', onRetry: _start),
       );
+    } else if (_warm != null) {
+      body = SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(32, 32, 32, 60),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 820), child: _warmUpView(_warm!)),
+        ),
+      );
     } else if (quiz == null) {
       body = Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           CircularProgressIndicator(color: Paper.accent),
           const SizedBox(height: 16),
-          Text(widget.label, key: const ValueKey('quiz-loading'), style: sans(14, color: Paper.body)),
+          Text(widget.warmUp != null && !_warmedUp ? 'Getting your warm-up ready…' : widget.label,
+              key: const ValueKey('quiz-loading'), style: sans(14, color: Paper.body)),
         ]),
       );
     } else {
@@ -229,19 +287,134 @@ class _QuizScreenState extends State<QuizScreen> {
     return Container(color: Paper.surface, child: body);
   }
 
+  // ------------------------------------------------------------- warming up
+
+  /// A chapter's warm-up: what to have fresh in mind before its questions.
+  Widget _warmUpView(List<WarmUp> warm) {
+    final w = warm[_warmAt];
+    final last = _warmAt == warm.length - 1;
+    final stageOn = context.watch<AppState>().showStagePanel;
+    final pill = RoundedRectangleBorder(borderRadius: BorderRadius.circular(100));
+    final heading = sans(12.5, color: Paper.faint, weight: FontWeight.w600);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      PageHeading(
+        eyebrow: warm.length > 1 ? 'WARM-UP · CHAPTER ${_warmAt + 1} OF ${warm.length}' : 'WARM-UP',
+        title: w.unitTitle,
+        onBack: () => Navigator.of(context).maybePop(),
+        backKey: const ValueKey('quiz-back'),
+      ),
+      const SizedBox(height: 6),
+      Text('A quick refresher before the questions.', style: sans(13.5, color: Paper.muted)),
+      const SizedBox(height: 16),
+      if (stageOn && w.script.isNotEmpty) ...[
+        WarmUpStage(key: ValueKey('warmup-stage-${w.unitId}'), script: w.script),
+        const SizedBox(height: 16),
+      ],
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 280),
+        child: Container(
+          key: ValueKey('warmup-${w.unitId}'),
+          width: double.infinity,
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Paper.card,
+            border: Border.all(color: Paper.border),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('KEEP IN MIND', style: heading),
+            const SizedBox(height: 8),
+            for (final p in w.points)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Icon(Icons.check_rounded, size: 16, color: Paper.accent),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(child: RichMessageText(p, selectable: false, style: sans(14.5, height: 1.45))),
+                ]),
+              ),
+            if (w.formula != null) ...[
+              const SizedBox(height: 6),
+              Text('FORMULA', style: heading),
+              const SizedBox(height: 6),
+              Container(
+                key: const ValueKey('warmup-formula'),
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                decoration: BoxDecoration(color: Paper.accentSoft, borderRadius: BorderRadius.circular(10)),
+                child: RichMessageText('\$\$${w.formula}\$\$', selectable: false, style: sans(15)),
+              ),
+            ],
+            if (w.example != null) ...[
+              const SizedBox(height: 12),
+              Text('WORKED EXAMPLE', style: heading),
+              const SizedBox(height: 6),
+              RichMessageText(w.example!, selectable: false, style: sans(14, height: 1.5, color: Paper.body)),
+            ],
+          ]),
+        ),
+      ),
+      const SizedBox(height: 18),
+      Row(children: [
+        if (_warmAt > 0) ...[
+          OutlinedButton(
+            key: const ValueKey('warmup-prev'),
+            onPressed: () => setState(() => _warmAt -= 1),
+            style: OutlinedButton.styleFrom(shape: pill),
+            child: const Text('Previous chapter'),
+          ),
+          const SizedBox(width: 10),
+        ],
+        if (!last)
+          FilledButton(
+            key: const ValueKey('warmup-next'),
+            onPressed: () => setState(() => _warmAt += 1),
+            style: FilledButton.styleFrom(backgroundColor: Paper.accent, shape: pill),
+            child: const Text('Next chapter'),
+          )
+        else
+          FilledButton.icon(
+            key: const ValueKey('warmup-start'),
+            onPressed: _begin,
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: Text(warm.length > 1 ? 'Warmed up -- start the test' : 'Warmed up -- start the quiz'),
+            style: FilledButton.styleFrom(
+              backgroundColor: Paper.accent,
+              shape: pill,
+              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+            ),
+          ),
+      ]),
+    ]);
+  }
+
   // ------------------------------------------------------------- taking it
 
+  /// One question at a time: focused, like the real thing. A unit quiz checks
+  /// each tap there and then (the answer and why, the slime reacting); a mock
+  /// test only records it -- nothing is revealed until it is handed in.
   List<Widget> _questions(Quiz quiz) {
     final left = _secondsLeft;
+    final q = quiz.questions[_at];
+    final stageOn = context.watch<AppState>().showStagePanel;
+    final label = skillLabel(q);
     return [
       Row(children: [
-        Expanded(
-          child: Text(
-            '${quiz.questions.length} questions'
-            '${quiz.isMock ? ' from every unit' : ''}. Pick one answer, or write a sentence or two.',
-            style: sans(13, color: Paper.muted),
+        Text('Question ${_at + 1} of ${quiz.questions.length}',
+            key: const ValueKey('quiz-position'), style: sans(13.5, weight: FontWeight.w600)),
+        if (label.isNotEmpty) ...[
+          const SizedBox(width: 10),
+          Container(
+            key: const ValueKey('quiz-skill'),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(color: Paper.sliver, borderRadius: BorderRadius.circular(100)),
+            child: Text(label, style: mono(9.5, weight: FontWeight.w700)),
           ),
-        ),
+        ],
+        const Spacer(),
         if (left != null)
           Container(
             key: const ValueKey('quiz-clock'),
@@ -258,29 +431,167 @@ class _QuizScreenState extends State<QuizScreen> {
             ]),
           ),
       ]),
-      const SizedBox(height: 18),
-      for (final (i, q) in quiz.questions.indexed) _questionCard(i, q, quiz.isMock),
-      const SizedBox(height: 8),
-      Row(children: [
+      const SizedBox(height: 10),
+      _progressDots(quiz),
+      const SizedBox(height: 14),
+      if (stageOn) ...[
+        ExamStage(
+          key: _stageKey,
+          question: q,
+          loadScene: (id) => _scenes.putIfAbsent(id, () => _api.scene(id)),
+          onPick: _pick,
+          onAsked: (id) {
+            if (mounted && !_asked.contains(id)) setState(() => _asked.add(id));
+          },
+        ),
+        const SizedBox(height: 14),
+      ],
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 280),
+        transitionBuilder: (child, a) => FadeTransition(
+          opacity: a,
+          child: SlideTransition(
+            position: Tween(begin: const Offset(0.04, 0), end: Offset.zero).animate(a),
+            child: child,
+          ),
+        ),
+        child: _questionCard(_at, q, quiz, stageOn),
+      ),
+      const SizedBox(height: 4),
+      _navigation(quiz, q),
+    ];
+  }
+
+  /// Where they are: one dot per question -- answered, checked right or
+  /// wrong -- and a tap goes back to one.
+  Widget _progressDots(Quiz quiz) {
+    return Wrap(spacing: 6, runSpacing: 6, children: [
+      for (final (i, q) in quiz.questions.indexed)
+        InkWell(
+          key: ValueKey('quiz-dot-$i'),
+          borderRadius: BorderRadius.circular(100),
+          onTap: _submitting ? null : () => _go(i),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: i == _at ? 26 : 12,
+            height: 12,
+            decoration: BoxDecoration(
+              color: switch (_checks[q.id]?.correct) {
+                true => Paper.olive,
+                false => Paper.danger,
+                null => _answerFor(q.id).isNotEmpty ? Paper.accent : Paper.border,
+              },
+              borderRadius: BorderRadius.circular(100),
+            ),
+          ),
+        ),
+    ]);
+  }
+
+  Widget _navigation(Quiz quiz, Question q) {
+    final last = _at == quiz.questions.length - 1;
+    final pill = RoundedRectangleBorder(borderRadius: BorderRadius.circular(100));
+    final practice = !quiz.isMock;
+    final settled = !practice || !q.isChoice || _checks.containsKey(q.id);
+    return Row(children: [
+      if (_at > 0) ...[
+        OutlinedButton(
+          key: const ValueKey('quiz-prev'),
+          onPressed: _submitting ? null : () => _go(_at - 1),
+          style: OutlinedButton.styleFrom(shape: pill),
+          child: const Text('Previous'),
+        ),
+        const SizedBox(width: 10),
+      ],
+      if (!last)
+        FilledButton(
+          key: const ValueKey('quiz-next'),
+          onPressed: _submitting || !settled ? null : () => _go(_at + 1),
+          style: FilledButton.styleFrom(backgroundColor: Paper.accent, shape: pill),
+          child: Text(practice ? 'Next question' : 'Next'),
+        ),
+      if (last || quiz.isMock) ...[
+        if (!last) const SizedBox(width: 10),
         FilledButton(
           key: const ValueKey('quiz-submit'),
           onPressed: _submitting ? null : () => _submit(),
           style: FilledButton.styleFrom(
-            backgroundColor: Paper.accent,
-            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+            backgroundColor: last ? Paper.accent : Paper.ink,
+            shape: pill,
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
           ),
-          child: Text(_submitting ? 'Marking…' : 'Hand in'),
+          child: Text(_submitting ? 'Marking…' : (practice ? 'See your results' : 'Hand in')),
         ),
-        const SizedBox(width: 14),
-        Text(
+      ],
+      const SizedBox(width: 14),
+      Flexible(
+        child: Text(
           '${quiz.questions.length - _unanswered} of ${quiz.questions.length} answered',
           style: sans(12.5, color: Paper.muted),
         ),
-      ]),
-    ];
+      ),
+    ]);
   }
 
-  Widget _questionCard(int i, Question q, bool showUnit) {
+  void _go(int i) {
+    final quiz = _quiz;
+    if (quiz == null || i < 0 || i >= quiz.questions.length) return;
+    setState(() => _at = i);
+    _startAskFallback();
+  }
+
+  /// With the stage on, the card offers its choices once the slime has asked
+  /// -- or after a short wait, so a slow scene never holds the question up.
+  void _startAskFallback() {
+    _askFallback?.cancel();
+    final quiz = _quiz;
+    if (quiz == null || quiz.submitted) return;
+    final id = quiz.questions[_at].id;
+    _askFallback = Timer(const Duration(seconds: 10), () {
+      if (mounted && !_asked.contains(id)) setState(() => _asked.add(id));
+    });
+  }
+
+  /// A tap, from the card or the stage. In a unit quiz it is checked at
+  /// once (the first tap stands); in a mock it is only recorded.
+  Future<void> _pick(Question q, int index) async {
+    final quiz = _quiz;
+    if (quiz == null || _submitting || quiz.submitted) return;
+    if (quiz.isMock) {
+      if (_answers[q.id] == '$index') return;
+      setState(() => _answers[q.id] = '$index');
+      _stageKey.currentState?.answered(index);
+      _stageKey.currentState?.react(correct: null);
+      return;
+    }
+    if (_checks.containsKey(q.id) || _checking.contains(q.id)) return;
+    setState(() {
+      _answers[q.id] = '$index';
+      _checking.add(q.id);
+    });
+    _stageKey.currentState?.answered(index);
+    try {
+      final check = await _api.check(quiz.id, q.id, '$index');
+      if (!mounted) return;
+      setState(() {
+        _checks[q.id] = check;
+        _answers[q.id] = check.response;
+      });
+      _stageKey.currentState?.react(correct: check.correct, rightAnswer: check.correctAnswer);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _answers.remove(q.id));
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _checking.remove(q.id));
+    }
+  }
+
+  Widget _questionCard(int i, Question q, Quiz quiz, bool stageOn) {
+    final check = _checks[q.id];
+    final waiting = stageOn && q.isChoice && !_asked.contains(q.id) && check == null && !_answers.containsKey(q.id);
     return Container(
       key: ValueKey('quiz-question-${q.id}'),
       margin: const EdgeInsets.only(bottom: 14),
@@ -293,15 +604,13 @@ class _QuizScreenState extends State<QuizScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showUnit) ...[
+          if (quiz.isMock) ...[
             Text(q.unitTitle.toUpperCase(), style: mono(9.5)),
             const SizedBox(height: 4),
           ],
           _numbered(i, q.prompt),
           const SizedBox(height: 12),
-          if (q.isChoice)
-            for (final (c, text) in q.choices.indexed) _choiceTile(q, c, text)
-          else
+          if (!q.isChoice) ...[
             TextField(
               key: ValueKey('quiz-typed-${q.id}'),
               controller: _controllerFor(q.id),
@@ -319,9 +628,59 @@ class _QuizScreenState extends State<QuizScreen> {
                 ),
               ),
             ),
-          if (!q.isChoice) _workingPicture(q.id),
+            _workingPicture(q.id),
+          ] else
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 300),
+              crossFadeState: waiting ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+              firstChild: Row(children: [
+                Icon(Icons.auto_awesome_rounded, size: 15, color: Paper.accent),
+                const SizedBox(width: 6),
+                Text('Watch the stage…', key: const ValueKey('quiz-watch-stage'), style: sans(12.5, color: Paper.muted)),
+              ]),
+              secondChild: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [for (final (c, text) in q.choices.indexed) _choiceTile(q, c, text, check)],
+              ),
+            ),
+          if (check != null) _feedback(check),
+          if (_checking.contains(q.id))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text('Checking…', style: sans(12.5, color: Paper.muted)),
+            ),
         ],
       ),
+    );
+  }
+
+  /// A checked tap: right or not, and why -- the moment it is answered.
+  Widget _feedback(QuizCheck check) {
+    return Container(
+      key: const ValueKey('quiz-feedback'),
+      margin: const EdgeInsets.only(top: 6),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: check.correct ? Paper.oliveSoft : Paper.accentSoft,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(check.correct ? Icons.check_circle_rounded : Icons.lightbulb_outline_rounded,
+              size: 18, color: check.correct ? Paper.olive : Paper.accent),
+          const SizedBox(width: 8),
+          Text(check.correct ? 'Correct' : 'Not quite',
+              style: sans(14, weight: FontWeight.w700, color: check.correct ? Paper.olive : Paper.accentDark)),
+        ]),
+        if (!check.correct) ...[
+          const SizedBox(height: 6),
+          RichMessageText('Answer: ${check.correctAnswer}', selectable: false, style: sans(13.5, height: 1.4)),
+        ],
+        if (check.explanation.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          RichMessageText(check.explanation, selectable: false, style: sans(13, height: 1.45, color: Paper.body)),
+        ],
+      ]),
     );
   }
 
@@ -368,25 +727,37 @@ class _QuizScreenState extends State<QuizScreen> {
     );
   }
 
-  Widget _choiceTile(Question q, int index, String text) {
+  Widget _choiceTile(Question q, int index, String text, QuizCheck? check) {
     final picked = _answers[q.id] == '$index';
+    final right = check != null && check.correctIndex == index;
+    final wrongPick = check != null && picked && !check.correct;
+    final locked = _submitting || check != null || _checking.contains(q.id);
+    final Color border = right ? Paper.olive : (wrongPick ? Paper.danger : (picked ? Paper.accent : Paper.border));
+    final Color fill = right ? Paper.oliveSoft : (wrongPick ? Paper.dangerSoft : (picked ? Paper.accentSoft : Paper.sliver));
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: InkWell(
         key: ValueKey('quiz-choice-${q.id}-$index'),
         borderRadius: BorderRadius.circular(10),
-        onTap: _submitting ? null : () => setState(() => _answers[q.id] = '$index'),
+        onTap: locked ? null : () => _pick(q, index),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
+          duration: const Duration(milliseconds: 200),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
-            color: picked ? Paper.accentSoft : Paper.sliver,
-            border: Border.all(color: picked ? Paper.accent : Paper.border, width: picked ? 1.5 : 1),
+            color: fill,
+            border: Border.all(color: border, width: picked || right ? 1.5 : 1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(children: [
-            Icon(picked ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
-                size: 18, color: picked ? Paper.accent : Paper.faint),
+            Icon(
+              right
+                  ? Icons.check_circle_rounded
+                  : (wrongPick
+                      ? Icons.cancel_rounded
+                      : (picked ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded)),
+              size: 18,
+              color: right ? Paper.olive : (wrongPick ? Paper.danger : (picked ? Paper.accent : Paper.faint)),
+            ),
             const SizedBox(width: 10),
             Expanded(child: RichMessageText(text, selectable: false, style: sans(14, height: 1.35))),
           ]),
@@ -428,6 +799,10 @@ class _QuizScreenState extends State<QuizScreen> {
           ),
         ]),
       ),
+      if (quiz.skills.isNotEmpty) ...[
+        const SizedBox(height: 14),
+        _skills(quiz.skills),
+      ],
       const SizedBox(height: 20),
       for (final (i, r) in quiz.results.indexed) _resultCard(i, r, quiz.isMock),
       const SizedBox(height: 8),
@@ -438,6 +813,49 @@ class _QuizScreenState extends State<QuizScreen> {
         child: const Text('Back to the exam'),
       ),
     ];
+  }
+
+  /// What they can DO, skill by skill: recall, understand, apply, analyse.
+  Widget _skills(List<SkillScore> skills) {
+    String name(String s) => '${s[0].toUpperCase()}${s.substring(1)}';
+    return Container(
+      key: const ValueKey('quiz-skills'),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Paper.card,
+        border: Border.all(color: Paper.border),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('What this tested', style: sans(13.5, weight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        for (final s in skills)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              SizedBox(width: 92, child: Text(name(s.skill), style: sans(13, color: Paper.body))),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: TweenAnimationBuilder<double>(
+                    tween: Tween(end: s.total == 0 ? 0 : s.correct / s.total),
+                    duration: const Duration(milliseconds: 700),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, v, _) => LinearProgressIndicator(
+                      value: v,
+                      minHeight: 8,
+                      color: s.correct * 2 >= s.total ? Paper.olive : Paper.accent,
+                      backgroundColor: Paper.border,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text('${s.correct}/${s.total}', key: ValueKey('quiz-skill-${s.skill}'), style: sans(12.5, weight: FontWeight.w600)),
+            ]),
+          ),
+      ]),
+    );
   }
 
   Widget _resultCard(int i, QuestionResult r, bool showUnit) {

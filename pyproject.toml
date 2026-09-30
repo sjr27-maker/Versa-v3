@@ -1,7 +1,7 @@
 [project]
 name = "versa"
 version = "0.1.0"
-description = "Versa: a tutor that stops guessing. It asks a clarifying question with clickable options when a message is ambiguous, and remembers how past ambiguity was resolved."
+description = "Versa: learn, how you think."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]

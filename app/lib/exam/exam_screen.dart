@@ -100,27 +100,15 @@ class _ExamScreenState extends State<ExamScreen> {
     }
   }
 
-  Future<StudyPlan?> _togglePlanItem(PlanItem item) async {
-    try {
-      final plan = await _api.tickPlanItem(item.id, !item.done);
-      if (mounted) setState(() => _plan = plan);
-      return plan;
-    } catch (e) {
-      if (mounted) {
-        _toast('$e');
-        _reload();
-      }
-      return null;
-    }
-  }
-
   Future<void> _startPlanItem(Exam exam, PlanItem item) async {
     if (item.kind == PlanKind.mock) return _mock(exam);
     final unitId = item.unitId;
     if (unitId == null) return;
     final api = _api;
     await pushQuiz(context,
-        label: 'Writing a quiz on ${item.unitTitle ?? 'this unit'}…', load: () => api.startUnitQuiz(unitId));
+        label: 'Writing a quiz on ${item.unitTitle ?? 'this unit'}…',
+        load: () => api.startUnitQuiz(unitId),
+        warmUp: () async => [await api.warmUp(unitId)]);
     _reload();
   }
 
@@ -130,7 +118,6 @@ class _ExamScreenState extends State<ExamScreen> {
     await Navigator.of(context).push(topicRoute((_) => PlanScreen(
           examTitle: exam.summary.title,
           initial: plan,
-          onToggle: _togglePlanItem,
           onStart: (item) => _startPlanItem(exam, item),
         )));
     _reload();
@@ -145,14 +132,19 @@ class _ExamScreenState extends State<ExamScreen> {
 
   Future<void> _quiz(ExamUnit unit) async {
     final api = _api;
-    await pushQuiz(context, label: 'Writing a quiz on ${unit.title}…', load: () => api.startUnitQuiz(unit.id));
+    await pushQuiz(context,
+        label: 'Writing a quiz on ${unit.title}…',
+        load: () => api.startUnitQuiz(unit.id),
+        warmUp: () async => [await api.warmUp(unit.id)]);
     _reload();
   }
 
   Future<void> _mock(Exam exam) async {
     final api = _api;
     await pushQuiz(context,
-        label: 'Writing a mock test across all ${exam.units.length} units…', load: () => api.startMock(exam.id));
+        label: 'Writing a mock test across all ${exam.units.length} units…',
+        load: () => api.startMock(exam.id),
+        warmUp: () => api.warmUps(exam.id));
     _reload();
   }
 
@@ -212,7 +204,6 @@ class _ExamScreenState extends State<ExamScreen> {
                       onMake: () => _makePlan(exam),
                       onReplan: () => _makePlan(exam, replan: true),
                       onOpenFull: () => _openPlan(exam),
-                      onToggle: _togglePlanItem,
                       onStart: (item) => _startPlanItem(exam, item),
                     ),
                     const SizedBox(height: 18),

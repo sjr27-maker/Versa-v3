@@ -1,6 +1,6 @@
 """Does a thinking style get detected across many sessions -- and ONLY when
 there is one? (IDEAS.md, thinking-style open checks from
-docs/verification-runs/thinking_style_rerun_20260924.md: the negative
+docs/verification-runs/machine-tested/thinking_style_rerun_20260924.md: the negative
 control, and whether a confirmed style reaches later prompts.)
 
 Runs real Gemini + embeddings against the dev database (DATABASE_URL), with

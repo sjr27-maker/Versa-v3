@@ -112,14 +112,34 @@ class ExamApi {
         'could not make a study plan',
       ) as Map<String, dynamic>);
 
-  Future<StudyPlan> tickPlanItem(String itemId, bool done) async => StudyPlan.fromJson(
-      await _post('/exam-plan-items/$itemId/done', {'done': done}, 'could not update the plan')
-          as Map<String, dynamic>);
-
   /// [answers]: question id -> the choice index as a string, or the typed answer.
   Future<Quiz> submit(String quizId, Map<String, String> answers) async => Quiz.fromJson(await _post(
         '/exam-quizzes/$quizId/submit',
         {'answers': [for (final e in answers.entries) {'question_id': e.key, 'response': e.value}]},
         'could not hand this in',
       ) as Map<String, dynamic>);
+
+  /// A unit-quiz tap, checked at once: right or not, the answer and why. The
+  /// first tap on a question stands.
+  Future<QuizCheck> check(String quizId, String questionId, String response) async => QuizCheck.fromJson(
+      await _post('/exam-quizzes/$quizId/check', {'question_id': questionId, 'response': response},
+          'could not check that') as Map<String, dynamic>);
+
+  /// Warm up on one chapter before its quiz.
+  Future<WarmUp> warmUp(String unitId) async => WarmUp.fromJson(
+      await _post('/exam-units/$unitId/warmup', null, 'could not write the warm-up') as Map<String, dynamic>);
+
+  /// Warm up on every chapter before a mock test (its clock starts after).
+  Future<List<WarmUp>> warmUps(String examId) async => [
+        for (final w in await _post('/exams/$examId/warmup', null, 'could not write the warm-up') as List)
+          WarmUp.fromJson(w as Map<String, dynamic>),
+      ];
+
+  /// The question set up on the stage: a short scene ending with the slime
+  /// asking it (its own choices, never the answer).
+  Future<List<Map<String, dynamic>>> scene(String questionId) async {
+    final raw = await _post('/exam-questions/$questionId/scene', null, 'could not set the question up')
+        as Map<String, dynamic>;
+    return [for (final a in (raw['script'] as List? ?? const [])) (a as Map).cast<String, dynamic>()];
+  }
 }

@@ -130,6 +130,8 @@ class Question {
     required this.unitTitle,
     required this.prompt,
     required this.choices,
+    this.skill,
+    this.form,
   });
 
   final String id;
@@ -137,6 +139,12 @@ class Question {
   final String unitTitle;
   final String prompt;
   final List<String> choices;
+
+  /// What it tests: recall | understand | apply | analyse (null on older questions).
+  final String? skill;
+
+  /// quiz | puzzle.
+  final String? form;
 
   bool get isChoice => choices.isNotEmpty;
 
@@ -146,6 +154,8 @@ class Question {
         unitTitle: j['unit_title'] as String? ?? '',
         prompt: j['prompt'] as String? ?? '',
         choices: [for (final c in (j['choices'] as List? ?? const [])) c.toString()],
+        skill: j['skill'] as String?,
+        form: j['form'] as String?,
       );
 }
 
@@ -199,6 +209,8 @@ class Quiz {
     this.overTime = false,
     this.score,
     this.results = const [],
+    this.checks = const [],
+    this.skills = const [],
   });
 
   final String id;
@@ -217,6 +229,12 @@ class Quiz {
   final Score? score;
   final List<QuestionResult> results;
 
+  /// A unit quiz in progress: the taps already checked.
+  final List<QuizCheck> checks;
+
+  /// Handed in: how each skill went.
+  final List<SkillScore> skills;
+
   String get title => isMock ? 'Mock test' : (unitTitle ?? 'Quiz');
 
   factory Quiz.fromJson(Map<String, dynamic> j) => Quiz(
@@ -234,8 +252,55 @@ class Quiz {
         results: [
           for (final r in (j['results'] as List? ?? const [])) QuestionResult.fromJson(r as Map<String, dynamic>),
         ],
+        checks: [for (final c in (j['checks'] as List? ?? const [])) QuizCheck.fromJson(c as Map<String, dynamic>)],
+        skills: [for (final s in (j['skills'] as List? ?? const [])) SkillScore.fromJson(s as Map<String, dynamic>)],
       );
 }
+
+/// A unit-quiz tap, checked at once (POST /api/exam-quizzes/{id}/check).
+class QuizCheck {
+  const QuizCheck({
+    required this.questionId,
+    required this.response,
+    required this.correct,
+    required this.correctIndex,
+    required this.correctAnswer,
+    required this.explanation,
+  });
+
+  final String questionId;
+  final String response;
+  final bool correct;
+  final int correctIndex;
+  final String correctAnswer;
+  final String explanation;
+
+  factory QuizCheck.fromJson(Map<String, dynamic> j) => QuizCheck(
+        questionId: j['question_id'] as String,
+        response: j['response'] as String? ?? '',
+        correct: j['correct'] as bool? ?? false,
+        correctIndex: _int(j['correct_index']),
+        correctAnswer: j['correct_answer'] as String? ?? '',
+        explanation: j['explanation'] as String? ?? '',
+      );
+}
+
+/// How one skill went in a handed-in sitting.
+class SkillScore {
+  const SkillScore({required this.skill, required this.correct, required this.total});
+  final String skill;
+  final int correct;
+  final int total;
+
+  factory SkillScore.fromJson(Map<String, dynamic> j) =>
+      SkillScore(skill: j['skill'] as String? ?? '', correct: _int(j['correct']), total: _int(j['total']));
+}
+
+/// "APPLY", "ANALYSE · PUZZLE": what a question tests, for its label.
+String skillLabel(Question q) => [
+      if (q.skill != null) q.skill!.toUpperCase(),
+      if (q.form == 'puzzle') 'PUZZLE',
+    ].join(' · ');
 
 /// "in 5 days", "tomorrow", "today", "3 days ago".
 String daysLeftLabel(int days) => switch (days) {
@@ -359,5 +424,34 @@ class StudyPlan {
         ],
         overdue: [for (final i in (j['overdue'] as List? ?? const [])) PlanItem.fromJson(i as Map<String, dynamic>)],
         days: [for (final d in (j['days'] as List? ?? const [])) PlanDay.fromJson(d as Map<String, dynamic>)],
+      );
+}
+
+/// A chapter's warm-up before its questions (POST /api/exam-units/{id}/warmup):
+/// the key points, its formula, a worked example, and a scene for the stage.
+class WarmUp {
+  const WarmUp({
+    required this.unitId,
+    required this.unitTitle,
+    required this.points,
+    this.formula,
+    this.example,
+    this.script = const [],
+  });
+
+  final String unitId;
+  final String unitTitle;
+  final List<String> points;
+  final String? formula;
+  final String? example;
+  final List<Map<String, dynamic>> script;
+
+  factory WarmUp.fromJson(Map<String, dynamic> j) => WarmUp(
+        unitId: j['unit_id'] as String,
+        unitTitle: j['unit_title'] as String? ?? '',
+        points: [for (final p in (j['points'] as List? ?? const [])) p.toString()],
+        formula: j['formula'] as String?,
+        example: j['example'] as String?,
+        script: [for (final a in (j['script'] as List? ?? const [])) (a as Map).cast<String, dynamic>()],
       );
 }

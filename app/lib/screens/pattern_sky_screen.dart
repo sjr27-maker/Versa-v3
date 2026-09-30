@@ -24,7 +24,7 @@ class PatternSkyScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = pattern;
     final (label, color) = switch (p.status) {
-      'confirmed' => ('Confirmed', Paper.olive),
+      'confirmed' => ('Clear pattern', Paper.olive),
       'fading' => ('Fading', Paper.warn),
       _ => ('Emerging', Paper.muted),
     };

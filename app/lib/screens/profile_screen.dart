@@ -321,6 +321,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.only(top: 10),
             child: Center(child: Text('Reading your answers…', style: sans(13, color: Paper.muted))),
           ),
+        // testers and judges can go straight in; it stays in Settings
+        if (!widget.editing && context.watch<AppState>().isTester)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Center(
+              child: TextButton(
+                key: const ValueKey('profile-skip'),
+                onPressed: _busy ? null : () => context.read<AppState>().skipProfile(),
+                child: const Text('Skip for now (tester)'),
+              ),
+            ),
+          ),
       ],
     );
     return AuthScaffold(maxWidth: 520, child: body);

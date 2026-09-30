@@ -1,66 +1,88 @@
-# Thinking style — the core claim, the evidence, and how it will be proved
+# Thinking style — what we mean by it, what's recorded, what's next
 
 This is the document the rest of Versa hangs off. Everything else — the
-ambiguity options, the directions, the sliders, the three modes — exists to
-feed or use what is written here. Agreed 2026-09-29.
+directions, the sliders, the ambiguity options, the modes — feeds or uses
+what is written here. Reframed 2026-10-01 (your words: "for now it's
+nothing more than that ... let's be honest that this is what I mean, but
+not discourage, since it will be proved with real users").
 
 ---
 
-## 1. The claim
+## 1. What we mean by a thinking style
 
-A person often can't say what they want — the thought exists before the
-words for it. So Versa doesn't ask; it **offers**. After every answer it
-lays out where the idea could go, in a fresh form for any topic, and the
-person recognises the one that matches what was already in their mind.
-That recognition is evidence of how they think.
+A learner learns topics, using several modes (Sandbox, Learn a topic, exam
+prep). Versa records how they approached each one, which direction they
+chose at each step, in what order, and what they achieved. **The order and
+the pattern in that is what we call their thinking style.** For now it is
+nothing more than that.
 
-A single session is coloured by **mood** (tired, rushed, curious) and
-**ability** (this topic is hard for them, today). What persists across
-topics and weeks, once those are set aside, is their **way of thinking**.
-If none of the offered paths matches, that is information too: keep
-varying what is offered until something matches, then check whether the
-match persists.
+### Definition (2026-10-01)
 
-The end goal: a system whose answers get better as time passes, until it
-offers what the person would have picked before they pick it.
+> A **thinking style** is the order and pattern in how a learner approaches
+> topics across Versa's modes — how they approach a topic, which directions
+> they choose and in what order, and what they achieve.
 
-### Definition (agreed)
+What Versa does with it today:
 
-> A **thinking style** is how a person, given free choice, moves through
-> ideas — where they start, in what order, in which direction, and within
-> what depth and breadth limits — stable across topics and over time,
-> measured against their cohort's default, and **proven when it predicts
-> their next unsteered choice**. Interests (what pulls them) are tracked
-> alongside, but as a separate model.
+- **It records the order and the pattern** — direction picks and passes,
+  slider moves, how they explore a topic's tree, lesson progress — from the
+  learner's own chats only (see "Only the learner's own data" below).
+- **It sets the noise aside** — a pick made while they were stuck, right
+  after a wrong check, or in a rushed session counts for less (ability and
+  mood), and a pattern has to show across several topics and sessions
+  before it is called one. That is filtering, not a claim about the person.
+- **It shows the learner what it sees** ("How you explore" on the
+  Thinking-style page), with the numbers behind every pattern, and a guess
+  of their next pick that is revealed after they pick.
 
-- **Free choice** — only unsteered evidence counts toward proof. If Versa
-  shaped the options from its own belief and the person then picked one,
-  that pick partly reflects Versa.
-- **Stable across topics and time** — once is a moment; across photosynthesis,
-  recursion and economics, over weeks, is a style. A style may be
-  conditional ("new topic → starts concrete; familiar → straight to why").
-- **Against the cohort** — nearly every beginner wants an example first.
-  That's being new, not a style. A style is how someone *differs* from the
-  default for people like them (board, class, level — the sign-up profile
-  is the cohort key, not evidence).
-- **Predicts** — if knowing the style doesn't improve the guess of what
-  they'll tap next, it isn't a finding.
+What we do **not** claim yet: that the pattern is stable over weeks, that
+it predicts their next choice, or that shaping answers to it helps them.
+Those are exactly what real learners will show. Achievement from exam prep
+is part of the definition but is not read yet — exam prep is walled off by
+invariant 13, an open decision.
 
-### Two claims, kept separate
+### Where it stands
 
-- **A — Versa can identify a thinking style.** Proven by prediction. This
-  is the core claim now.
-- **B — Adapting to it helps them.** Needs a style-on vs style-off
-  comparison on an outcome fixed in advance. Later. (The popular
-  "learning styles → matched teaching" idea has weak evidence — Pashler et
-  al. 2008 — so B is not assumed.)
+Nothing about the thinking style has been tested on real learners yet.
+Every check so far was run by machines — a model playing a simulated
+student with a made-up persona — and those runs are set aside, counted
+neither for nor against (`docs/verification-runs/machine-tested/`). They
+were useful for finding bugs in the mechanisms, not as evidence about
+people. The evidence will come from real users, through the same records
+and the pick guesses (layer 5 below), and is judged then.
 
-### What is not style
+### What is noise, not style
 
 - **Ability** — what they can handle right now; changes as they learn.
 - **Mood / state** — one session's condition.
 - **Topic difficulty** — a preference that only shows where the topic is
-  hard is conditional, or ability, not a general style.
+  hard is ability, not style.
+
+### Only the learner's own data (decided 2026-10-01)
+
+Your words: "analyses learners, I mean other learners data for better
+patterns doesn't seem right for privacy, so we need to remove it, only the
+learner own chats and session must contribute for now."
+
+So nothing another learner did contributes to anything Versa concludes about,
+or shows to, this learner:
+
+| Where other learners' data was used | Now |
+|---|---|
+| every style-pattern gate "above the cohort" (way in, then, lean, range, conditional, shape, passes over, speed, asks for) | against **chance** from the same hands, **0** (lean, shape, speed), the slider's **default 50** (range), or an **even spread** (misses); the redundant "above cohort" gates are gone |
+| the pick guess's starting point (everyone's picks) | an **even start** — only their own picks move it (predictor v3) |
+| new moves grouped across learners, "candidate card" at 3+ learners | grouped among **their own** readings only; `versa discovered-moves` needs `--learner` |
+| the question "centre" used to tell topics apart and spot follow-ups (every learner's questions) | the average of **their own** questions — so until they've asked 30, nothing is a follow-up and all their questions are one topic |
+| the answer prompt's "across other learners, a recurring pattern" paragraph | **removed** with retrieval's population scope, `population_patterns.py` and `versa aggregate-patterns` |
+
+What this costs: "being new" can no longer be told apart from a style —
+if nearly everyone takes the example first, a learner who does too can now
+get "goes first to an example" confirmed. The gates still require it across
+≥3 topics, in both halves, and predicting later picks better than chance.
+Enforced by `tests/test_style_patterns.py::test_another_learners_activity_never_changes_this_learners_style_or_guess`.
+Still pooled, deliberately: `versa score-predictions` (a read-only operator
+report on the claim-confidence formula; nothing feeds back) and Study with
+others (group data by design, invariant 12).
 
 ---
 
@@ -149,19 +171,18 @@ Study with others (`room_*`) — group behaviour, not one person's (invariant 12
   topic's ability first, then weight the style observations by them.
 - **Layer 3 — cross-session matching.** A "thought" is a structured pattern
   ("new topic → first pick concrete"), not free text. It persists when seen
-  in N sessions across M topics, from clean evidence, above the cohort
-  default. It retires when it stops matching.
+  in N sessions across M topics, from clean evidence, above chance. It retires when it stops matching.
 - **Layer 4 — use.** Confirmed patterns shape the answer (today
   `FinalAnswer` never gets the style), default slider positions and the
   ambiguity options — but must not displace a real topic ambiguity. **The
   directions strip stays unpersonalised** as the permanent measuring
   instrument (invariant 14).
-- **Layer 5 — proof.** Before each directions set is shown, record a
-  prediction of which card they'll pick. Track per learner over sessions:
-  - **pick-prediction hit rate** vs chance (1/6) and vs the cohort default
-    — rising = Versa is learning what's in their mind (claim A);
+- **Layer 5 — the check with real learners.** Before each directions set is
+  shown, record a guess of which card they'll pick. Track per learner over sessions:
+  - **pick-prediction hit rate** vs chance
+    — rising, on real learners, would show Versa is picking up the pattern;
   - **first-answer acceptance** — no slider change, rewrite, typed-past or
-    contradicted_intent — style-on vs style-off (claim B, later).
+    contradicted_intent — style-on vs style-off (whether shaping helps, later).
 
   As answers improve, picks may fall; the strip stays available, and fewer
   picks with rising acceptance counts as success.
@@ -172,27 +193,24 @@ the picks only confirm what Versa already thought.
 
 ---
 
-## 5. What is proven so far
+## 5. Where it stands
 
-| # | Claim | Status |
-|---|---|---|
-| 1 | detects a consistent style | staged ✅ (FF, 2026-09-27) — but fragments over 5 candidates (`limit=1` in consolidation) |
-| 2 | doesn't invent a style | ❌ control reached 3/5 toward a false one |
-| 3 | tells different styles apart | ❌ untested |
-| 4 | adaptation reaches the student | partial — options/ambiguity check (old detector); **the answer too since 2026-09-29** (way in from direction picks), untested on real people |
-| 5 | adaptation doesn't hurt | ❌ displaced a real ambiguity ("logs") |
-| 6 | adaptation helps | ❌ unmeasured |
-| 7 | not circular | ❌ steered and clean evidence are not separated |
-| 8 | changes over time | ❌ `ThinkingStyleStore.retire()` has no callers; text frozen |
-| 9 | works on real people | ❌ zero `organic_session` evidence |
+Built and recording: every source in "A" above, the pattern reading
+(layer 3), the noise discounts (layer 2) and the pick guesses (layer 5).
+Tested on real learners: **not yet** — that is the next step, with the
+demo's invited users.
 
-Runs: `docs/verification-runs/thinking_style_*.md`.
+The earlier machine-run checks (simulated students on the real models)
+have been moved to `docs/verification-runs/machine-tested/` and are not
+counted as evidence either way. The numbers quoted in the build log below
+come from those runs or from simulated learners in the tests: they show a
+mechanism ran as designed, nothing more.
 
 ---
 
 ## 6. Build order
 
-1. ✅ This document; the core claim at the top of CLAUDE.md and the README.
+1. ✅ This document; the definition at the top of CLAUDE.md and the README.
 2. ✅ Slider moves logged as events (`knob_events`, 2026-09-29).
 3. ✅ Pick prediction (`pick_prediction.py`, migration 085, invariant 20,
    2026-09-29): a deterministic guess before every set, with its exact
@@ -245,10 +263,10 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
    offer, and layer 3 rates are "taken when offered" against chance.
    Layer 3 gained family-level patterns (a family is in 3 of 4 hands, so it
    firms up fast) and `lean` patterns (which way picks lean on each axis).
-   **The proof is now a real test**: at each pick the guess comes from
-   earlier picks only, and the hits must beat other learners at p < 0.05,
-   Bonferroni-corrected for every candidate tried. Measured on simulated
-   learners: before the fix 10–22% of random choosers were told they had a
+   The pattern check is now a real test: at each pick the guess comes from
+   earlier picks only, and the hits must beat chance at p < 0.05,
+   Bonferroni-corrected for every candidate tried. On simulated learners
+   (machine-tested, not evidence): before the fix 10–22% of random choosers were told they had a
    style; after, 0–4%. A broad style (goes "make it real" 80%, or takes the
    most concrete card 70%) is confirmed in ~92–94% of cases by 10 chats and
    ~100% by 20; a preference for one single card type out of 16 takes far
@@ -294,7 +312,7 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
     - *The shape of a chat* (`shape`): how picks move as a chat goes on,
       on the depth and concrete axes (later picks minus the opening two,
       each read against its own hand), e.g. "their picks get deeper as a
-      chat goes on (they start simpler)". Proven by guessing later chats
+      chat goes on (they start simpler)". Checked by guessing later chats
       from earlier ones: the opening as the card furthest one way, later
       picks as the card furthest the other. Simulated: found by 15 chats.
     - *What they pass over* (`passes_over`): a card or family taken at
@@ -307,7 +325,7 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
       every time by 50 (a single card is rarely on offer).
     - *Speed* (`speed`): which way out they choose fastest or slowest
       against their other picks, on a log scale; quick taps and rushed
-      chats left out. Speed isn't a choice, so it is proven by a
+      chats left out. Speed isn't a choice, so it is checked by a
       significance test (Bonferroni over the four families) and holding in
       both halves rather than by predicting a pick. Simulated (3x faster
       on "go deeper"): found in 93% by 15 chats.
@@ -325,7 +343,7 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
      `way_in` / `then` / `range` patterns; confirmed only with ≥4 picks in
      the situation, ≥35% going there, ≥3 sessions, ≥3 different topics
      (told apart by first-question similarity, no drift), ≥1.5× the
-     cohort, clear in both the earlier and later half, and **right out of
+     cohort (now: chance), clear in both the earlier and later half, and **right out of
      sample** (judged only on picks after it showed itself, ≥3 trials,
      beating the cohort). Otherwise `emerging` (clear, not through every
      gate) or `fading` (clear before, not lately). Range: set by them in
@@ -334,8 +352,9 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
      only, what everyone does, a random learner, quick/rushed taps, a
      changed way in, a range set once or scattered). Every gate is returned
      with its numbers. Derived on read, stamped `style-v1`.
-   - **Live, 2026-09-29** (signed in as sooraj, real Gemini, simulated
-     persona, `adaptation_check_20260929.md`): guesses went from 5/9 right
+   - **Machine-tested, 2026-09-29** (signed in as sooraj, real Gemini, a model
+     playing a persona, `machine-tested/adaptation_check_20260929.md`; not
+     evidence about people): guesses went from 5/9 right
      in the first third to 8/9 in the last; no card set re-offered a card
      already taken; one pattern confirmed through every gate ("after
      'where it is used', goes to 'work through one concrete example'",
@@ -345,7 +364,7 @@ Runs: `docs/verification-runs/thinking_style_*.md`.
      compare centred embeddings. Note the persona was written "example
      first", yet it went "use, then example" (its openers already asked for
      an example): the patterns follow what it did, not what it was told.
-   - **Live follow-up run, 2026-09-29** (`adaptation_check_20260929_followups.md`,
+   - **Machine-tested follow-up run, 2026-09-29** (`machine-tested/adaptation_check_20260929_followups.md`,
      5 chats, each with the student's own follow-up and a switch to a new
      subject mid-chat): **every first answer to something new was normal —
      10 of 10** (5 chat openers, 5 mid-chat switches). Own follow-ups:

@@ -412,7 +412,7 @@ def render_invite_page(code: str, problem: str | None, android_url: str | None) 
         )
         body = (
             "<h1>You're invited to Versa</h1>"
-            "<p>A tutor that stops guessing: it asks when you're unclear, and learns how you think.</p>"
+            "<p>Learn, how you think.</p>"
             f"{download}"
             "<p>Open the app, sign in with Google or email, and enter this invite code:</p>"
             f'<p class="code">{safe_code}</p>'

@@ -1,12 +1,20 @@
 # versa
 
-## Core claim — read this first
+## Thinking style — read this first
 
-Versa's core feature is that it **learns a person's thinking style over
-time**: how they move through ideas (where they start, in what order, which
-way, within what depth/breadth limits), stable across topics, set apart from
-their mood and ability, and proven when it predicts their next unsteered
-choice. Everything else is an evidence source for that or a use of it:
+Versa's core feature is the learner's **thinking style**, and for now it
+means exactly this (reframed 2026-10-01): a learner learns topics across
+Versa's modes; the order and pattern in how they approach a topic, which
+directions they choose, in what order, and what they achieve — that is their
+thinking style. Versa records it from their own chats, sets the noise aside
+(ability and mood: picks made while stuck, after a wrong check or in a
+rushed session count for less), and shows it to them. Nothing more is
+claimed: not yet that it is stable over weeks, that it predicts their next
+choice, or that shaping answers to it helps. Every check so far was run by
+machines (simulated students) and is set aside, counted neither way
+(`docs/verification-runs/machine-tested/`); it is to be shown with real
+learners. Don't write it up as more than that. Everything else is a source
+for it or a use of it:
 
 - **"Where this could go" (directions.py) is the primary evidence source** —
   the person recognises the path that matches what's already in their mind
@@ -17,8 +25,8 @@ choice. Everything else is an evidence source for that or a use of it:
   Learn a topic and Exam prep (exam prep is still walled off by invariant 13
   — an open decision). Study with others does not feed it.
 
-`docs/THINKING_STYLE.md` has the agreed definition, the evidence inventory,
-the layered design and what is and isn't proven yet. Read it before
+`docs/THINKING_STYLE.md` has the definition, the evidence inventory, the
+layered design and where it stands. Read it before
 changing anything that records, derives or uses learner evidence.
 
 ## Setup
@@ -52,7 +60,10 @@ Entry points: `versa chat` and the other `versa` CLI commands
 `compare-portraits`, ...), and `versa serve` — the HTTP/WebSocket API the
 Flutter app in `app/` talks to (`src/versa/server.py`). Sign-in is ON by
 default (`src/versa/accounts.py`: Firebase Google/email tokens, invite-only
-sign-up, name-only sign-in for the testers sooraj/adithya on a laptop) and a
+sign-up, name-only sign-in for the testers sooraj/adithya on a laptop, and
+for judges any name + the shared VERSA_JUDGE_CODE -- each name its own new
+account, never an existing learner; testers and judges may skip the sign-up
+profile) and a
 guard checks that every request only touches the signed-in learner's own
 things; `VERSA_AUTH=off` gives the old open server, allowed only on
 127.0.0.1. `docs/DEPLOY.md` covers Cloud Run, Firebase, invites and the
@@ -410,6 +421,17 @@ delete or update rows. Concretely:
   one, and a quiz is handed in at most once (`exam_submissions.quiz_id`
   is UNIQUE). Scores are never stored -- they are derived from
   `exam_answers`.
+- (2026-10-01, migration 093) A unit quiz is checked one tap at a time:
+  `exam_checks` keeps the first tap per question (question_id UNIQUE) and
+  hand-in uses it, so an answer can't be changed after it was marked. Mock
+  tests are never checked early. Each question's `skill` (recall /
+  understand / apply / analyse) and `form` (quiz / puzzle) are written with
+  it; the per-skill result is derived, never stored. A question's stage
+  scene is an `ExamScene` row in `exam_generations`, made once, and never
+  carries the answer. Before a quiz or mock, each chapter is warmed up
+  (`ExamWarmUp`, key points + formula + worked example + a stage scene that
+  explains and never asks), also kept only in `exam_generations` and reused;
+  a mock's clock starts after the warm-up, not before.
 - Re-planning writes a new study plan (the latest is the plan). Whether a
   plan item is done is never stored: quizzes/mocks are matched to
   handed-in sittings, and ticks are `exam_plan_item_events`, latest wins.
@@ -635,7 +657,8 @@ must never delete or update rows. Concretely:
   migration.
 - One guess per directions set, written BEFORE the set is sent, so it can
   never have seen the pick. It keeps the scores per slot and the exact
-  contributions behind them (everyone else's picks, the learner's own, their
+  contributions behind them (an even start -- never other learners' picks,
+  from v3 on 2026-10-01 -- the learner's own, their
   order of approach or how they open a chat, and what was set aside and
   why). Whether it was right is never stored: it is derived from the set's
   `direction_events` row, and so is the record the learner is shown.
@@ -644,8 +667,9 @@ must never delete or update rows. Concretely:
 - Verified by `tests/test_pick_prediction.py`, the same AST-based check used
   for invariants 1, 4, 6-19.
 
-Why: these guesses are the proof of the core claim -- if Versa is learning
-how someone thinks, they get better over time. A guess that could be edited
+Why: these guesses are how the thinking style will be checked on real
+learners -- if Versa is picking up how someone approaches things, they get
+better over time (nothing is claimed from them yet). A guess that could be edited
 after the pick, or a miss that could be pruned, would make that curve mean
 nothing. And "what contributed to what must be seen": the breakdown is kept
 with the guess, not recomputed later from data that has since grown.

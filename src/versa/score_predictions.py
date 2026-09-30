@@ -261,8 +261,8 @@ async def score_predictions_for_all_learners(
     """The I/O boundary: pulls every claim across every learner (this
     is a calibration question about the confidence FORMULA, not about
     any one learner's model, so it deliberately pools across all of
-    them — same "batch job, cross-learner" precedent as
-    population_patterns.aggregate_population_patterns), scores every
+    them; a read-only operator report -- nothing it computes feeds back
+    into any learner's model), scores every
     claim's evidence history, and buckets the result. `exclude_
     contaminated`/`source_filter`/`topic_prefix` pass straight through
     to `compute_prediction_trials` — see its own docstring for all

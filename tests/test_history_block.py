@@ -56,7 +56,6 @@ def test_when_label_different_day_is_an_earlier_session():
 
 def test_personal_paragraph_includes_every_present_field():
     item = HistoryItem(
-        is_population=False,
         source_id=uuid4(),
         when_label="In an earlier session",
         asked="what is a derivative?",
@@ -73,7 +72,6 @@ def test_personal_paragraph_includes_every_present_field():
 
 def test_personal_paragraph_drops_null_clauses_without_filler():
     item = HistoryItem(
-        is_population=False,
         source_id=uuid4(),
         when_label="Earlier today",
         asked="what is a derivative?",
@@ -92,7 +90,7 @@ def test_bare_asked_only_item_is_dropped_as_filler():
     `asked` -- that is filler, not history, and must not consume a
     slot in the block at all (see _is_useful_personal_item)."""
     bare = HistoryItem(
-        is_population=False, source_id=uuid4(), when_label="Earlier today", asked="q",
+        source_id=uuid4(), when_label="Earlier today", asked="q",
     )
     assert render_history_block([bare]) == ""
 
@@ -103,7 +101,6 @@ def test_resolution_turn_renders_asked_as_original_and_chose_as_option_text():
     option's own copy -- never conflated, matching the codebase's
     existing question_author/originating_question split."""
     item = HistoryItem(
-        is_population=False,
         source_id=uuid4(),
         when_label="Earlier today",
         asked="can you help me with derivatives?",
@@ -115,37 +112,18 @@ def test_resolution_turn_renders_asked_as_original_and_chose_as_option_text():
     assert "went with" in block
 
 
-def test_population_paragraph_uses_third_person_plural_never_this_learner():
+def test_the_block_speaks_only_of_this_learners_own_history():
     item = HistoryItem(
-        is_population=True,
-        source_id=uuid4(),
-        abstract_form="chose the worked example over the stated rule",
-        distinct_learner_count=25,
+        source_id=uuid4(), when_label="Earlier today", asked="q", given_excerpt="an excerpt.",
     )
     block = render_history_block([item])
-    assert "Across other learners" in block
-    assert "25 learners" in block
-    assert "chose the worked example over the stated rule" in block
-    # Must never be attributed to "this" learner specifically.
-    assert "they asked" not in block
-    assert "In an earlier session" not in block
-
-
-def test_population_item_rendered_before_personal_items():
-    population = HistoryItem(
-        is_population=True, source_id=uuid4(), abstract_form="a pattern", distinct_learner_count=20,
-    )
-    personal = HistoryItem(
-        is_population=False, source_id=uuid4(), when_label="Earlier today", asked="q",
-        given_excerpt="an excerpt.",
-    )
-    block = render_history_block([population, personal])
-    assert block.index("Across other learners") < block.index("Earlier today")
+    assert "drawn from their own history." in block
+    assert "other learners" not in block.lower()
 
 
 def test_block_carries_the_do_not_narrate_instruction():
     item = HistoryItem(
-        is_population=False, source_id=uuid4(), when_label="Earlier today", asked="q",
+        source_id=uuid4(), when_label="Earlier today", asked="q",
         given_excerpt="an excerpt.",
     )
     block = render_history_block([item])
@@ -157,8 +135,7 @@ def test_block_carries_the_do_not_narrate_instruction():
 def test_block_truncates_to_config_cap():
     items = [
         HistoryItem(
-            is_population=False,
-            source_id=uuid4(),
+                source_id=uuid4(),
             when_label="Earlier today",
             asked="a fairly long question " * 20,
             given_excerpt="a fairly long response. " * 20,

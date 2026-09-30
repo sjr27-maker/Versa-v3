@@ -61,6 +61,17 @@ def test_malformed_questions_are_dropped():
     assert questions[0]["model_answer"] == "c" and questions[1]["correct_index"] is None
 
 
+def test_choices_are_shuffled_and_the_right_one_follows(monkeypatch):
+    import versa.exams
+
+    monkeypatch.setattr(versa.exams, "SHUFFLE_CHOICES", True)
+    raw = [{"kind": "choice", "prompt": f"Q{i}?", "choices": ["right", "w1", "w2", "w3"],
+            "correct_index": 0, "explanation": "."} for i in range(40)]
+    questions = parse_questions(raw, 40)
+    assert all(q["choices"][q["correct_index"]] == "right" == q["model_answer"] for q in questions)
+    assert len({q["correct_index"] for q in questions}) > 1  # not left where the model put it
+
+
 def test_score_counts_only_graded_answers():
     answers = [
         AnswerRow(question_id=f"00000000-0000-0000-0000-00000000000{i}", response="x",
@@ -107,29 +118,61 @@ async def test_search_exam_unit_quiz_hand_in_and_results(clean_pool, embedding_c
             quiz = r.json()
             assert quiz["kind"] == "unit" and quiz["unit_title"] == "Foundations"
             assert quiz["time_limit_seconds"] is None and quiz["submitted"] is False
-            assert len(quiz["questions"]) == 5
+            # a unit quiz is answered with taps only (the stub's written question is left out),
+            # each question saying what it tests
+            qs = quiz["questions"]
+            assert len(qs) == 4 and all(q["kind"] == "choice" for q in qs)
+            assert [q["skill"] for q in qs] == ["recall", "understand", "apply", "analyse"]
+            assert qs[3]["form"] == "puzzle"
             # the answers never reach the client before hand-in
             raw = json.dumps(quiz)
             assert "correct_index" not in raw and "The idea, stated in one sentence." not in raw
 
-            qs = quiz["questions"]
+            # one question at a time: each tap checked there and then, the first one standing
+            first = (await client.post(f"/api/exam-quizzes/{quiz['id']}/check",
+                                       json={"question_id": qs[0]["id"], "response": "0"})).json()
+            assert first["correct"] and first["correct_answer"] == "The right one" and first["explanation"]
+            miss = (await client.post(f"/api/exam-quizzes/{quiz['id']}/check",
+                                      json={"question_id": qs[1]["id"], "response": "2"})).json()
+            assert miss["correct"] is False and miss["correct_index"] == 0
+            again = (await client.post(f"/api/exam-quizzes/{quiz['id']}/check",
+                                       json={"question_id": qs[1]["id"], "response": "0"})).json()
+            assert again["response"] == "2" and again["correct"] is False  # no second go
+            bad = await client.post(f"/api/exam-quizzes/{quiz['id']}/check",
+                                    json={"question_id": qs[2]["id"], "response": "9"})
+            assert bad.status_code == 422
+            reopened = (await client.get(f"/api/exam-quizzes/{quiz['id']}")).json()
+            assert [c["question_id"] for c in reopened["checks"]] == [qs[0]["id"], qs[1]["id"]]
+
+            # the question set up on the stage: its own choices, never the answer; made once
+            scene = (await client.post(f"/api/exam-questions/{qs[2]['id']}/scene")).json()
+            ask = scene["script"][-1]
+            assert ask["do"] == "ask" and [c["id"] for c in ask["choices"]] == ["0", "1", "2", "3"]
+            assert "answer" not in json.dumps(scene)
+            assert (await client.post(f"/api/exam-questions/{qs[2]['id']}/scene")).json() == scene
+
             answers = [
-                {"question_id": qs[0]["id"], "response": "0"},   # right
-                {"question_id": qs[1]["id"], "response": "2"},   # wrong
+                {"question_id": qs[1]["id"], "response": "0"},   # changing a checked tap: ignored
                 {"question_id": qs[2]["id"], "response": "0"},   # right
                 # qs[3] left blank -> wrong
-                {"question_id": qs[4]["id"], "response": "It is the idea in a sentence."},
             ]
             r = await client.post(f"/api/exam-quizzes/{quiz['id']}/submit", json={"answers": answers})
             assert r.status_code == 200, r.text
             done = r.json()
             assert done["submitted"] is True and done["over_time"] is False
-            assert done["score"] == {"correct": 3, "graded": 5, "total": 5, "percent": 60}
+            assert done["score"] == {"correct": 2, "graded": 4, "total": 4, "percent": 50}
             by_id = {res["id"]: res for res in done["results"]}
-            assert by_id[qs[1]["id"]]["correct"] is False
+            assert by_id[qs[0]["id"]]["correct"] is True
+            assert by_id[qs[1]["id"]]["correct"] is False and by_id[qs[1]["id"]]["response"] == "2"
             assert by_id[qs[1]["id"]]["correct_answer"] == "The right one"
             assert by_id[qs[3]["id"]]["response"] == "" and by_id[qs[3]["id"]]["correct"] is False
-            assert by_id[qs[4]["id"]]["feedback"] == "Stub: looks right."
+            # what the student can do, skill by skill
+            assert [(s["skill"], s["correct"], s["total"]) for s in done["skills"]] == [
+                ("recall", 1, 1), ("understand", 0, 1), ("apply", 1, 1), ("analyse", 0, 1),
+            ]
+            late = await client.post(f"/api/exam-quizzes/{quiz['id']}/check",
+                                     json={"question_id": qs[3]["id"], "response": "0"})
+            assert late.status_code == 409
 
             # handed in once only; re-reading shows the same result
             again = await client.post(f"/api/exam-quizzes/{quiz['id']}/submit", json={"answers": answers})
@@ -145,7 +188,7 @@ async def test_search_exam_unit_quiz_hand_in_and_results(clean_pool, embedding_c
 
             exam = (await client.get(f"/api/exams/{exam['id']}")).json()
             assert exam["units"][0]["quizzes_taken"] == 1
-            assert exam["units"][0]["last_percent"] == 60 == exam["units"][0]["best_percent"]
+            assert exam["units"][0]["last_percent"] == 50 == exam["units"][0]["best_percent"]
             summaries = (await client.get(f"/api/learners/{lid}/exams")).json()
             assert summaries[0]["id"] == exam["id"] and summaries[0]["quizzes_taken"] == 1
 
@@ -153,10 +196,51 @@ async def test_search_exam_unit_quiz_hand_in_and_results(clean_pool, embedding_c
         async with clean_pool.acquire() as conn:
             names = [r["node_name"] for r in await conn.fetch(
                 "SELECT node_name FROM exam_generations ORDER BY created_at")]
-            assert names == ["ExamSyllabus", "WriteQuestions", "GradeAnswers", "WriteQuestions"]
+            assert names == ["ExamSyllabus", "WriteQuestions", "ExamScene", "WriteQuestions"]
+            scene_prompt = await conn.fetchval(
+                "SELECT input_json->>'prompt' FROM exam_generations WHERE node_name = 'ExamScene'")
+            assert scene_prompt.startswith("EXAM:SCENE") and "NEVER show, hint at or act out the answer" in scene_prompt
+            write_prompt = await conn.fetchval(
+                "SELECT input_json->>'prompt' FROM exam_generations WHERE node_name = 'WriteQuestions' "
+                "ORDER BY created_at LIMIT 1")
+            assert "answers each with ONE TAP" in write_prompt
             # walled off: nothing about the learner was written to the personal model
             for table in ("learner_facts", "claims", "thinking_style_candidates"):
                 assert await conn.fetchval(f"SELECT COUNT(*) FROM {table}") == 0, table
+    finally:
+        await _stop(live)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_each_chapter_is_warmed_up_before_its_questions(clean_pool, embedding_client):
+    """A warm-up explains -- key points, formula, a worked example and the
+    slime acting it out -- and never asks; it is made once per chapter and
+    reused, and a mock warms up on every chapter before its clock starts."""
+    llm = _llm()
+    live = await _start(clean_pool, llm, embedding_client)
+    try:
+        async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
+            lid = (await client.post("/api/learners", json={"label": "exam-warm"})).json()["id"]
+            exam = (await client.post("/api/exams", json={"learner_id": lid, "query": "kinematics"})).json()
+            unit = exam["units"][0]
+
+            warm = (await client.post(f"/api/exam-units/{unit['id']}/warmup")).json()
+            assert warm["unit_title"] == unit["title"] and len(warm["points"]) == 3
+            assert warm["formula"] == "v = u + at" and warm["example"]
+            assert warm["script"] and all(a["do"] != "ask" for a in warm["script"])
+            again = (await client.post(f"/api/exam-units/{unit['id']}/warmup")).json()
+            assert again == warm  # reused, not written again
+
+            everything = (await client.post(f"/api/exams/{exam['id']}/warmup")).json()
+            assert [w["unit_id"] for w in everything] == [u["id"] for u in exam["units"]]
+            assert (await client.get(f"/api/exams/{exam['id']}")).json()["mocks"] == []  # no clock started
+        async with clean_pool.acquire() as conn:
+            made = await conn.fetch(
+                "SELECT input_json->>'prompt' AS p, input_json->'kwargs'->>'brief' AS brief "
+                "FROM exam_generations WHERE node_name = 'ExamWarmUp' ORDER BY created_at")
+        assert len(made) == len(exam["units"])  # once per chapter
+        assert made[0]["p"].startswith("EXAM:WARMUP") and "never a question" in made[0]["p"]
+        assert made[0]["brief"] == "false" and made[-1]["brief"] == "true"
     finally:
         await _stop(live)
 
@@ -178,6 +262,10 @@ async def test_mock_is_timed_and_covers_every_unit(clean_pool, embedding_client)
             assert mock["time_limit_seconds"] == 2 * len(units) * SECONDS_PER_CHOICE
             assert 0 < mock["seconds_left"] <= mock["time_limit_seconds"]
 
+            # a mock is marked at hand-in, never question by question
+            early = await client.post(f"/api/exam-quizzes/{mock['id']}/check",
+                                      json={"question_id": mock["questions"][0]["id"], "response": "0"})
+            assert early.status_code == 409
             r = await client.post(f"/api/exam-quizzes/{mock['id']}/submit", json={"answers": [
                 {"question_id": q["id"], "response": "0"} for q in mock["questions"]
             ]})
@@ -197,19 +285,28 @@ async def test_failed_grading_leaves_short_answers_ungraded_not_wrong(clean_pool
     def _boom(_prompt):
         raise RuntimeError("quota")
 
-    live = await _start(clean_pool, _llm(**{"EXAM:GRADE": _boom}), embedding_client)
+    # written answers come in mock tests (a unit quiz is taps only): put one first in each unit
+    written_first = json.dumps({"questions": [
+        {"kind": "short", "skill": "understand", "form": "quiz", "prompt": "Explain it.",
+         "answer": "The idea.", "explanation": "Because."},
+        {"kind": "choice", "skill": "apply", "form": "quiz", "prompt": "Which?",
+         "choices": ["a", "b", "c", "d"], "correct_index": 0, "explanation": "a."},
+    ]})
+    live = await _start(clean_pool, _llm(**{"EXAM:GRADE": _boom, "EXAM:QUESTIONS": written_first}),
+                        embedding_client)
     try:
         async with httpx.AsyncClient(base_url=live.http, timeout=30) as client:
             lid = (await client.post("/api/learners", json={"label": "exam-grade"})).json()["id"]
             exam = (await client.post("/api/exams", json={"learner_id": lid, "query": "x"})).json()
-            quiz = (await client.post(f"/api/exam-units/{exam['units'][0]['id']}/quiz")).json()
+            quiz = (await client.post(f"/api/exams/{exam['id']}/mock")).json()
             short = next(q for q in quiz["questions"] if not q["choices"])
             done = (await client.post(f"/api/exam-quizzes/{quiz['id']}/submit", json={"answers": [
                 {"question_id": short["id"], "response": "my answer"},
             ]})).json()
             result = next(r for r in done["results"] if r["id"] == short["id"])
             assert result["correct"] is None and "couldn't be graded" in result["feedback"].lower()
-            assert done["score"]["graded"] == 4 and done["score"]["total"] == 5
+            total = len(quiz["questions"])
+            assert done["score"]["graded"] == total - 1 and done["score"]["total"] == total
 
             bad = await client.post(f"/api/exam-quizzes/{quiz['id']}/submit", json={"answers": [
                 {"question_id": exam["id"], "response": "0"}]})

@@ -74,6 +74,7 @@ class AuthConfig {
     this.firebase = false,
     this.dev = false,
     this.devCode = false,
+    this.judge = false,
     this.invites = false,
   });
 
@@ -82,6 +83,9 @@ class AuthConfig {
   final bool firebase;
   final bool dev;
   final bool devCode;
+
+  /// Judges sign in with any name + the shared judge code.
+  final bool judge;
   final bool invites;
 
   static const open = AuthConfig(required: false);
@@ -94,16 +98,20 @@ class AuthConfig {
       firebase: a['firebase'] == true,
       dev: a['dev'] == true,
       devCode: a['dev_code'] == true,
+      judge: a['judge'] == true,
       invites: a['invites'] == true,
     );
   }
 }
 
 class SignInResult {
-  const SignInResult({required this.token, required this.learner, required this.profileComplete});
+  const SignInResult({required this.token, required this.learner, required this.profileComplete, this.signInMethod});
   final String token;
   final Learner learner;
   final bool profileComplete;
+
+  /// 'dev' (a team tester), 'judge', or how a Firebase account signed in.
+  final String? signInMethod;
 }
 
 /// The REST half of the Versa API (the chat itself is a WebSocket, see
@@ -144,6 +152,7 @@ class VersaApi {
       token: j['token'] as String,
       learner: Learner(id: l['id'] as String, label: l['label'] as String),
       profileComplete: j['profile_complete'] == true,
+      signInMethod: j['sign_in_method'] as String?,
     );
   }
 
@@ -170,6 +179,14 @@ class VersaApi {
     return _signedIn(r, 'could not sign in');
   }
 
+  /// A judge: any name, plus the shared judge code.
+  Future<SignInResult> signInAsJudge(String name, String code) async {
+    final r = await _http
+        .post(_uri('/api/auth/judge'), headers: _jsonHeaders, body: jsonEncode({'name': name, 'code': code}))
+        .timeout(const Duration(seconds: 10));
+    return _signedIn(r, 'could not sign in');
+  }
+
   /// Whether an invite code would let a new account in; null if it would,
   /// else why not.
   Future<String?> checkInvite(String code) async {
@@ -182,7 +199,7 @@ class VersaApi {
   }
 
   /// Who the saved token belongs to. Throws [ApiException] on 401.
-  Future<({Learner learner, bool profileComplete, String? email})> me() async {
+  Future<({Learner learner, bool profileComplete, String? email, String? signInMethod})> me() async {
     final r = await _http.get(_uri('/api/me')).timeout(const Duration(seconds: 10));
     if (r.statusCode == 401) throw SignedOut();
     if (r.statusCode != 200) throw ApiException(_detail(r, 'could not check your sign-in'));
@@ -192,6 +209,7 @@ class VersaApi {
       learner: Learner(id: l['id'] as String, label: l['label'] as String),
       profileComplete: j['profile_complete'] == true,
       email: j['email'] as String?,
+      signInMethod: j['sign_in_method'] as String?,
     );
   }
 

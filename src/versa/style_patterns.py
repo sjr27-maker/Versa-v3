@@ -1,11 +1,16 @@
-"""Layer 3 of docs/THINKING_STYLE.md: which ways of thinking hold across
-sessions -- the thinking style, as it was defined:
+"""Layer 3 of docs/THINKING_STYLE.md: the order and pattern in how a learner
+approaches topics -- which directions they choose, in what order -- read
+across sessions from their own chats. That order and pattern is what Versa
+calls their thinking style, and nothing more is claimed for it (2026-10-01):
+the gates below filter out noise and one-offs (ability, mood, one topic,
+chance) before a pattern is shown; whether it holds for real learners is
+still to be seen -- every check so far ran on simulated students.
 
-  > how a person, given free choice, moves through ideas -- where they
-  > start, in what order, in which direction, and within what depth and
-  > breadth limits -- stable across topics and over time, measured against
-  > their cohort's default, and proven when it predicts their next
-  > unsteered choice. Interests are tracked separately.
+ONLY THIS LEARNER'S OWN DATA (decided 2026-10-01, for privacy): nothing
+here reads another learner's picks, misses, sliders, timings or questions.
+Every baseline that used to be "other learners" is now what chance would
+give from the same hands (a card's share of the hand it was in), zero (no
+lean, no shape, no speed difference) or the slider's default (50).
 
 So a pattern is structured, not a sentence, and it must pass a gate for
 every clause of that definition before it is called confirmed:
@@ -33,15 +38,17 @@ every clause of that definition before it is called confirmed:
                   similarity entry_state uses)
   over time       clear in both the earlier and the later half of the
                   evidence; clear before but not lately = `fading`
-  vs the cohort   at least MIN_LIFT times as common as for other learners
+  vs chance       every rate is judged against what a random chooser would
+                  do with the same hands (the "clear" bar is CHANCE_LIFT x
+                  that chance, and the out-of-sample test is against it)
   (hands vary)    every rate is "taken when it was offered", against the
                   chance of that from the hands it was in (choice.py) --
                   the card library deals random hands, so raw counts would
                   mostly measure how often a card happened to be shown
-  proven          out of sample: at each pick, the guess is made from the
+  out of sample   at each pick, the guess is made from the
                   EARLIER picks only (so choosing the best-looking card can't
-                  leak into its own test), and the hits must beat other
-                  learners by more than luck -- an exact binomial test at
+                  leak into its own test), and the hits must beat chance
+                  by more than luck -- an exact binomial test at
                   ALPHA, corrected for every candidate that was tried
                   (Bonferroni: 16 card types, or 4 axes). Without that
                   correction a learner choosing at random was told they had
@@ -65,11 +72,11 @@ unique, it's all the top layer stuff"):
                        deeper or simpler, more concrete or more abstract --
                        the later picks against the opening ones
   what they pass over  `passes_over`: a card type or family they rarely take
-                       when it IS offered, where others do
+                       when it IS offered -- far below chance
   speed                `speed`: which way out they recognise fastest -- how
                        long they take to choose it against their other picks
                        (quick taps and rushed sessions left out). Speed is not
-                       a choice, so it is proven by a significance test and
+                       a choice, so it is checked by a significance test and
                        holding over time rather than by predicting a pick.
 
 Experimenting on a miss (build item 8, migration 088):
@@ -78,8 +85,8 @@ Experimenting on a miss (build item 8, migration 088):
                        asked their own question on the same subject, the way
                        out that question was nearest to -- the one time Versa
                        sees what was in their mind unprompted. A fact when
-                       their misses keep asking for the same way, more than
-                       other learners' do, and it predicts their later misses.
+                       their misses keep asking for the same way, well above
+                       an even spread, and it predicts their later misses.
   follow-through       `miss_follow_through`: after a miss asked for a way,
                        was it taken when a later (random) hand offered it, and
                        did it hold in a later chat -- "keep experimenting until
@@ -127,7 +134,6 @@ MIN_CONTEXTS = 4
 MIN_RATE = 0.35
 MIN_SESSIONS = 3
 MIN_TOPICS = 3
-MIN_LIFT = 1.5
 MIN_TRIALS = 5
 MIN_PRIOR = 3  # picks seen before a pick is used as an out-of-sample trial
 ALPHA = 0.05
@@ -139,7 +145,6 @@ CHANCE_LIFT = 1.5
 LEAN_MIN_PICKS = 8
 LEAN_MIN = 0.25
 LEAN_HALF_MIN = 0.15
-LEAN_ABOVE_COHORT = 0.2
 LEAN_MIN_PRIOR = 6
 _LEAN_WORDS = {
     "concrete": ("more concrete", "more abstract"),
@@ -179,7 +184,9 @@ class StylePattern(BaseModel):
     sessions: int
     topics: int = 0
     rate: float | None = None
-    cohort_rate: float | None = None
+    # what the rate is judged against: chance, zero, or the default (never
+    # other learners -- only this learner's own data is read)
+    baseline_rate: float | None = None
     lift: float | None = None
     early_rate: float | None = None
     late_rate: float | None = None
@@ -233,7 +240,7 @@ def assign_topics(
     apart, so everything is one topic -- nothing can pass the "different
     topics" gate on a guess. Deliberately not a running
     centre: an online running mean drifts and swallows unrelated topics (the
-    cascading-merge failure vector_math.running_mean documents). A turn that isn't
+    cascading-merge failure interactions.py documents). A turn that isn't
     a question of their own (an option click, a card) belongs to the topic
     they were on in that session (so does a taken card: its text is ours,
     not their question -- the reader marks those "card"). Row keys: session_id, turn_number,
@@ -310,12 +317,12 @@ def _best_slot(picks: list[StylePick], universe: tuple[str, ...] = _SLOTS) -> st
     return best[1] if best else None
 
 
-def evaluate(kind: str, key: str, context: list[StylePick], slot: str, cohort: list[Shown],
+def evaluate(kind: str, key: str, context: list[StylePick], slot: str,
              statement: str, universe: tuple[str, ...] = _SLOTS, tests: int = 1) -> StylePattern | None:
     """Every gate for one candidate pattern: `context` is every pick made in
     the situation the pattern is about (e.g. every first pick after a
     question of their own), `slot` the card it says they go to -- judged
-    only on the hands it was offered in."""
+    only on the hands it was offered in, against chance from those hands."""
     context = sorted(context, key=lambda p: p.at)
     exposures = [p for p in context if slot in p.offered]
     n = len(exposures)
@@ -326,9 +333,7 @@ def evaluate(kind: str, key: str, context: list[StylePick], slot: str, cohort: l
     support = [p for p in exposures if p.slot == slot]
     sessions = len({p.session_id for p in support})
     topics = len({p.topic for p in support})
-    c_taken, c_offered, c_chance = win_stats(cohort, slot)
-    cohort_rate = win_rate(c_taken, c_offered, c_chance or chance)
-    lift = rate / cohort_rate
+    lift = rate / chance if chance else 0.0
     half = n // 2
     early = _rate(exposures[:half], slot)[0] if half else None
     late = _rate(exposures[half:], slot)[0] if half else None
@@ -348,8 +353,8 @@ def evaluate(kind: str, key: str, context: list[StylePick], slot: str, cohort: l
             continue
         trials += 1
         hits += pick.slot == slot
-        expected += cohort_rate
-    luck = beats_luck(hits, trials, cohort_rate, len(universe) * tests)
+        expected += 1 / len(pick.offered)  # a random chooser, from this hand
+    luck = beats_luck(hits, trials, expected / trials if trials else chance, len(universe) * tests)
     gates = {
         # weighted: quick taps, rushed or stuck picks count as less evidence
         "evidence": Gate(ok=weight >= MIN_CONTEXTS,
@@ -359,14 +364,12 @@ def evaluate(kind: str, key: str, context: list[StylePick], slot: str, cohort: l
                       need=f">= {bar:.0%}"),
         "sessions": Gate(ok=sessions >= MIN_SESSIONS, have=f"{sessions} sessions", need=f">= {MIN_SESSIONS}"),
         "topics": Gate(ok=topics >= MIN_TOPICS, have=f"{topics} different topics", need=f">= {MIN_TOPICS}"),
-        "above_cohort": Gate(ok=lift >= MIN_LIFT, have=f"{lift:.1f}x other learners ({cohort_rate:.0%})",
-                             need=f">= {MIN_LIFT}x"),
         "over_time": Gate(ok=early is not None and early >= bar and late >= bar,
                           have="-" if early is None else f"earlier {early:.0%}, later {late:.0%}",
                           need=f"both >= {bar:.0%}"),
         "predicts": Gate(ok=trials >= MIN_TRIALS and luck < ALPHA,
                          have=(f"{hits} of {trials} later picks guessed from earlier ones "
-                               f"(other learners: {expected:.1f} expected; luck p={luck:.3f})")
+                               f"(chance: {expected:.1f}; luck p={luck:.3f})")
                          if trials else "no later picks yet",
                          need=f">= {MIN_TRIALS} guesses, better than luck (p < {ALPHA})"),
     }
@@ -380,7 +383,7 @@ def evaluate(kind: str, key: str, context: list[StylePick], slot: str, cohort: l
         return None
     return StylePattern(
         kind=kind, key=key, statement=statement, status=status, gates=gates, n=n, sessions=sessions,
-        topics=topics, rate=round(rate, 4), cohort_rate=round(cohort_rate, 4), lift=round(lift, 3),
+        topics=topics, rate=round(rate, 4), baseline_rate=round(chance, 4), lift=round(lift, 3),
         early_rate=None if early is None else round(early, 4), late_rate=None if late is None else round(late, 4),
         hits=hits, trials=trials, expected_hits=round(expected, 3),
         evidence=[_evidence(p, p.slot == slot) for p in exposures[-EVIDENCE_LIMIT:]],
@@ -409,24 +412,15 @@ def _as_families(picks: list[StylePick]) -> list[StylePick]:
     ]
 
 
-def _family_cohort(cohort: list[tuple[str | None, Shown]]) -> list[tuple[str | None, Shown]]:
-    return [
-        (FAMILY_OF.get(prev) if prev else None,
-         Shown(offered=tuple(dict.fromkeys(FAMILY_OF[s] for s in c.offered)), chosen=FAMILY_OF[c.chosen],
-               weight=c.weight))
-        for prev, c in cohort if c.chosen in FAMILY_OF and all(s in FAMILY_OF for s in c.offered)
-    ]
-
-
-def family_patterns(picks: list[StylePick], cohort: list[tuple[str | None, Shown]]) -> list[StylePattern]:
+def family_patterns(picks: list[StylePick]) -> list[StylePattern]:
     """Which way out of an answer they go -- the family level of way_in and
     then (keys "family:<name>" and "family:<a>><b>")."""
     out = []
-    fam_picks, fam_cohort = _as_families(picks), _family_cohort(cohort)
+    fam_picks = _as_families(picks)
     starts = [p for p in fam_picks if p.prev_slot is None]
     fam = _best_slot(starts, _FAMILIES)
     if fam:
-        found = evaluate("way_in", f"family:{fam}", starts, fam, [c for prev, c in fam_cohort if prev is None],
+        found = evaluate("way_in", f"family:{fam}", starts, fam,
                          f"On a question of their own, goes first to {FAMILY_LABEL[fam]}.", _FAMILIES)
         if found:
             out.append(found)
@@ -435,22 +429,20 @@ def family_patterns(picks: list[StylePick], cohort: list[tuple[str | None, Shown
         b = _best_slot(after, _FAMILIES)
         if not b:
             continue
-        found = evaluate("then", f"family:{a}>{b}", after, b, [c for prev, c in fam_cohort if prev == a],
+        found = evaluate("then", f"family:{a}>{b}", after, b,
                          f"After {FAMILY_LABEL[a].split(' (')[0]}, goes on to {FAMILY_LABEL[b]}.", _FAMILIES)
         if found:
             out.append(found)
     return out
 
 
-def pick_patterns(picks: list[StylePick], cohort: list[tuple[str | None, Shown]]) -> list[StylePattern]:
-    """`cohort`: every other learner's choice, with the card they took just
-    before it (None: a first move after a question of their own)."""
-    out = family_patterns(picks, cohort)
+def pick_patterns(picks: list[StylePick]) -> list[StylePattern]:
+    """Where they start and in what order: family level, then card level."""
+    out = family_patterns(picks)
     starts = [p for p in picks if p.prev_slot is None]
-    cohort_starts = [c for prev, c in cohort if prev is None]
     slot = _best_slot(starts)
     if slot:
-        found = evaluate("way_in", slot, starts, slot, cohort_starts,
+        found = evaluate("way_in", slot, starts, slot,
                          f"On a question of their own, goes first to \u201c{slot_label(slot)}\u201d.")
         if found:
             out.append(found)
@@ -459,7 +451,7 @@ def pick_patterns(picks: list[StylePick], cohort: list[tuple[str | None, Shown]]
         b = _best_slot(after)
         if not b:
             continue
-        found = evaluate("then", f"{a}>{b}", after, b, [c for prev, c in cohort if prev == a],
+        found = evaluate("then", f"{a}>{b}", after, b,
                          f"After \u201c{slot_label(a)}\u201d, goes to \u201c{slot_label(b)}\u201d.")
         if found:
             out.append(found)
@@ -483,7 +475,7 @@ def _lean(items: Iterable[tuple[float, float]]) -> float | None:
     return sum(d * w for d, w in items) / total if total else None
 
 
-def lean_patterns(picks: list[StylePick], cohort: list[Shown]) -> list[StylePattern]:
+def lean_patterns(picks: list[StylePick]) -> list[StylePattern]:
     """Which way their picks lean in the card space, one axis at a time --
     the style as a region, not a favourite card. Read against each hand
     (chosen minus the hand's average), so a random hand can't fake a lean."""
@@ -499,7 +491,6 @@ def lean_patterns(picks: list[StylePick], cohort: list[Shown]) -> list[StylePatt
         if lean is None or lean == 0:
             continue
         sign = 1 if lean > 0 else -1
-        cohort_lean = _lean((d, c.weight) for c in cohort if (d := _delta(c.chosen, c.offered, i)) is not None) or 0.0
         support = [p for p, d in rows if d * sign > 0]
         sessions = len({p.session_id for p in support})
         topics = len({p.topic for p in support})
@@ -529,9 +520,6 @@ def lean_patterns(picks: list[StylePick], cohort: list[Shown]) -> list[StylePatt
             "clear": Gate(ok=abs(lean) >= LEAN_MIN, have=f"lean {lean:+.2f}", need=f"at least {LEAN_MIN} either way"),
             "sessions": Gate(ok=sessions >= MIN_SESSIONS, have=f"{sessions} sessions", need=f">= {MIN_SESSIONS}"),
             "topics": Gate(ok=topics >= MIN_TOPICS, have=f"{topics} different topics", need=f">= {MIN_TOPICS}"),
-            "above_cohort": Gate(ok=(lean - cohort_lean) * sign >= LEAN_ABOVE_COHORT,
-                                 have=f"{lean:+.2f} vs {cohort_lean:+.2f} for other learners",
-                                 need=f"{LEAN_ABOVE_COHORT} further their way"),
             "over_time": Gate(ok=early is not None and early * sign >= LEAN_HALF_MIN and late * sign >= LEAN_HALF_MIN,
                               have="-" if early is None else f"earlier {early:+.2f}, later {late:+.2f}",
                               need=f"both >= {LEAN_HALF_MIN} their way"),
@@ -550,7 +538,7 @@ def lean_patterns(picks: list[StylePick], cohort: list[Shown]) -> list[StylePatt
             continue
         out.append(StylePattern(
             kind="lean", key=axis, status=status, gates=gates, n=n, sessions=sessions, topics=topics,
-            rate=round(lean, 4), cohort_rate=round(cohort_lean, 4),
+            rate=round(lean, 4), baseline_rate=0.0,
             early_rate=None if early is None else round(early, 4), late_rate=None if late is None else round(late, 4),
             hits=hits, trials=trials, expected_hits=round(expected, 3),
             statement=f"Takes the {word} card on offer (lean {lean:+.2f}).",
@@ -568,7 +556,7 @@ def _median(values: list[int]) -> float:
     return float(v[m]) if len(v) % 2 else (v[m - 1] + v[m]) / 2
 
 
-# range keys: (word when above the cohort, word when below, statement)
+# range keys: (word when above the default, word when below, statement)
 _RANGE_KEYS: dict[str, tuple[str, str, str]] = {
     "depth": ("rigorous", "a gist", "Sets depth around {value:.0f}/100 ({low}-{high}) -- leans {lean}."),
     "breadth": ("wide", "focused", "Sets breadth around {value:.0f}/100 ({low}-{high}) -- leans {lean}."),
@@ -579,10 +567,13 @@ _RANGE_KEYS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def range_patterns(knob_obs: Iterable[Observation], cohort_levels: dict[str, list[int]]) -> list[StylePattern]:
+RANGE_DEFAULT = 50.0  # where every slider starts: the baseline a range is read against
+
+
+def range_patterns(knob_obs: Iterable[Observation]) -> list[StylePattern]:
     """Where they set their own depth / breadth. Only sessions where they
     moved that slider count -- a default was never a choice. A range is set,
-    not picked, so it is proven by being kept (consistent, stable over time)
+    not picked, so it is checked by being kept (consistent, stable over time)
     rather than by predicting a pick."""
     per_session: dict[str, dict[UUID, tuple[datetime, int]]] = {k: {} for k in _RANGE_KEYS}
     for o in knob_obs:
@@ -602,18 +593,16 @@ def range_patterns(knob_obs: Iterable[Observation], cohort_levels: dict[str, lis
         ordered = [v for _, v in sorted(sessions.values())]
         n = len(ordered)
         value = _median(ordered)
-        others = cohort_levels.get(knob) or []
-        cohort = _median(others) if len(others) >= 3 else 50.0
-        offset = value - cohort
+        offset = value - RANGE_DEFAULT
         spread = max(ordered) - min(ordered)
         half = n // 2
         drift = abs(_median(ordered[:half]) - _median(ordered[half:])) if half else None
         gates = {
             "sessions": Gate(ok=n >= RANGE_MIN_SESSIONS, have=f"set it in {n} sessions",
                              need=f">= {RANGE_MIN_SESSIONS}"),
-            "above_cohort": Gate(ok=abs(offset) >= RANGE_MIN_OFFSET,
-                                 have=f"{value:.0f} vs {cohort:.0f} for other learners",
-                                 need=f"differs by >= {RANGE_MIN_OFFSET}"),
+            "away_from_default": Gate(ok=abs(offset) >= RANGE_MIN_OFFSET,
+                                      have=f"{value:.0f} vs {RANGE_DEFAULT:.0f} (where it starts)",
+                                      need=f"differs by >= {RANGE_MIN_OFFSET}"),
             "consistent": Gate(ok=spread <= RANGE_MAX_SPREAD, have=f"{min(ordered)}-{max(ordered)}",
                                need=f"within {RANGE_MAX_SPREAD}"),
             "over_time": Gate(ok=drift is not None and drift <= RANGE_MAX_DRIFT,
@@ -629,6 +618,7 @@ def range_patterns(knob_obs: Iterable[Observation], cohort_levels: dict[str, lis
         lean = _RANGE_KEYS[knob][0 if offset > 0 else 1]
         out.append(StylePattern(
             kind="range", key=knob, status=status, gates=gates, n=n, sessions=n, value=round(value),
+            baseline_rate=RANGE_DEFAULT,
             statement=_RANGE_KEYS[knob][2].format(value=value, low=min(ordered), high=max(ordered), lean=lean),
             evidence=[{"value": v, "at": at.isoformat()} for at, v in sorted(sessions.values())[-EVIDENCE_LIMIT:]],
         ))
@@ -673,14 +663,13 @@ def _family_words(family: str) -> str:
     return FAMILY_LABEL[family].split(" (")[0]
 
 
-def conditional_patterns(picks: list[StylePick], cohort: list[tuple[str | None, Shown]]) -> list[StylePattern]:
+def conditional_patterns(picks: list[StylePick]) -> list[StylePattern]:
     """The same way out of an answer, split by situation. A conditional is a
     pattern only when each side holds up on its own (every gate, including
     the out-of-sample test, corrected for all the splits tried) and the
     family taken differs between the sides by at least COND_MIN_DIFF --
     otherwise it is just the plain tendency, seen twice."""
     fam = sorted(_as_families(picks), key=lambda p: p.at)
-    fam_cohort = [c for _, c in _family_cohort(cohort)]
     out = []
     for condition, (word_a, word_b) in CONDITIONS.items():
         # the way in (first moves) for familiarity; every move otherwise
@@ -693,8 +682,8 @@ def conditional_patterns(picks: list[StylePick], cohort: list[tuple[str | None, 
             continue
         tests = len(CONDITIONS) * 2
         statement = (f"{word_a}, goes to {_family_words(fa)}; {word_b}, to {_family_words(fb)}.")
-        pa = evaluate("conditional", fa, side_a, fa, fam_cohort, statement, _FAMILIES, tests)
-        pb = evaluate("conditional", fb, side_b, fb, fam_cohort, statement, _FAMILIES, tests)
+        pa = evaluate("conditional", fa, side_a, fa, statement, _FAMILIES, tests)
+        pb = evaluate("conditional", fb, side_b, fb, statement, _FAMILIES, tests)
         if pa is None or pb is None:
             continue
         # does the choice really change with the situation?
@@ -780,7 +769,6 @@ def merge_facts(patterns: list[StylePattern]) -> list[StylePattern]:
 
 SHAPE_MIN_CHATS = 5
 SHAPE_MIN = 0.3
-SHAPE_ABOVE_COHORT = 0.2
 SHAPE_WORDS = {
     "depth": ("get deeper as a chat goes on (they start simpler)", "get simpler as a chat goes on (they start deeper)"),
     "concrete": ("get more concrete as a chat goes on", "get more abstract as a chat goes on (they start concrete)"),
@@ -805,7 +793,9 @@ def _chat_shape(chat: list[StylePick], axis: int) -> float | None:
     return sum(late) / len(late) - sum(early) / len(early)
 
 
-def shape_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[StylePattern]:
+def shape_patterns(picks: list[StylePick]) -> list[StylePattern]:
+    """How their picks move as a chat goes on; a random chooser's chats have
+    no shape (0), which is the baseline."""
     out = []
     chats = _chats(picks)
     for axis_name in SHAPE_WORDS:
@@ -818,8 +808,6 @@ def shape_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
         if shape == 0:
             continue
         sign = 1 if shape > 0 else -1
-        c_rows = [v for c in _chats(cohort) if (v := _chat_shape(c, axis)) is not None]
-        c_shape = sum(c_rows) / len(c_rows) if c_rows else 0.0
         support = [c for c, v in rows if v * sign > 0]
         half = n // 2
         early = sum(v for _, v in rows[:half]) / half if half else None
@@ -855,9 +843,6 @@ def shape_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
                              need=f">= {MIN_SESSIONS}"),
             "topics": Gate(ok=len({c[0].topic for c in support}) >= MIN_TOPICS,
                            have=f"{len({c[0].topic for c in support})} different topics", need=f">= {MIN_TOPICS}"),
-            "above_cohort": Gate(ok=(shape - c_shape) * sign >= SHAPE_ABOVE_COHORT,
-                                 have=f"{shape:+.2f} vs {c_shape:+.2f} for other learners",
-                                 need=f"{SHAPE_ABOVE_COHORT} further their way"),
             "over_time": Gate(ok=early is not None and early * sign >= SHAPE_MIN / 2 and late * sign >= SHAPE_MIN / 2,
                               have="-" if early is None else f"earlier chats {early:+.2f}, later chats {late:+.2f}",
                               need=f"both >= {SHAPE_MIN / 2} their way"),
@@ -873,7 +858,7 @@ def shape_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
         out.append(StylePattern(
             kind="shape", key=axis_name, statement=f"Their picks {words}.", status=status, gates=gates, n=n,
             sessions=len(support), topics=len({c[0].topic for c in support}), rate=round(shape, 4),
-            cohort_rate=round(c_shape, 4), hits=hits, trials=trials, expected_hits=round(expected, 3),
+            baseline_rate=0.0, hits=hits, trials=trials, expected_hits=round(expected, 3),
             early_rate=None if early is None else round(early, 4), late_rate=None if late is None else round(late, 4),
             evidence=[_evidence(p, (_delta(p.slot, p.offered, axis) or 0) * (sign if k >= POSITION_OPENING else -sign) > 0)
                       for c, _ in rows[-12:] for k, p in enumerate(c)][-EVIDENCE_LIMIT:],
@@ -893,7 +878,6 @@ def _status(gates: dict[str, Gate], n: float, early, late, sign: int, bar: float
 
 PASS_MIN_OFFERED = 8
 PASS_MAX_SHARE_OF_CHANCE = 0.5  # taken at most half as often as chance would
-PASS_BELOW_COHORT = 2.0  # others take it at least twice as often
 
 
 def _takes_luck(takes: int, trials: int, rate: float, candidates: int) -> float:
@@ -906,14 +890,14 @@ def _takes_luck(takes: int, trials: int, rate: float, candidates: int) -> float:
     return min(1.0, tail * candidates)
 
 
-def passes_over_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[StylePattern]:
-    """A card type or family they rarely take when it is on offer -- where
-    other learners do. Read at both levels; one fact per target.
+def passes_over_patterns(picks: list[StylePick]) -> list[StylePattern]:
+    """A card type or family they rarely take when it is on offer -- at most
+    half as often as chance would. Read at both levels; one fact per target.
 
     Someone who nearly always takes their favourite way passes over every
     other one -- that is their way in again, not a second fact. So this is
     read with the favourite set aside: among the picks that were NOT their
-    favourite, with it taken out of the hand (the same for other learners)."""
+    favourite, with it taken out of the hand."""
     out = []
     fams = _as_families(picks)
     fav_family = _clear_favourite(fams, _FAMILIES)
@@ -921,10 +905,10 @@ def passes_over_patterns(picks: list[StylePick], cohort: list[StylePick]) -> lis
     # the favourite's pull), and the favourite card if it is elsewhere
     card_fav = _clear_favourite(picks, _SLOTS)
     card_set = {c for c, f in FAMILY_OF.items() if f == fav_family} | ({card_fav} if card_fav else set())
-    levels = [(picks, cohort, _SLOTS, False, card_fav, card_set),
-              (fams, _as_families(cohort), _FAMILIES, True, fav_family, {fav_family} - {None})]
-    for all_mine, all_theirs, universe, family, fav, aside in levels:
-        mine, theirs = _without(all_mine, aside), _without(all_theirs, aside)
+    levels = [(picks, _SLOTS, False, card_fav, card_set),
+              (fams, _FAMILIES, True, fav_family, {fav_family} - {None})]
+    for all_mine, universe, family, fav, aside in levels:
+        mine = _without(all_mine, aside)
         for target in universe:
             if target in aside:
                 continue
@@ -934,20 +918,21 @@ def passes_over_patterns(picks: list[StylePick], cohort: list[StylePick]) -> lis
                 continue
             taken, offered_w, chance = win_stats(_shown(exposures), target)
             rate = taken / offered_w if offered_w else 0.0
-            c_taken, c_offered, c_chance = win_stats(_shown(theirs), target)
-            cohort_rate = win_rate(c_taken, c_offered, c_chance or chance)
             bar = chance * PASS_MAX_SHARE_OF_CHANCE
             half = n // 2
             early = _shares(exposures[:half], target)
             late = _shares(exposures[half:], target)
             takes = trials = 0
+            expected = 0.0
             for i in range(4, n):
                 prior = exposures[:i]
                 if _shares(prior, target) > bar:
                     continue
                 trials += 1
                 takes += exposures[i].slot == target
-            luck = _takes_luck(takes, trials, cohort_rate, len(_SLOTS) + len(_FAMILIES))
+                expected += 1 / len(exposures[i].offered)  # a random chooser, from this hand
+            luck = _takes_luck(takes, trials, expected / trials if trials else chance,
+                               len(_SLOTS) + len(_FAMILIES))
             label = FAMILY_LABEL[target].split(" (")[0] if family else f"\u201c{slot_label(target)}\u201d"
             gates = {
                 "evidence": Gate(ok=offered_w >= PASS_MIN_OFFERED, have=f"offered {n} times",
@@ -959,21 +944,18 @@ def passes_over_patterns(picks: list[StylePick], cohort: list[StylePick]) -> lis
                                  need=f">= {MIN_SESSIONS}"),
                 "topics": Gate(ok=len({p.topic for p in exposures}) >= MIN_TOPICS,
                                have=f"{len({p.topic for p in exposures})} different topics", need=f">= {MIN_TOPICS}"),
-                "above_cohort": Gate(ok=cohort_rate >= PASS_BELOW_COHORT * max(rate, 0.01),
-                                     have=f"others take it {cohort_rate:.0%}, they {rate:.0%}",
-                                     need=f"others at least {PASS_BELOW_COHORT:.0f}x as often"),
                 "over_time": Gate(ok=half > 0 and early <= bar and late <= bar,
                                   have=f"earlier {early:.0%}, later {late:.0%}" if half else "-",
                                   need=f"both at most {bar:.0%}"),
                 "predicts": Gate(ok=trials >= MIN_TRIALS and luck < ALPHA,
                                  have=(f"took it {takes} of the {trials} later times it was offered "
-                                       f"(others would have {cohort_rate * trials:.1f}; luck p={luck:.3f})")
+                                       f"(chance would have {expected:.1f}; luck p={luck:.3f})")
                                  if trials else "not offered again yet",
                                  need=f">= {MIN_TRIALS} later offers, rarer than luck (p < {ALPHA})"),
             }
             if all(g.ok for g in gates.values()):
                 status: Status = "confirmed"
-            elif gates["evidence"].ok and gates["clear"].ok and gates["above_cohort"].ok:
+            elif gates["evidence"].ok and gates["clear"].ok:
                 status = "emerging"
             else:
                 continue
@@ -981,9 +963,10 @@ def passes_over_patterns(picks: list[StylePick], cohort: list[StylePick]) -> lis
                 kind="passes_over", key=f"family:{target}" if family else target, status=status, gates=gates,
                 statement=(f"Passes over {label}: took it {round(taken)} of {n} times it was offered "
                            + (f"when not {_fav_label(fav_family, True)} " if fav_family else "")
-                           + f"(others take it {cohort_rate:.0%})."),
+                           + f"(chance would be {chance:.0%})."),
                 n=n, sessions=len({p.session_id for p in exposures}), topics=len({p.topic for p in exposures}),
-                rate=round(rate, 4), cohort_rate=round(cohort_rate, 4), hits=trials - takes, trials=trials,
+                rate=round(rate, 4), baseline_rate=round(chance, 4), hits=trials - takes, trials=trials,
+                expected_hits=round(expected, 3),
                 evidence=[_evidence(p, p.slot != target) for p in exposures[-EVIDENCE_LIMIT:]],
             ))
     return out
@@ -1018,7 +1001,6 @@ def _fav_label(fav: str, family: bool) -> str:
 
 SPEED_MIN_EACH = 6
 SPEED_MIN_RATIO = 1.5  # at least 1.5x faster (or slower) than their other picks
-SPEED_ABOVE_COHORT = 1.3
 
 
 def _speed_rows(picks: list[StylePick]) -> list[StylePick]:
@@ -1044,12 +1026,12 @@ def _log_gap(rows: list[StylePick], family: str) -> tuple[float, float, int, int
     return m1 - m2, (m1 - m2) / se, len(this), len(rest)
 
 
-def speed_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[StylePattern]:
+def speed_patterns(picks: list[StylePick]) -> list[StylePattern]:
     """Which way out they recognise fastest (or slowest): the time to choose
-    a family against the time for their other picks, on a log scale."""
+    a family against the time for their OWN other picks, on a log scale
+    (baseline: no difference)."""
     out = []
     rows = sorted(_speed_rows(picks), key=lambda p: p.at)
-    c_rows = _speed_rows(cohort)
     for family in _FAMILIES:
         found = _log_gap(rows, family)
         if found is None:
@@ -1059,8 +1041,6 @@ def speed_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
         sign = -1 if gap < 0 else 1  # -1: faster
         # two-sided normal p, Bonferroni over the four families
         p_value = min(1.0, math.erfc(abs(z) / math.sqrt(2)) * len(_FAMILIES))
-        c_found = _log_gap(c_rows, family)
-        c_gap = c_found[0] if c_found else 0.0
         half = len(rows) // 2
         e, l = _log_gap(rows[:half], family), _log_gap(rows[half:], family)
         gates = {
@@ -1072,9 +1052,6 @@ def speed_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
             "sessions": Gate(ok=len({p.session_id for p in rows if FAMILY_OF[p.slot] == family}) >= MIN_SESSIONS,
                              have=f"{len({p.session_id for p in rows if FAMILY_OF[p.slot] == family})} chats",
                              need=f">= {MIN_SESSIONS}"),
-            "above_cohort": Gate(ok=(gap - c_gap) * sign >= math.log(SPEED_ABOVE_COHORT),
-                                 have=f"{ratio:.1f}x vs {math.exp(abs(c_gap)):.1f}x for other learners",
-                                 need=f"{SPEED_ABOVE_COHORT}x further their way"),
             "over_time": Gate(ok=bool(e and l and e[0] * sign > 0 and l[0] * sign > 0),
                               have=(f"earlier {math.exp(abs(e[0])):.1f}x, later {math.exp(abs(l[0])):.1f}x"
                                     if e and l else "-"), need="the same way in both halves"),
@@ -1092,7 +1069,7 @@ def speed_patterns(picks: list[StylePick], cohort: list[StylePick]) -> list[Styl
             sessions=len({p.session_id for p in rows}),
             statement=(f"Recognises {words} {'fast' if sign < 0 else 'slowly'} -- "
                        f"about {ratio:.1f}x {'quicker' if sign < 0 else 'slower'} than their other picks."),
-            rate=round(gap, 4), cohort_rate=round(c_gap, 4),
+            rate=round(gap, 4), baseline_rate=0.0,
             evidence=[_evidence(p, FAMILY_OF[p.slot] == family) for p in rows[-EVIDENCE_LIMIT:]],
         ))
     return out
@@ -1128,7 +1105,7 @@ class _Ask:
     count: int
     n: int
     share: float
-    c_share: float
+    even: float
     mine: list
     hits: int
     trials: int
@@ -1138,12 +1115,12 @@ class _Ask:
     status: Status
 
 
-def _ask_facts(tagged: list[MissAsk], c_tagged: list[MissAsk], key_of, universe: tuple[str, ...],
-               tests: int) -> list[_Ask]:
+def _ask_facts(tagged: list[MissAsk], key_of, universe: tuple[str, ...], tests: int,
+               spread: int | None = None) -> list[_Ask]:
     """The checks shared by `asks_for` and `asks_beyond`: one target (a way
     out, a family, or a new move) their read misses keep asking for -- the
-    share of their misses against other learners' share (pulled toward an
-    even spread over `universe`), over chats and topics, in both halves, and
+    share of their misses against an even spread over `spread` possible ways
+    (default: `universe`), over chats and topics, in both halves, and
     guessing their later misses from earlier ones."""
     n = len(tagged)
     if n == 0 or not universe:
@@ -1151,14 +1128,11 @@ def _ask_facts(tagged: list[MissAsk], c_tagged: list[MissAsk], key_of, universe:
     counts: dict[str, int] = {}
     for m in tagged:
         counts[key_of(m)] = counts.get(key_of(m), 0) + 1
-    c_counts: dict[str, int] = {}
-    for m in c_tagged:
-        c_counts[key_of(m)] = c_counts.get(key_of(m), 0) + 1
+    even = 1 / (spread or len(universe))
     out = []
     for target, count in counts.items():
         share = count / n
-        c_share = (c_counts.get(target, 0) + 1) / (len(c_tagged) + len(universe))
-        bar = max(MIN_RATE, CHANCE_LIFT / len(universe))
+        bar = max(MIN_RATE, CHANCE_LIFT * even)
         mine = [m for m in tagged if key_of(m) == target]
         half = n // 2
         early = sum(key_of(m) == target for m in tagged[:half]) / half if half else None
@@ -1171,7 +1145,7 @@ def _ask_facts(tagged: list[MissAsk], c_tagged: list[MissAsk], key_of, universe:
                 continue
             trials += 1
             hits += key_of(tagged[j]) == target
-        luck = beats_luck(hits, trials, c_share, tests)
+        luck = beats_luck(hits, trials, even, tests)
         gates = {
             "evidence": Gate(ok=count >= ASKS_MIN, have=f"asked for it {count} times", need=f">= {ASKS_MIN}"),
             "clear": Gate(ok=share >= bar, have=f"{count} of their {n} read misses ({share:.0%})",
@@ -1180,15 +1154,12 @@ def _ask_facts(tagged: list[MissAsk], c_tagged: list[MissAsk], key_of, universe:
                              have=f"in {len({m.session_id for m in mine})} chats", need=f">= {MIN_SESSIONS}"),
             "topics": Gate(ok=len({m.topic for m in mine}) >= MIN_TOPICS,
                            have=f"{len({m.topic for m in mine})} different topics", need=f">= {MIN_TOPICS}"),
-            "above_cohort": Gate(ok=share >= MIN_LIFT * c_share,
-                                 have=f"{share:.0%} vs {c_share:.0%} of other learners' misses",
-                                 need=f"{MIN_LIFT}x"),
             "over_time": Gate(ok=early is not None and early >= bar / 2 and late >= bar / 2,
                               have=f"earlier {early:.0%}, later {late:.0%}" if half else "-",
                               need=f"both >= {bar / 2:.0%}"),
             "predicts": Gate(ok=trials >= MIN_TRIALS and luck < ALPHA,
                              have=(f"{hits} of {trials} later misses asked for it, guessed from earlier ones "
-                                   f"(others: {c_share:.0%}; luck p={luck:.3f})") if trials else "no later misses yet",
+                                   f"(an even spread: {even:.0%}; luck p={luck:.3f})") if trials else "no later misses yet",
                              need=f">= {MIN_TRIALS} guesses, better than luck (p < {ALPHA})"),
         }
         if all(g.ok for g in gates.values()):
@@ -1197,7 +1168,7 @@ def _ask_facts(tagged: list[MissAsk], c_tagged: list[MissAsk], key_of, universe:
             status = "emerging"
         else:
             continue
-        out.append(_Ask(target=target, count=count, n=n, share=share, c_share=c_share, mine=mine, hits=hits,
+        out.append(_Ask(target=target, count=count, n=n, share=share, even=even, mine=mine, hits=hits,
                         trials=trials, early=early, late=late, gates=gates, status=status))
     return out
 
@@ -1206,21 +1177,19 @@ def _ask_pattern(kind: str, key: str, a: _Ask, statement: str) -> StylePattern:
     return StylePattern(
         kind=kind, key=key, status=a.status, gates=a.gates, statement=statement,
         n=a.n, sessions=len({m.session_id for m in a.mine}), topics=len({m.topic for m in a.mine}),
-        rate=round(a.share, 4), cohort_rate=round(a.c_share, 4), hits=a.hits, trials=a.trials,
-        expected_hits=round(a.c_share * a.trials, 3),
+        rate=round(a.share, 4), baseline_rate=round(a.even, 4), hits=a.hits, trials=a.trials,
+        expected_hits=round(a.even * a.trials, 3),
         early_rate=None if a.early is None else round(a.early, 4),
         late_rate=None if a.late is None else round(a.late, 4),
     )
 
 
-def asks_for_patterns(misses: list[MissAsk], cohort: list[MissAsk],
-                      picks: list[StylePick] | None = None) -> list[StylePattern]:
+def asks_for_patterns(misses: list[MissAsk], picks: list[StylePick] | None = None) -> list[StylePattern]:
     """The way out their own questions keep asking for when the cards miss.
-    Read at card and family level; the share of their read misses against
-    other learners' share (prior: an even spread)."""
+    Read at card and family level; the share of their read misses against an
+    even spread over the ways."""
     out = []
     tagged = sorted((m for m in misses if m.asked in FAMILY_OF), key=lambda m: m.at)
-    c_tagged = [m for m in cohort if m.asked in FAMILY_OF]
     tests = len(_SLOTS) + len(_FAMILIES)
     for family in (False, True):
         universe = _FAMILIES if family else _SLOTS
@@ -1228,7 +1197,7 @@ def asks_for_patterns(misses: list[MissAsk], cohort: list[MissAsk],
         def key_of(m: MissAsk) -> str:
             return FAMILY_OF[m.asked] if family else m.asked  # noqa: B023
 
-        for a in _ask_facts(tagged, c_tagged, key_of, universe, tests):
+        for a in _ask_facts(tagged, key_of, universe, tests):
             label = _family_words(a.target) if family else f"\u201c{slot_label(a.target)}\u201d"
             through = miss_follow_through(a.mine, picks or [], family=family) if picks is not None else None
             tail = ""
@@ -1241,34 +1210,34 @@ def asks_for_patterns(misses: list[MissAsk], cohort: list[MissAsk],
     return out
 
 
-def asks_beyond_patterns(misses: list[MissAsk], cohort: list[MissAsk]) -> list[StylePattern]:
+def asks_beyond_patterns(misses: list[MissAsk]) -> list[StylePattern]:
     """A way of thinking the cards don't offer: their misses that were none
-    of the library's ways keep landing in the same group of new moves
-    (discover_moves). Same checks as `asks_for`, over every group seen."""
+    of the library's ways keep landing in the same group of their own new
+    moves (discover_moves over their readings only). Same checks as
+    `asks_for`; the even spread is over every way a question could go -- the
+    library's card types and the new moves they have asked for."""
     tagged = sorted((m for m in misses if m.move), key=lambda m: m.at)
-    c_tagged = [m for m in cohort if m.move]
-    universe = tuple(sorted({m.move for m in tagged} | {m.move for m in c_tagged}))
+    universe = tuple(sorted({m.move for m in tagged}))
     labels = {m.move: m.move_label for m in tagged}
     return [
         _ask_pattern("asks_beyond", a.target, a,
                      f"When the cards miss, keeps asking for something they don't offer: "
                      f"\u201c{labels[a.target]}\u201d ({a.count} of {a.n} times).")
-        for a in _ask_facts(tagged, c_tagged, lambda m: m.move, universe, max(1, len(universe)))
+        for a in _ask_facts(tagged, lambda m: m.move, universe, max(1, len(universe)),
+                            spread=len(_SLOTS) + len(universe))
     ]
 
 
 # A miss read as none of the library's ways is a NEW MOVE, kept as a short
-# topic-free phrase with its embedding (migration 089). Moves are grouped
-# across all learners, each joining the earliest move within MOVE_SAME of it
-# (cosine) -- so a group's id never changes once made. A group asked for by
-# enough readings and learners is a candidate new card type for the library.
+# topic-free phrase with its embedding (migration 089). A learner's moves are
+# grouped among THEIR OWN readings only (2026-10-01: no learner's data feeds
+# another's), each joining the earliest move within MOVE_SAME of it (cosine)
+# -- so a group's id never changes once made.
 # Calibrated 2026-09-30, live (read-miss-v2 on real Gemini, 7 new-move
 # phrases in 3 intended groups -- limits, stakes, authority): same group
 # >= 0.808, different groups <= 0.795. A thin margin on a small sample --
 # recalibrate from organic readings (every phrase and embedding is kept).
 MOVE_SAME = 0.80
-DISCOVER_MIN_READINGS = 5
-DISCOVER_MIN_LEARNERS = 3
 
 
 @dataclass(frozen=True)
@@ -1287,10 +1256,10 @@ def _cos(a, b) -> float:
 
 
 def discover_moves(readings: list[MoveReading], same: float = MOVE_SAME) -> tuple[dict[UUID, str], list[dict]]:
-    """Group new moves: (set_id -> group id, the groups). A group's id is
-    its first reading's set; its label is that reading's phrase. Each group
-    says how often it was asked for, by how many learners, with examples,
-    and whether it is a candidate new card type."""
+    """Group one learner's new moves: (set_id -> group id, the groups). A
+    group's id is its first reading's set; its label is that reading's
+    phrase. Each group says how often it was asked for, in how many chats,
+    with examples. Callers pass one learner's readings only."""
     leaders: list[tuple[str, tuple[float, ...], str]] = []
     of: dict[UUID, str] = {}
     members: dict[str, list[MoveReading]] = {}
@@ -1306,13 +1275,11 @@ def discover_moves(readings: list[MoveReading], same: float = MOVE_SAME) -> tupl
     groups = []
     for gid, _, label in leaders:
         rs = members[gid]
-        learners = len({r.learner_id for r in rs})
         groups.append({
-            "id": gid, "label": label, "readings": len(rs), "learners": learners,
+            "id": gid, "label": label, "readings": len(rs),
             "sessions": len({r.session_id for r in rs}), "examples": [r.move for r in rs[:5]],
-            "candidate_card": len(rs) >= DISCOVER_MIN_READINGS and learners >= DISCOVER_MIN_LEARNERS,
         })
-    groups.sort(key=lambda g: (-g["candidate_card"], -g["learners"], -g["readings"]))
+    groups.sort(key=lambda g: (-g["readings"], -g["sessions"]))
     return of, groups
 
 
@@ -1339,20 +1306,14 @@ def miss_follow_through(misses: list[MissAsk], picks: list[StylePick], *, family
             "offered_later": offered_later, "taken": taken, "held": held}
 
 
-def find_patterns(picks: list[StylePick], knob_obs: Iterable[Observation], cohort: list[tuple[str | None, Shown]],
-                  cohort_levels: dict[str, list[int]], cohort_picks: list[StylePick] | None = None,
-                  misses: list[MissAsk] | None = None, cohort_misses: list[MissAsk] | None = None,
-                  ) -> list[StylePattern]:
-    """Pure: everything layer 3 concludes, strongest first. `cohort_picks`:
-    other learners' picks with their chats and timings (shape, passes, speed);
-    `misses`: hands they passed by asking their own question (asks_for)."""
-    others = cohort_picks or []
-    found = (pick_patterns(picks, cohort) + lean_patterns(picks, [c for _, c in cohort])
-             + conditional_patterns(picks, cohort) + shape_patterns(picks, others)
-             + passes_over_patterns(picks, others) + speed_patterns(picks, others)
-             + asks_for_patterns(misses or [], cohort_misses or [], picks)
-             + asks_beyond_patterns(misses or [], cohort_misses or [])
-             + range_patterns(knob_obs, cohort_levels))
+def find_patterns(picks: list[StylePick], knob_obs: Iterable[Observation],
+                  misses: list[MissAsk] | None = None) -> list[StylePattern]:
+    """Pure: everything layer 3 concludes, strongest first -- from this
+    learner's own picks, slider moves and misses only."""
+    found = (pick_patterns(picks) + lean_patterns(picks) + conditional_patterns(picks)
+             + shape_patterns(picks) + passes_over_patterns(picks) + speed_patterns(picks)
+             + asks_for_patterns(misses or [], picks) + asks_beyond_patterns(misses or [])
+             + range_patterns(knob_obs))
     order = {"conditional": 0, "shape": 1, "speed": 2, "way_in": 3, "asks_for": 4, "asks_beyond": 5, "then": 6,
              "passes_over": 7, "lean": 8, "range": 9}
     return merge_facts(sorted(found, key=lambda p: (_ORDER[p.status], order[p.kind])))
@@ -1402,6 +1363,10 @@ class StyleReader:
         self._pool = pool
 
     async def patterns(self, learner_id: UUID) -> list[StylePattern]:
+        """Every query below is scoped to this learner: their picks, their
+        questions (topics are told apart against the average of their OWN
+        questions), their slider moves and their misses. Nothing about any
+        other learner is read (2026-10-01)."""
         past = await PredictionStore(self._pool).past_picks(learner_id)
         rows = await self._pool.fetch(
             "SELECT session_id, turn_number, question_author::text AS question_author, question_embedding "
@@ -1416,148 +1381,63 @@ class StyleReader:
             "WHERE se.learner_id = $1 AND e.kind = 'picked'", learner_id)}
         rows = [dict(r, question_author="card") if (r["session_id"], r["turn_number"]) in picked else dict(r)
                 for r in rows]
-        topics = assign_topics(rows, await InteractionStore(self._pool).question_centre())
+        topics = assign_topics(rows, await InteractionStore(self._pool).question_centre(learner_id))
         knob_obs = await ObservationReader(self._pool).for_learner(learner_id, ("knob", "topic"))
-        cohort = await self._cohort_picks(learner_id)
-        levels = await self._cohort_levels(learner_id)
-        misses, cohort_misses = await self.misses(learner_id, topics)
-        return find_patterns(style_picks(past, topics), knob_obs, cohort, levels,
-                             await self._cohort_style_picks(learner_id), misses, cohort_misses)
+        misses = await self.misses(learner_id, topics)
+        return find_patterns(style_picks(past, topics), knob_obs, misses)
 
-    async def misses(self, learner_id: UUID, topics: dict | None = None) -> tuple[list[MissAsk], list[MissAsk]]:
-        """Their misses (on the topics their chats were on) and everyone
-        else's. Only a question on the same subject is read as asking for a
-        way out (migration 088's tagging)."""
+    async def _own_moves(self, learner_id: UUID) -> tuple[list, dict[UUID, str], list[dict]]:
+        """This learner's new-move readings, grouped among themselves only:
+        (readings, set_id -> group id, groups)."""
+        from versa.directions import DirectionStore
+
+        readings = [r for r in await DirectionStore(self._pool).miss_readings(learner_id)
+                    if r.type is None and r.same_subject and r.move_embedding is not None]
+        of, groups = discover_moves([
+            MoveReading(set_id=r.set_id, learner_id=r.learner_id, session_id=r.session_id, at=r.created_at,
+                        move=r.move, embedding=tuple(r.move_embedding)) for r in readings])
+        return readings, of, groups
+
+    async def misses(self, learner_id: UUID, topics: dict | None = None) -> list[MissAsk]:
+        """Their misses, on the topics their chats were on. Only a question on
+        the same subject is read as asking for a way out (migration 088's
+        tagging)."""
         from versa.directions import DirectionStore
 
         store = DirectionStore(self._pool)
         topics = topics or {}
-        readings = {r.set_id: r for r in await store.miss_readings()}
-        groups, _ = discover_moves([
-            MoveReading(set_id=r.set_id, learner_id=r.learner_id, session_id=r.session_id, at=r.created_at,
-                        move=r.move, embedding=tuple(r.move_embedding))
-            for r in readings.values() if r.type is None and r.same_subject and r.move_embedding is not None])
+        readings = {r.set_id: r for r in await store.miss_readings(learner_id)}
+        _, groups, _ = await self._own_moves(learner_id)
         labels = {r.set_id: r.move for r in readings.values()}
 
-        def ask(m, mine: bool) -> MissAsk:
-            topic = topics.get((m.session_id, m.turn_index), f"s:{m.session_id}") if mine else f"s:{m.session_id}"
+        def ask(m) -> MissAsk:
             reading = readings.get(m.set_id)
             asked = m.tagged_as
             if asked is None and reading is not None and reading.same_subject:
                 asked = reading.type  # the model's reading, when the embedding couldn't place it
             move = groups.get(m.set_id)
-            return MissAsk(session_id=m.session_id, at=m.created_at, topic=topic, asked=asked,
+            return MissAsk(session_id=m.session_id, at=m.created_at,
+                           topic=topics.get((m.session_id, m.turn_index), f"s:{m.session_id}"), asked=asked,
                            in_hand=m.in_hand, move=move,
                            move_label=labels.get(UUID(move.removeprefix("move:"))) if move else None)
 
-        return ([ask(m, True) for m in await store.learner_misses(learner_id)],
-                [ask(m, False) for m in await store.learner_misses(learner_id, others=True)])
+        return [ask(m) for m in await store.learner_misses(learner_id)]
 
     async def learner_moves(self, learner_id: UUID) -> list[dict]:
         """One learner's own new moves -- what they asked for that the cards
-        don't offer -- grouped the same way as everyone's (so a group keeps
-        its id), counted over their readings only. `others`: how many other
-        learners asked for the same move."""
-        from versa.directions import DirectionStore
-
-        readings = [r for r in await DirectionStore(self._pool).miss_readings()
-                    if r.type is None and r.same_subject and r.move_embedding is not None]
-        of, groups = discover_moves([
-            MoveReading(set_id=r.set_id, learner_id=r.learner_id, session_id=r.session_id, at=r.created_at,
-                        move=r.move, embedding=tuple(r.move_embedding)) for r in readings])
+        don't offer -- grouped among their own readings, strongest first."""
+        readings, of, groups = await self._own_moves(learner_id)
         mine: dict[str, list] = {}
         for r in readings:
-            if r.learner_id == learner_id:
-                mine.setdefault(of[r.set_id], []).append(r)
+            mine.setdefault(of[r.set_id], []).append(r)
         by_id = {g["id"]: g for g in groups}
         out = [{"id": gid, "label": by_id[gid]["label"], "times": len(rs),
-                "chats": len({r.session_id for r in rs}), "examples": [r.move for r in rs[:5]],
-                "others": by_id[gid]["learners"] - 1}
+                "chats": len({r.session_id for r in rs}), "examples": [r.move for r in rs[:5]]}
                for gid, rs in mine.items()]
         return sorted(out, key=lambda g: (-g["times"], -g["chats"]))
 
-    async def discovered_moves(self) -> list[dict]:
-        """Every group of new moves across all learners (discover_moves):
-        what the cards don't offer yet, candidates for the next library."""
-        from versa.directions import DirectionStore
-
-        readings = await DirectionStore(self._pool).miss_readings()
-        return discover_moves([
-            MoveReading(set_id=r.set_id, learner_id=r.learner_id, session_id=r.session_id, at=r.created_at,
-                        move=r.move, embedding=tuple(r.move_embedding))
-            for r in readings if r.type is None and r.same_subject and r.move_embedding is not None])[1]
-
     async def follow_through(self, learner_id: UUID) -> dict:
         """Experimenting on a miss, in numbers (miss_follow_through)."""
-        misses, _ = await self.misses(learner_id)
+        misses = await self.misses(learner_id)
         past = await PredictionStore(self._pool).past_picks(learner_id)
         return miss_follow_through(misses, style_picks(past, {}))
-
-    async def _cohort_style_picks(self, learner_id: UUID) -> list[StylePick]:
-        """Other learners' picks with their chats, order and timings -- the
-        default the shape of a chat, what is passed over and speed are
-        compared against (all other learners, for now; the most recent)."""
-        rows = await self._pool.fetch(
-            "SELECT s.session_id, e.created_at AS at, e.elapsed_ms, COALESCE(c.tagged_as, c.slot) AS slot, "
-            "ARRAY(SELECT COALESCE(o.tagged_as, o.slot) FROM direction_cards o WHERE o.set_id = s.id) AS offered "
-            "FROM direction_events e JOIN direction_sets s ON s.id = e.set_id "
-            "JOIN sessions se ON se.id = s.session_id JOIN direction_cards c ON c.id = e.card_id "
-            "WHERE e.kind = 'picked' AND se.learner_id IS DISTINCT FROM $1 "
-            "ORDER BY e.created_at DESC LIMIT 5000",
-            learner_id,
-        )
-        return [StylePick(session_id=r["session_id"], at=r["at"], slot=r["slot"], prev_slot=None, weight=1.0,
-                          topic=f"s:{r['session_id']}", offered=tuple(r["offered"]), elapsed_ms=r["elapsed_ms"])
-                for r in rows]
-
-    async def _cohort_picks(self, learner_id: UUID) -> list[tuple[str | None, Shown]]:
-        """Every other learner's choice with the hand it came from and the
-        card they took just before (the default for "people like them" --
-        for now, all other learners). A hand passed over with "other
-        directions" is not a step, as in PredictionStore.past_picks."""
-        rows = await self._pool.fetch(
-            "WITH sets AS ("
-            "  SELECT se.learner_id, e.kind, COALESCE(c.tagged_as, c.slot) AS slot, "
-            "         ARRAY(SELECT COALESCE(o.tagged_as, o.slot) FROM direction_cards o "
-            "               WHERE o.set_id = s.id) AS offered, "
-            "         LAG(COALESCE(c.tagged_as, c.slot)) OVER (PARTITION BY s.session_id "
-            "             ORDER BY s.turn_index, s.created_at) AS prev_slot "
-            "  FROM direction_sets s JOIN sessions se ON se.id = s.session_id "
-            "  JOIN direction_events e ON e.set_id = s.id AND e.kind <> 'more' "
-            "  LEFT JOIN direction_cards c ON c.id = e.card_id"
-            ") SELECT prev_slot, slot, offered FROM sets "
-            "WHERE kind = 'picked' AND learner_id IS DISTINCT FROM $1",
-            learner_id,
-        )
-        return [(r["prev_slot"], Shown(offered=tuple(r["offered"]), chosen=r["slot"])) for r in rows]
-
-    async def _cohort_levels(self, learner_id: UUID) -> dict[str, list[int]]:
-        """The level every other learner left each slider at, per session
-        they moved it in."""
-        rows = await self._pool.fetch(
-            "SELECT DISTINCT ON (k.session_id) k.session_id, k.from_depth, k.to_depth, k.from_breadth, "
-            "k.to_breadth FROM knob_events k JOIN sessions se ON se.id = k.session_id "
-            "WHERE se.learner_id IS DISTINCT FROM $1 ORDER BY k.session_id, k.created_at DESC",
-            learner_id,
-        )
-        out: dict[str, list[int]] = {"depth": [], "breadth": [], "explore_depth": [], "explore_breadth": []}
-        for r in rows:
-            for knob in ("depth", "breadth"):
-                if r[f"to_{knob}"] != 50 or r[f"from_{knob}"] != 50:
-                    out[knob].append(r[f"to_{knob}"])
-        # other learners' topic trees: the deepest level per exploration, and
-        # the share of lessons kept per course
-        from versa.observations import TREE_LEVEL_POINTS
-
-        for r in await self._pool.fetch(
-            "SELECT exploration_id, max((payload->>'depth')::int) AS level FROM topic_signals "
-            "WHERE kind = 'expand' AND learner_id IS DISTINCT FROM $1 GROUP BY exploration_id", learner_id,
-        ):
-            out["explore_depth"].append(min(100, (r["level"] or 0) * TREE_LEVEL_POINTS))
-        for r in await self._pool.fetch(
-            "SELECT (payload->>'lessons_chosen')::float AS chosen, (payload->>'lessons_total')::float AS total "
-            "FROM topic_signals WHERE kind = 'selection' AND learner_id IS DISTINCT FROM $1", learner_id,
-        ):
-            if r["total"]:
-                out["explore_breadth"].append(round(100 * r["chosen"] / r["total"]))
-        return out

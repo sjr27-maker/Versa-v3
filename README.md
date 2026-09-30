@@ -1,10 +1,10 @@
 # Versa
 
-**A tutor that learns how you think.**
+**Learn, how you think.**
 
-People often can't say what they want — the thought is there before the words for it. So Versa doesn't ask; it offers. After every answer it lays out where the idea could go ("where this could go": an example, the intuition, why it works, where it's used, a harder version, what comes next), and the student taps the one that matches what was already in their mind. Across sessions and topics, with mood and ability set apart, what they keep recognising is their **thinking style** — where they start, in what order, which way they go, and within what depth and breadth limits. The goal is answers that get better over time, until Versa offers what they would have picked before they pick it.
+People often can't say what they want — the thought is there before the words for it. So Versa doesn't ask; it offers. After every answer it lays out where the idea could go ("where this could go": an example, the intuition, why it works, where it's used, a harder version, what comes next), and the student taps the one that matches what was already in their mind. Across the modes, the order and pattern in how they approach a topic — which directions they choose, in what order, and what they achieve — is what we call their **thinking style**; for now it is nothing more than that. Versa records it from their own chats and sets the noise aside (ability and mood), and the aim is answers that get better over time. Whether it does is to be shown with real learners: every check so far was run by machines on simulated students, and those runs are set aside.
 
-Everything else feeds that or uses it: the length/depth/breadth sliders (the student setting their own range), stated preferences, clickable options when a message is ambiguous, and three of the app's modes. The definition, the evidence inventory, the design and what is proven so far are in [`docs/THINKING_STYLE.md`](docs/THINKING_STYLE.md) — most of it is **not proven yet**.
+Everything else feeds that or uses it: the length/depth/breadth sliders (the student setting their own range), stated preferences, clickable options when a message is ambiguous, and three of the app's modes. The definition, the evidence inventory, the design and where it stands are in [`docs/THINKING_STYLE.md`](docs/THINKING_STYLE.md).
 
 The Python package and CLI are both named `versa`. This README describes the codebase as it currently stands.
 
@@ -29,7 +29,7 @@ The project began as a much larger architecture — a full learner model with hy
 What runs today is the lean core that survived that measurement:
 
 - a three-call **disambiguation flow** (`ReasoningMode.DISAMBIGUATE`, also called *minimal_branch* mode) that replaces the old branch-tree/planner machinery outright;
-- a **memory layer** over pgvector that recalls how past ambiguity was resolved and detects a thinking style across sessions, evidence-gated so it never asserts a pattern on a hunch;
+- a **memory layer** over pgvector that recalls how past ambiguity was resolved and reads the order and pattern of a learner's choices across sessions, gated so it never names a pattern on a hunch;
 - an **interaction/retrieval pipeline** plus a **claim layer** that builds a durable, evidence-backed model of a learner's traits — currently recorded and wired into the answer prompt, while the predictive scoring it produces feeds nothing back into what the student sees yet;
 
 ---
@@ -64,10 +64,9 @@ A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`)
 
 - **Disambiguation flow** (`disambiguate.py`) — the live reasoning mode: assess ambiguity, offer 2–4 distinct readings as options, answer once one is chosen. Every assessment is persisted whether or not it decides to branch.
 - **Memory layer** (`memory.py`) — `learner_facts` (within-session recall that can skip branching entirely when a past fact resolves the current message) and `thinking_style_candidates` (a cross-session order-of-reasoning pattern; once confirmed by enough independent sessions it is fed to `AssessAndBranch` and `DisambiguationOptions` — it shapes which options are offered, not the answer text itself). Session-end consolidation runs from the app too (`POST /api/sessions/{id}/end`, plus a sweep of older unconsolidated chats when a new one starts).
-- **Interaction / retrieval pipeline** (`interactions.py`, `retrieval.py`, `history_block.py`) — an append-only log of every exchange, with deterministic three-stage retrieval over a learner's own history and population-level patterns. Feeds the history block into the final-answer prompt; its LLM-based selection *predictions* are recorded but do not yet influence the student's response.
+- **Interaction / retrieval pipeline** (`interactions.py`, `retrieval.py`, `history_block.py`) — an append-only log of every exchange, with deterministic three-stage retrieval over a learner's own history only (never other learners'). Feeds the history block into the final-answer prompt; its LLM-based selection *predictions* are recorded but do not yet influence the student's response.
 - **Claim layer** (`claims.py`) — a durable, cross-session model of a learner's standing preferences, extracted **only** from episodes that were actually surprising (high prediction error), each claim carrying a falsifiable `test` and promoted only past an evidence/topic-spread gate.
 - **Parked: capability & instrument layers** (`archive/instrument_layer/`) — a separate capability-claim store plus purpose-built interactions (`locate`, `predict`) whose event streams were interpreted by hand-written deterministic contracts. Removed from the live architecture; nothing imports it and `pytest` never collects it. Restore steps are in that directory's README. Their migrations and tables remain in the schema, dormant.
-- **Population patterns** (`population_patterns.py`) — clusters interaction abstracts across many learners, surfacing only patterns backed by ≥20 distinct learners with no single learner dominating.
 - **Domain switch** (`domain_config.py`) — a prompts-only knob (`education` vs `general`) for testing whether the architecture is genuinely domain-independent.
 - **Reference bindings & stated preferences** (`reference_bindings.py`, in `interactions.py`) — exact-match memory of a learner's recurring phrases and explicitly stated preferences, threaded into the prompt.
 - **Exam preparation** (`exams.py`) — the third live app mode. An exam is a title, an optional date and syllabus units, built from a search, a PDF or link, or one of the learner's courses. The student takes a 5-question quiz per unit (retakes ask new questions) and timed mock tests across every unit; multiple choice is marked exactly and short answers by one grading call. Scores are derived from stored answers, never stored themselves, and exam prep is walled off from the personal learner model (invariant 13).
@@ -202,7 +201,6 @@ Every command is available as `uv run versa <command>`. Commands that call an LL
 | `versa migrate --status` | Show applied/pending migrations without changing anything. |
 | `versa migrate --baseline` | Stamp every migration as already-applied without running it — for a DB that already has the full schema but no ledger. |
 | `versa consolidate-session <session-id>` | Run the cross-session thinking-style detection step for one completed session on demand. Accepts `--stub`. |
-| `versa aggregate-patterns` | Cluster every learner's latest interaction abstracts and write readable population patterns (≥20 distinct learners, ≤25% single-learner share). |
 | `versa seed-demo-fixture` | (Re)apply two hand-authored, opposite-portrait demo learners plus a fixed question set. Idempotent; no LLM/embedding call. |
 | `versa compare-portraits [--question]` | Three-column wrong-portrait control: the same question run against the concrete portrait, the abstract portrait, and a zero-claims control, side by side. Accepts `--stub` (under a stub all three columns are identical by construction). |
 | `versa review-claims --learner <label\|uuid>` | Read-only listing of one learner's claims: statement, test, status, confidence, evidence count, topic spread, and the interactions behind each evidence row. |
@@ -273,7 +271,6 @@ src/versa/
   interactions.py        # append-only interaction log + recorder
   retrieval.py           # deterministic 3-stage retrieval (no LLM)
   claims.py              # durable preference-claim layer
-  population_patterns.py # cross-learner clustering
   domain_config.py       # education/general prompts-only switch
   model_config.py        # Gemini tier→model mapping
   llm.py, embeddings.py  # Gemini + stub clients

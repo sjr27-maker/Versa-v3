@@ -41,42 +41,37 @@ def _pick(slot, *, offered=_HAND, prev=None, first=False, ms=5000, position=3, s
                     prev_slot=prev, first_in_session=first, stuck=stuck, rushed=rushed, offered=tuple(offered))
 
 
-def _others(n, chosen, offered=_HAND):
-    from versa.choice import Shown
-
-    return [Shown(tuple(offered), chosen) for _ in range(n)]
-
-
 # ------------------------------------------------------------ the arithmetic
 
 
-def test_with_nothing_seen_it_guesses_what_everyone_else_takes():
-    p = predict([], _others(30, "example") + _others(10, "why"), offered=_HAND, prev_slot=None,
-                first_in_session=True)
-    assert p.predicted_slot == "example"
+def test_with_nothing_seen_every_card_starts_even():
+    # only the learner's own picks move the guess -- never other learners'
+    # (v3, 2026-10-01): with none yet, every card on offer is equally likely
+    p = predict([], offered=_HAND, prev_slot=None, first_in_session=True)
     assert p.evidence_count == 0
     assert p.contributions["your_picks"]["weight"] == 0
+    assert "everyone" not in p.contributions and p.contributions["even_start"]["weight"] == 1
+    assert all(v == pytest.approx(1 / 3, abs=1e-3) for v in p.scores.values())
     assert "starting guess" in explain(p)[0]
 
 
 def test_the_guess_is_always_one_of_the_cards_on_offer():
-    everyone_loves_example = _others(50, "example")
     hand = ("story", "debate", "summary")
-    p = predict([], everyone_loves_example, offered=hand, prev_slot=None, first_in_session=False)
+    p = predict([_pick("example") for _ in range(10)], offered=hand, prev_slot=None, first_in_session=False)
     assert p.predicted_slot in hand
     assert set(p.scores) == set(hand) and sum(p.scores.values()) == pytest.approx(1, abs=1e-3)
 
 
 def test_with_nothing_at_all_the_tie_breaks_the_same_way_every_time():
     hand = ("why", "intuition", "next")
-    first = predict([], [], offered=hand, prev_slot=None, first_in_session=False)
+    first = predict([], offered=hand, prev_slot=None, first_in_session=False)
     assert first.predicted_slot == "intuition"  # canonical library order
-    assert first == predict([], [], offered=hand, prev_slot=None, first_in_session=False)
+    assert first == predict([], offered=hand, prev_slot=None, first_in_session=False)
 
 
-def test_their_own_picks_outweigh_everyone_once_there_are_enough():
+def test_their_own_picks_outweigh_the_even_start_once_there_are_enough():
     past = [_pick("use") for _ in range(8)]
-    p = predict(past, _others(100, "example"), offered=_HAND, prev_slot=None, first_in_session=False)
+    p = predict(past, offered=_HAND, prev_slot=None, first_in_session=False)
     assert p.predicted_slot == "use"
     assert p.contributions["your_picks"]["tally"]["use"] == {"offered": 8, "taken": 8}
 
@@ -86,26 +81,26 @@ def test_a_card_always_taken_when_offered_beats_one_merely_shown_more():
     # time it was offered. Raw counts say story; read against the hands, use.
     past = [_pick(s, offered=("story", "summary", "debate")) for s in ["story", "summary", "debate"] * 5]
     past += [_pick("use", offered=("use", "story", "summary")) for _ in range(3)]
-    p = predict(past, [], offered=("use", "story", "debate"), prev_slot=None, first_in_session=False)
+    p = predict(past, offered=("use", "story", "debate"), prev_slot=None, first_in_session=False)
     assert p.predicted_slot == "use"
     assert "you took it 3 of 3 times" in explain(p)[0]
 
 
 def test_quick_taps_and_first_card_taps_count_for_less_and_are_named():
     past = [_pick("example", ms=QUICK_TAP_MS - 1) for _ in range(5)] + [_pick("use") for _ in range(3)]
-    p = predict(past, [], offered=_HAND, prev_slot=None, first_in_session=False)
+    p = predict(past, offered=_HAND, prev_slot=None, first_in_session=False)
     assert p.predicted_slot == "use"
     assert p.contributions["set_aside"] == {"quick_tap": 5, "first_card": 0, "stuck": 0, "rushed": 0}
     assert "5 taps too quick to have read the cards" in explain(p)[-1]
 
     past = [_pick("example", position=0) for _ in range(2)]
-    aside = predict(past, [], offered=_HAND, prev_slot=None, first_in_session=False).contributions["set_aside"]
+    aside = predict(past, offered=_HAND, prev_slot=None, first_in_session=False).contributions["set_aside"]
     assert aside == {"quick_tap": 0, "first_card": 2, "stuck": 0, "rushed": 0}
 
 
 def test_recent_picks_count_more_than_old_ones():
     past = [_pick("why") for _ in range(6)] + [_pick("use") for _ in range(6)]
-    p = predict(past, [], offered=_HAND, prev_slot=None, first_in_session=False)
+    p = predict(past, offered=_HAND, prev_slot=None, first_in_session=False)
     assert p.predicted_slot == "use"
 
 
@@ -116,24 +111,33 @@ def test_their_order_of_approach_wins_right_after_the_card_it_follows():
         s = uuid4()
         past += [_pick("example", first=True, session=s), _pick("use", prev="example", session=s)]
     past += [_pick("example") for _ in range(4)]
-    after_example = predict(past, [], offered=_HAND, prev_slot="example", first_in_session=False)
+    after_example = predict(past, offered=_HAND, prev_slot="example", first_in_session=False)
     assert after_example.predicted_slot == "use"
     ctx = after_example.contributions["context"]
     assert ctx["kind"] == "order" and ctx["after_slot"] == "example"
     assert ctx["tally"]["use"] == {"offered": 4, "taken": 4}
     assert any("Right after" in line and "4 of 4" in line for line in explain(after_example))
 
-    opening = predict(past, [], offered=_HAND, prev_slot=None, first_in_session=True)
+    opening = predict(past, offered=_HAND, prev_slot=None, first_in_session=True)
     assert opening.predicted_slot == "example"
     assert opening.contributions["context"]["kind"] == "opening"
 
 
 def test_the_breakdown_puts_the_strongest_reason_first():
-    p = predict([_pick("why") for _ in range(20)], _others(5, "why") + _others(5, "use"), offered=_HAND,
-                prev_slot=None, first_in_session=False)
+    p = predict([_pick("why") for _ in range(20)], offered=_HAND, prev_slot=None, first_in_session=False)
     lines = explain(p)
     assert lines[0].startswith("When") and "20 of 20" in lines[0]
-    assert any("Other learners" in line for line in lines)
+    assert not any("Other learners" in line for line in lines)
+
+
+def test_a_guess_stored_before_v3_still_explains_as_it_was_stored():
+    # append-only: an old row's breakdown (with other learners' picks under
+    # "everyone") is shown as stored, never re-derived
+    p = predict([_pick("why") for _ in range(3)], offered=_HAND, prev_slot=None, first_in_session=False)
+    old = p.model_copy(update={"contributions": {
+        k: v for k, v in p.contributions.items() if k != "even_start"} | {
+        "everyone": {"weight": 0.4, "tally": {"why": {"offered": 10, "taken": 5}}}}})
+    assert any("Other learners take" in line for line in explain(old))
 
 
 # ------------------------------------------------------------- invariant 20
@@ -288,7 +292,7 @@ async def test_a_new_question_is_answered_normally_and_a_follow_up_their_way(cle
     from versa.embeddings import EMBEDDING_DIM, StubEmbeddingClient
 
     # a fresh test database has no real "average question": give it a neutral one
-    async def neutral_centre(self):
+    async def neutral_centre(self, learner_id):
         return [0.0] * EMBEDDING_DIM
 
     monkeypatch.setattr(interactions_module.InteractionStore, "question_centre", neutral_centre)
@@ -353,7 +357,10 @@ class _Recent:
     async def get_recent_in_session(self, session_id, turn_number, limit):
         return self.rows[:limit]
 
-    async def question_centre(self):
+    async def session_learner(self, session_id):
+        return uuid4()
+
+    async def question_centre(self, learner_id):
         return self.centre
 
 
@@ -402,7 +409,7 @@ async def test_resolving_options_is_the_first_answer_to_that_question_not_a_foll
 def test_picks_while_stuck_or_rushing_count_for_less_and_are_named():
     past = [_pick("example", stuck=True) for _ in range(3)] + [_pick("use", rushed=True) for _ in range(3)]
     past += [_pick("why") for _ in range(2)]
-    p = predict(past, [], offered=_HAND, prev_slot=None, first_in_session=False)
+    p = predict(past, offered=_HAND, prev_slot=None, first_in_session=False)
     assert p.predicted_slot == "why"  # 2 clean picks beat 3 x 0.5 and 3 x 0.6
     assert p.contributions["set_aside"] == {"quick_tap": 0, "first_card": 0, "stuck": 3, "rushed": 3}
     last = explain(p)[-1]

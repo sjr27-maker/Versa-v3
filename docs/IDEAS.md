@@ -242,7 +242,7 @@ keep this for later".
 
 What pulls someone (subjects, and which way their interests move -- say from
 theory toward applications) is kept apart from HOW they think, but read the
-same way: from what they did, gated, proven by predicting. What exists: every
+same way: from what they did, gated, and checked on real learners. What exists: every
 question with its embedding and time (the full trail is rebuildable), and
 `topic_switch` / `returned_to_topic` observations. Not built: an interest
 model.
@@ -387,7 +387,7 @@ per-session pending-options state in the loop. See the decisions log.
   and option generation run one after another); "options first, memory second"
   (section 1) is the lever.
 - **Raw-cosine "same subject" can't tell subjects apart on real embeddings**
-  (found 2026-09-29, live, `docs/verification-runs/adaptation_check_20260929.md`).
+  (found 2026-09-29, live, `docs/verification-runs/machine-tested/adaptation_check_20260929.md`).
   Six openers on six different subjects scored 0.52-0.71 raw cosine against
   each other; consecutive turns of one chat 0.58-1.00. So
   `RetrievalConfig.same_subject_threshold` (0.545) sits below nearly every
@@ -410,7 +410,7 @@ per-session pending-options state in the loop. See the decisions log.
   failed in a full run that shared the machine with a live Gemini run, and
   pass alone.
 - **Thinking-style detection fragments and drifts** (found 2026-09-27, live,
-  `docs/verification-runs/thinking_style_FF_20260927.md`). FF's consistent
+  `docs/verification-runs/machine-tested/thinking_style_FF_20260927.md`). FF's consistent
   style did get promoted (5/5), but spread over 5 candidates, because
   `consolidate_session` asks the confirmation call about the single nearest
   candidate only (`limit=1`): a stray nearest candidate shadows the real one.
@@ -436,7 +436,7 @@ per-session pending-options state in the loop. See the decisions log.
   retry/dead-letter mechanism or a "this step failed" marker written
   BEFORE the call, which is more than a same-day fix.
   **Sharpened 2026-09-22 (learner "AS", see
-  `docs/verification-runs/thinking_style_AS_20260922.md`):** the free
+  `docs/verification-runs/machine-tested/thinking_style_AS_20260922.md`):** the free
   tier's cap is **per-model, per-day, 20 requests** — both `gemini-3.6-flash`
   and `gemini-3.5-flash` hit it independently the same day, and a single
   rich multi-turn session alone can exceed it. A 5-session live check of
@@ -449,6 +449,34 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-10-01** — The thinking style reframed, honestly. Your words:
+  "he learns topics, uses multiple modes; what we find, how he approached,
+  which direction he chose, and what he achieved -- that order and pattern
+  is what I call thinking style, for now it's nothing more than that ...
+  let's be honest ... but not discourage, since it will be proved with real
+  users." So the definition is now just that order and pattern (with the
+  noise -- ability and mood -- set aside); "stable over time", "predicts the
+  next choice" and "adapting helps" are no longer claimed, only what real
+  learners will show. Every machine-run check (a model playing a simulated
+  student) moved to `docs/verification-runs/machine-tested/`, counted
+  neither for nor against. CLAUDE.md, README and THINKING_STYLE.md reworded;
+  the code is unchanged. Older entries below keep their original wording as
+  a record of what was thought then.
+
+- **2026-10-01** — Only a learner's own data contributes to what Versa
+  concludes about them. Your words: "other learners data for better patterns
+  doesn't seem right for privacy, so we need to remove it, only the learner
+  own chats and session must contribute for now." Style patterns are read
+  against chance (or 0 / the slider default / an even spread) instead of
+  other learners; the pick guess starts even (predictor v3); new moves are
+  grouped per learner; topics and follow-ups use the average of the
+  learner's own questions; retrieval's population scope, the "across other
+  learners" prompt paragraph, `population_patterns.py` and `versa
+  aggregate-patterns` are gone (the table's rows stay, invariant-style). Cost:
+  "being new" can no longer be told apart from a style. Details and the test
+  that proves it: `docs/THINKING_STYLE.md`, "Only the learner's own data".
+  "For now": pooling could come back only with consent and a design for it.
 
 - **2026-09-30** — The old free-text thinking-style detector is retired.
   Session end no longer runs SummarizeSessionPath / ConfirmThinkingStyleMatch
@@ -702,7 +730,7 @@ per-session pending-options state in the loop. See the decisions log.
     exams in History.
 
 - **2026-09-26** — First real-model cross-session check
-  (`scripts/cross_session_check.py`; reports in `docs/verification-runs/
+  (`scripts/cross_session_check.py`; reports in `docs/verification-runs/machine-tested/
   cross_session_20260926*.md`). Dev DB wiped first (backup:
   `../Versa-v3-backups/versa_dev_before_wipe_20260926.dump`). Stated
   preference, history block and "what did we pick last time" all carry

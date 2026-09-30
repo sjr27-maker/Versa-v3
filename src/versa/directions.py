@@ -10,8 +10,10 @@ want beats describing it, and a card can spark a want that wasn't there.
 Evidence. What a learner picks, and above all the ORDER they explore in
 (intuition -> example -> why ...), is how they think, shown rather than
 stated. So:
-  - the skeleton is the same for everyone, so picks compare across people
-    and across sessions; only the card wording is generated;
+  - the skeleton is the same for everyone, so a learner's picks compare
+    across their own sessions (a learner is only ever read against chance
+    and their own history, never other learners -- 2026-10-01); only the
+    card wording is generated;
   - the generator is deliberately given NO thinking style, claims, profile
     or cross-session history -- a set shaped by what we already believe
     about someone would turn their pick into an echo of our own guess (the
@@ -658,13 +660,14 @@ class DirectionStore:
             return False
         return True
 
-    async def miss_readings(self) -> list[StoredMissReading]:
-        """Every learner's readings, oldest first (new moves are grouped
-        across everyone: discover_moves)."""
+    async def miss_readings(self, learner_id: UUID) -> list[StoredMissReading]:
+        """One learner's readings, oldest first. Only their own: new moves
+        are grouped within a learner, never across learners (2026-10-01)."""
         rows = await self._pool.fetch(
             "SELECT r.set_id, se.learner_id, s.session_id, r.same_subject, r.type, r.move, r.move_embedding, "
             "r.created_at FROM direction_miss_readings r JOIN direction_sets s ON s.id = r.set_id "
-            "JOIN sessions se ON se.id = s.session_id ORDER BY r.created_at LIMIT 20000",
+            "JOIN sessions se ON se.id = s.session_id WHERE se.learner_id = $1 ORDER BY r.created_at LIMIT 20000",
+            learner_id,
         )
         out = []
         for r in rows:
@@ -674,13 +677,11 @@ class DirectionStore:
             out.append(StoredMissReading(**row))
         return out
 
-    async def learner_misses(self, learner_id: UUID | None, *, others: bool = False) -> list[DirectionMiss]:
-        """A learner's misses, oldest first -- or, with `others`, everyone
-        else's (the cohort default)."""
-        op = "IS DISTINCT FROM" if others else "="
+    async def learner_misses(self, learner_id: UUID) -> list[DirectionMiss]:
+        """A learner's own misses, oldest first."""
         rows = await self._pool.fetch(
             "SELECT m.* FROM direction_misses m JOIN sessions se ON se.id = m.session_id "
-            f"WHERE se.learner_id {op} $1 ORDER BY m.created_at LIMIT 5000",
+            "WHERE se.learner_id = $1 ORDER BY m.created_at LIMIT 5000",
             learner_id,
         )
         return [DirectionMiss(**{k: r[k] for k in DirectionMiss.model_fields}) for r in rows]

@@ -6,7 +6,7 @@ import '../theme.dart';
 import '../widgets/placeholder_page.dart';
 
 /// The four ways to use Versa: Sandbox, Learn a topic, Exam preparation and
-/// Study with others (experimental). All four are live.
+/// Study with others (experimental). All four are open (no badge on them).
 class ModesScreen extends StatelessWidget {
   const ModesScreen({super.key});
 
@@ -143,18 +143,7 @@ class _ModeCardState extends State<_ModeCard> {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Icon(widget.icon, size: 30, color: live ? Paper.accent : Paper.faint),
-                  live
-                      ? Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                          decoration: BoxDecoration(
-                            color: Paper.oliveSoft,
-                            border: Border.all(color: Paper.oliveLine),
-                            borderRadius: BorderRadius.circular(100),
-                          ),
-                          child: Text('LIVE',
-                              style: mono(10, color: Paper.olive, weight: FontWeight.w600)),
-                        )
-                      : const ComingSoonPill(),
+                  if (!live) const ComingSoonPill(),
                 ],
               ),
               const SizedBox(height: 18),

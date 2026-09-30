@@ -64,7 +64,17 @@ class _ThinkingStyleScreenState extends State<ThinkingStyleScreen> {
                 ),
               ]),
               const SizedBox(height: 4),
-              Text('What I have noticed about how you think', style: serif(28)),
+              Text('How you approach what you learn', style: serif(28)),
+              const SizedBox(height: 8),
+              // What "thinking style" means here, and no more (docs/THINKING_STYLE.md).
+              Text(
+                'The order and pattern in how you take on topics -- which directions you choose, in what '
+                'order, and how it goes -- is what Versa calls your thinking style. It comes only from your '
+                'own chats, with off moments (stuck, rushed) counting for less. It is early days: this is '
+                'what your choices show so far, nothing more.',
+                key: const ValueKey('thinking-style-meaning'),
+                style: sans(13, color: Paper.muted, height: 1.5),
+              ),
               const SizedBox(height: 20),
               _ExploreSection(patterns: _patterns),
               FutureBuilder<ThinkingStyleOverview>(
@@ -211,7 +221,7 @@ class _PatternCardState extends State<_PatternCard> {
   Widget build(BuildContext context) {
     final p = widget.pattern;
     final (label, color) = switch (p.status) {
-      'confirmed' => ('Confirmed', Paper.olive),
+      'confirmed' => ('Clear pattern', Paper.olive),
       'fading' => ('Fading', Paper.warn),
       _ => ('Emerging \u00b7 ${p.gatesPassed} of ${p.gates.length} checks', Paper.muted),
     };

@@ -1271,27 +1271,6 @@ class Prediction(BaseModel):
     retrieval_provenance: list = Field(default_factory=list)
 
 
-class PopulationPattern(BaseModel):
-    """One cross-learner pattern, derived from abstract forms only —
-    never raw transcripts. Readable by retrieval only at
-    `distinct_learner_count >= 20` AND `max_per_learner_share <=
-    0.25`: the second gate matters as much as the first, since without
-    it one heavy user can supply most of a pattern's support and the
-    learner-count threshold passes on what is effectively one person's
-    behavior. Append-only: each aggregation run inserts fresh rows; a
-    stale pattern is superseded by a newer row from the next run, never
-    edited in place."""
-
-    id: UUID = Field(default_factory=uuid4)
-    abstract_form: str
-    embedding: list[float]
-    support_count: int
-    distinct_learner_count: int
-    max_per_learner_share: float
-    representative_features: dict = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=_utcnow)
-
-
 # ── node outputs (not DB-backed) ──────────────────────────────────────
 
 

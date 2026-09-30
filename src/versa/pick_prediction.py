@@ -1,7 +1,8 @@
 """Guessing the learner's next direction, before they pick it (migration 085).
 
-The proof clock for the core claim (docs/THINKING_STYLE.md): if Versa is
-learning how someone thinks, it should get better at telling, before a set
+How the thinking style will be checked on real learners
+(docs/THINKING_STYLE.md) -- nothing is claimed from it yet: if Versa is
+picking up how someone approaches things, it should get better at telling, before a set
 of "where this could go" cards is shown, which one they will take. So every
 set gets a prediction, written BEFORE the cards are sent -- it can never see
 the pick -- and after a pick the learner is told whether Versa guessed it,
@@ -16,8 +17,10 @@ so a pick stays clean evidence; the guess is only revealed after it.
 v2 (the card library, lib-v2): every pick is read against the hand it was
 taken from, and the guess is always one of the cards about to be shown
 (choice.py's preference weights). It blends:
-  - everyone else's choices (the default for "people like them" -- for now,
-    all other learners);
+  - an even start: before they have picked, every card is equally likely
+    (v3, 2026-10-01: this used to be every other learner's choices -- no
+    learner's data feeds another's any more, so only their own picks move
+    the guess);
   - this learner's own choices, recent ones counting more;
   - their order of approach: what they took after the card they just took;
   - how they open a chat: their first pick in a session.
@@ -44,7 +47,7 @@ from versa.choice import Shown, among, luce_fit, win_rate, win_stats
 from versa.directions import CLASSIC_SLOTS, FAMILIES, FAMILY_OF, SLOTS
 from versa.observations import QUICK_TAP_MS, ObservationReader
 
-PREDICTOR_VERSION = "v2"
+PREDICTOR_VERSION = "v3"  # v3: an even start instead of other learners' picks
 _SLOTS: tuple[str, ...] = tuple(SLOTS)  # canonical order breaks ties, so a guess is reproducible
 
 # QUICK_TAP_MS (observations.py): a pick this soon was probably not read.
@@ -58,8 +61,8 @@ STUCK_WEIGHT = 0.5
 RUSHED_WEIGHT = 0.6
 # A pick 20 picks ago counts half as much as the latest one.
 RECENCY_HALF_LIFE = 20
-# Everyone else's picks count as this many of the learner's own (a prior):
-# at K picks their own weigh as much as the crowd, and more after.
+# The even start counts as this many of the learner's own picks (a prior):
+# at K picks their own weigh as much as it, and more after.
 OWN_PICKS_K = 5.0
 CONTEXT_K = 3.0
 # The running record the learner sees: over their last N guessed picks.
@@ -138,14 +141,14 @@ def _shown(pick: PastPick, weight: float) -> Shown:
 
 
 def predict(
-    past: list[PastPick], population: list[Shown], *, offered: list[str] | tuple[str, ...],
+    past: list[PastPick], *, offered: list[str] | tuple[str, ...],
     prev_slot: str | None, first_in_session: bool,
 ) -> Prediction:
     """Pure: the same inputs always give the same guess and the same
     breakdown. `past` is this learner's picks, oldest first, each with the
-    hand it was taken from; `population` is everyone else's choices;
-    `offered` the hand about to be shown. The guess is always one of the
-    offered cards (choice.py)."""
+    hand it was taken from -- the only picks it reads; `offered` the hand
+    about to be shown. The guess is always one of the offered cards
+    (choice.py)."""
     offered = tuple(offered)
     n = len(past)
     set_aside = {"quick_tap": 0, "first_card": 0, "stuck": 0, "rushed": 0}
@@ -164,12 +167,11 @@ def predict(
         if first_in_session and pick.first_in_session:
             opening.append(shown)
 
-    # Everyone else's choices are the prior, worth OWN_PICKS_K choices; the
-    # learner's own (weighted) choices are fitted on top. So after K picks
-    # their own choices outweigh the crowd, however large the crowd is.
-    everyone = luce_fit(population, _SLOTS)
+    # An even start is the prior, worth OWN_PICKS_K choices; the learner's
+    # own (weighted) choices are fitted on top. So after K picks their own
+    # choices outweigh it.
     own_total = sum(c.weight for c in own)
-    weights = luce_fit(own, _SLOTS, prior=everyone, prior_strength=OWN_PICKS_K)
+    weights = luce_fit(own, _SLOTS, prior_strength=OWN_PICKS_K)
     w_own = own_total / (own_total + OWN_PICKS_K)
 
     # Then the situation they are in -- right after a card, or opening a
@@ -194,7 +196,7 @@ def predict(
 
     contributions = {
         "offered": list(offered),
-        "everyone": {"weight": round((1 - w_own) * (1 - w_ctx), 4), "tally": tally(population)},
+        "even_start": {"weight": round((1 - w_own) * (1 - w_ctx), 4)},
         "your_picks": {"weight": round(w_own * (1 - w_ctx), 4), "tally": tally(own), "picks": n},
         "context": None if context_name is None else {
             "kind": context_name,
@@ -237,11 +239,16 @@ def explain(prediction: Prediction) -> list[str]:
                      else "Opening a chat")
             lines.append((ctx["weight"], (f"{where}, with \u201c{label}\u201d on offer, you took it "
                                          f"{t['taken']} of {t['offered']} times.")))
-    every = c["everyone"]["tally"].get(slot, {"offered": 0, "taken": 0})
+    # (a guess made before v3 kept other learners' picks under "everyone";
+    # it is shown as it was stored, never re-derived)
+    every = (c.get("everyone") or {}).get("tally", {}).get(slot, {"offered": 0, "taken": 0})
     if every["offered"]:
         share = round(100 * every["taken"] / every["offered"])
         lines.append((c["everyone"]["weight"],
                       f"Other learners take \u201c{label}\u201d {share}% of the times it's offered."))
+    if c.get("even_start") and own["picks"] and c["even_start"]["weight"] >= 0.3:
+        lines.append((c["even_start"]["weight"],
+                      "Every card starts even -- only your own picks move the guess."))
     lines.sort(key=lambda pair: -pair[0])
     out = [text for _, text in lines]
     if not own["picks"]:
@@ -493,18 +500,6 @@ class PredictionStore:
         isn't clear yet. One query, no model call."""
         return approach_profile(await self.past_picks(learner_id))
 
-    async def population(self, exclude_learner: UUID) -> list[Shown]:
-        """Every other learner's choices, each with the hand it came from."""
-        rows = await self._pool.fetch(
-            "SELECT COALESCE(c.tagged_as, c.slot) AS slot, "
-            "ARRAY(SELECT COALESCE(o.tagged_as, o.slot) FROM direction_cards o WHERE o.set_id = s.id) AS offered "
-            "FROM direction_events e JOIN direction_cards c ON c.id = e.card_id "
-            "JOIN direction_sets s ON s.id = e.set_id JOIN sessions se ON se.id = s.session_id "
-            "WHERE e.kind = 'picked' AND se.learner_id IS DISTINCT FROM $1",
-            exclude_learner,
-        )
-        return [Shown(offered=tuple(r["offered"]), chosen=r["slot"]) for r in rows]
-
     async def context(self, session_id: UUID, set_id: UUID) -> tuple[str | None, bool]:
         """(the slot picked from the settled set just before `set_id` in this
         session if it was picked, whether `set_id` is the session's first
@@ -530,12 +525,11 @@ class PredictionStore:
         """Guess the pick for a set that has just been written and not yet
         sent, and record the guess."""
         past = await self.past_picks(learner_id)
-        population = await self.population(learner_id)
         prev_slot, first = await self.context(session_id, set_id)
         offered = [r["slot"] for r in await self._pool.fetch(
             "SELECT COALESCE(tagged_as, slot) AS slot FROM direction_cards WHERE set_id = $1 ORDER BY position",
             set_id)]
-        prediction = predict(past, population, offered=offered, prev_slot=prev_slot, first_in_session=first)
+        prediction = predict(past, offered=offered, prev_slot=prev_slot, first_in_session=first)
         await self._pool.execute(
             "INSERT INTO direction_predictions (id, set_id, learner_id, predicted_slot, scores, "
             "contributions, evidence_count, predictor_version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",

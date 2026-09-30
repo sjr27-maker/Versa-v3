@@ -498,7 +498,7 @@ async def test_final_answer_with_no_recent_history_omits_the_history_block():
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_options_past_history_is_framed_as_not_settling_the_topic():
-    """Live run (docs/verification-runs/cross_session_20260926.md): a PAST
+    """Live run (docs/verification-runs/machine-tested/cross_session_20260926.md): a PAST
     chat settled today's topic, so an approach-kind set dropped the reading
     the student had picked last time. The past must be framed as phrasing
     context only, and settling must be limited to the live conversation."""

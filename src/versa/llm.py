@@ -323,16 +323,37 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
             "questions": [
                 *(
                     {"kind": "choice", "prompt": f"Stub question {i}: which statement is correct?",
+                     "skill": skill, "form": "puzzle" if i == 4 else "quiz",
                      "choices": ["The right one", "A wrong one", "Another wrong one", "Not this"],
                      "correct_index": 0, "explanation": "Because the first statement is the right one."}
-                    for i in (1, 2, 3, 4)
+                    for i, skill in ((1, "recall"), (2, "understand"), (3, "apply"), (4, "analyse"))
                 ),
                 {"kind": "short", "prompt": "Stub question 5: explain the idea in one sentence.",
+                 "skill": "understand", "form": "quiz",
                  "answer": "The idea, stated in one sentence.",
                  "explanation": "A good answer states the idea itself."},
             ]
         }
     ),
+    # exams.ExamWarmUp: a chapter's warm-up before its questions.
+    "EXAM:WARMUP": json.dumps({
+        "points": ["The chapter's main rule, stated plainly.", "What it is used for.", "The common mistake to avoid."],
+        "formula": "v = u + at",
+        "example": "A car starting at 2 m/s speeding up at 3 m/s^2 for 4 s reaches 2 + 3 x 4 = 14 m/s.",
+        "script": [
+            {"do": "plan", "cast": {"car": "the car"}, "shows": "speed growing over time"},
+            {"do": "spawn", "id": "car", "kind": "emoji", "label": "🚗", "x": 0.3},
+            {"do": "say", "text": "Watch the speed grow."},
+            {"do": "note", "text": "The chapter's main rule, stated plainly."},
+        ],
+    }),
+    # exams.ExamScene: a question set up on the stage (its ask is put back
+    # by the parser, with the question's own choices).
+    "EXAM:SCENE": json.dumps({"script": [
+        {"do": "plan", "cast": {"q": "the question's situation"}, "shows": "the setup"},
+        {"do": "spawn", "id": "q", "kind": "box", "label": "?", "x": 0.6},
+        {"do": "say", "text": "Here's the situation."},
+    ]}),
     # Grades every short answer correct (the stub can't read them).
     "EXAM:GRADE": lambda prompt: json.dumps(
         {"grades": [{"index": i, "correct": True, "feedback": "Stub: looks right."}
@@ -1145,13 +1166,15 @@ _SCHEMA_BY_PREFIX: dict[str, object] = {
             "type": "OBJECT",
             "properties": {
                 "kind": {"type": "STRING", "enum": ["choice", "short"]},
+                "skill": {"type": "STRING", "enum": ["recall", "understand", "apply", "analyse"]},
+                "form": {"type": "STRING", "enum": ["quiz", "puzzle"]},
                 "prompt": {"type": "STRING"},
                 "choices": {"type": "ARRAY", "items": {"type": "STRING"}},
                 "correct_index": {"type": "INTEGER", "nullable": True},
                 "answer": {"type": "STRING", "nullable": True},
                 "explanation": {"type": "STRING"},
             },
-            "required": ["kind", "prompt", "explanation"],
+            "required": ["kind", "skill", "form", "prompt", "explanation"],
         }}},
         "required": ["questions"],
     },

@@ -577,7 +577,7 @@ async def test_a_miss_keeps_what_they_asked_and_widens_the_next_hand(clean_pool,
         assert miss["in_hand"] == ("why" in first_slots)  # was the way they asked for on a card?
         assert [s["experiment"] for s in sets] == [None, "after_miss"]
         assert second_slots & {"path", "wild"}  # widened: an extra for certain
-        misses, _ = await StyleReader(clean_pool).misses(UUID(lid))
+        misses = await StyleReader(clean_pool).misses(UUID(lid))
         assert [m.asked for m in misses] == ["why"]
     finally:
         await _stop(live)
@@ -632,14 +632,14 @@ async def test_a_miss_the_library_cannot_place_is_read_as_a_new_move(clean_pool,
                                       "question": "when does that rule stop working?"}  # nothing about them
         prompt = next(p for p in llm.prompts if p.startswith("DIRECTIONS:READ_MISS"))
         assert "beyond" not in prompt  # not even their name
-        [miss], _ = await StyleReader(clean_pool).misses(UUID(lid))
+        [miss] = await StyleReader(clean_pool).misses(UUID(lid))
         assert miss.asked is None and miss.move == f"move:{first['set_id']}"
         assert miss.move_label == "where the rule stops working"
-        assert (await StyleReader(clean_pool).discovered_moves())[0]["label"] == "where the rule stops working"
+        assert (await StyleReader(clean_pool).learner_moves(UUID(lid)))[0]["label"] == "where the rule stops working"
         async with httpx.AsyncClient(base_url=live.http) as client:  # their own new moves, one learner
             out = (await client.get(f"/api/learners/{lid}/style-patterns")).json()
-        assert [(m["label"], m["times"], m["others"]) for m in out["new_moves"]] == [
-            ("where the rule stops working", 1, 0)]
+        assert [(m["label"], m["times"]) for m in out["new_moves"]] == [("where the rule stops working", 1)]
+        assert "others" not in out["new_moves"][0]  # never counted across learners
     finally:
         await _stop(live)
 

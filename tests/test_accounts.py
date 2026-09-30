@@ -144,7 +144,7 @@ async def test_everything_but_health_and_sign_in_needs_a_token(clean_pool, embed
         async with httpx.AsyncClient(base_url=live.http) as client:
             health = (await client.get("/api/health")).json()
             assert health["auth"] == {"required": True, "firebase": True, "dev": True,
-                                      "dev_code": False, "invites": True}
+                                      "dev_code": False, "judge": False, "invites": True}
             learner = await LearnerStore(clean_pool).create(label="someone")
             assert (await client.get(f"/api/learners/{learner.id}/sessions")).status_code == 401
             assert (await client.post("/api/sessions", json={"learner_id": str(learner.id)})).status_code == 401
@@ -249,9 +249,57 @@ async def test_dev_sign_in_is_only_for_the_two_testers_and_keeps_their_old_learn
         await _stop(live)
 
 
+@pytest.mark.asyncio(loop_scope="session")
+async def test_judges_sign_in_with_any_name_and_the_shared_code(clean_pool, embedding_client):
+    """Any name + the judge code: each name its own account (the same name
+    comes back to it), never an existing learner -- a judge typing a team
+    tester's name gets a separate account. Wrong or missing code: refused;
+    no code configured: judge sign-in is closed."""
+    team = await LearnerStore(clean_pool).create(label="Sooraj")
+    live = await _start(clean_pool, _llm(), embedding_client, _auth(judge_code="judge-2026"))
+    try:
+        async with httpx.AsyncClient(base_url=live.http) as client:
+            health = (await client.get("/api/health")).json()
+            assert health["auth"]["judge"] is True
+            anna = await client.post("/api/auth/judge", json={"name": "Anna Judge", "code": "judge-2026"})
+            assert anna.status_code == 200, anna.text
+            body = anna.json()
+            assert body["learner"]["label"] == "Anna Judge" and body["sign_in_method"] == "judge"
+            assert body["profile_complete"] is False  # a judge may skip it in the app
+            again = await client.post("/api/auth/judge", json={"name": " anna   JUDGE ", "code": "judge-2026"})
+            assert again.json()["learner"]["id"] == body["learner"]["id"]
+            bo = await client.post("/api/auth/judge", json={"name": "Bo", "code": "judge-2026"})
+            assert bo.json()["learner"]["id"] != body["learner"]["id"]
+            sneaky = await client.post("/api/auth/judge", json={"name": "Sooraj", "code": "judge-2026"})
+            assert sneaky.status_code == 200 and sneaky.json()["learner"]["id"] != str(team.id)
+            assert sneaky.json()["learner"]["label"] == "Sooraj (judge)"  # names are unique
+            back = await client.post("/api/auth/judge", json={"name": "sooraj", "code": "judge-2026"})
+            assert back.json()["learner"]["id"] == sneaky.json()["learner"]["id"]
+            assert (await client.post("/api/auth/judge", json={"name": "Cy", "code": "nope"})).status_code == 403
+            assert (await client.post("/api/auth/judge", json={"name": "Cy"})).status_code == 403
+            # the token works like any other: the judge reaches their own things only
+            token = body["token"]
+            me = await client.get("/api/me", headers={"Authorization": f"Bearer {token}"})
+            assert me.json()["sign_in_method"] == "judge"
+            theirs = await client.get(f"/api/learners/{team.id}/sessions/all",
+                                      headers={"Authorization": f"Bearer {token}"})
+            assert theirs.status_code == 404
+    finally:
+        await _stop(live)
+
+    live = await _start(clean_pool, _llm(), embedding_client, _auth())
+    try:
+        async with httpx.AsyncClient(base_url=live.http) as client:
+            assert (await client.get("/api/health")).json()["auth"]["judge"] is False
+            closed = await client.post("/api/auth/judge", json={"name": "Anna Judge", "code": "judge-2026"})
+            assert closed.status_code == 403
+    finally:
+        await _stop(live)
+
+
 def test_auth_from_env_is_strict_off_this_machine(monkeypatch):
     for key in ("VERSA_AUTH", "VERSA_SESSION_SECRET", "FIREBASE_PROJECT_ID", "VERSA_DEV_LOGINS",
-                "VERSA_DEV_LOGIN_CODE", "VERSA_INVITES"):
+                "VERSA_DEV_LOGIN_CODE", "VERSA_INVITES", "VERSA_JUDGE_CODE"):
         monkeypatch.delenv(key, raising=False)
     local = Auth.from_env(local=True)
     assert local is not None and local.dev_logins == {"sooraj", "adithya"} and not local.google
@@ -263,6 +311,9 @@ def test_auth_from_env_is_strict_off_this_machine(monkeypatch):
     monkeypatch.setenv("VERSA_DEV_LOGINS", "sooraj,adithya")
     monkeypatch.setenv("VERSA_DEV_LOGIN_CODE", "c0de")
     assert Auth.from_env(local=False).dev_logins == {"sooraj", "adithya"}
+    assert Auth.from_env(local=False).judge_code is None  # judges: off unless given a code
+    monkeypatch.setenv("VERSA_JUDGE_CODE", " judges ")
+    assert Auth.from_env(local=False).judge_code == "judges"
     monkeypatch.setenv("VERSA_AUTH", "off")
     assert Auth.from_env(local=True) is None
 

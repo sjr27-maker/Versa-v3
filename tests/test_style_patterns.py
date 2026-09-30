@@ -1,7 +1,8 @@
 """Layer 3 (style_patterns.py): a thinking style must mean what
 docs/THINKING_STYLE.md defines -- each test below is one clause of that
 definition, and shows the gate that stops something else from being called
-a style."""
+a style. Every pattern is read from the learner's OWN data only, against
+chance (2026-10-01): no function here takes another learner's anything."""
 
 from __future__ import annotations
 
@@ -21,26 +22,9 @@ def _pick(i, slot, hand, *, prev=None, weight=1.0, topic=None, session=None):
                         weight=weight, topic=topic or f"t{i}", offered=tuple(hand))
 
 
-def _cohort(seed=0, n=300, chooser=None):
-    """Other learners: random hands from the library, choosing at random
-    unless told otherwise. Every choice is a first move."""
-    from versa.choice import Shown
-    from versa.directions import deal_hand, draw_pool
-
-    rng = random.Random(seed)
-    out = []
-    for _ in range(n):
-        hand = deal_hand(draw_pool(rng), set(), rng=rng)
-        out.append((None, Shown(tuple(hand), (chooser or (lambda h, r: r.choice(h)))(hand, rng))))
-    return out
-
-
-_EVERYONE = _cohort()
-
-
-def _way_in(picks, cohort=_EVERYONE):
+def _way_in(picks):
     """The card-level way in (family-level ones have keys "family:...")."""
-    found = [p for p in sp.pick_patterns(picks, cohort) if p.kind == "way_in" and not p.key.startswith("family:")]
+    found = [p for p in sp.pick_patterns(picks) if p.kind == "way_in" and not p.key.startswith("family:")]
     return found[0] if found else None
 
 
@@ -52,9 +36,10 @@ def _takes_example(n=14, miss_at=(2,), **kw):
 def test_a_consistent_way_in_across_topics_and_time_is_confirmed_with_every_gate_shown():
     p = _way_in(_takes_example())
     assert p is not None and p.key == "example" and p.status == "confirmed", p
-    assert set(p.gates) == {"evidence", "clear", "sessions", "topics", "above_cohort", "over_time", "predicts"}
+    assert set(p.gates) == {"evidence", "clear", "sessions", "topics", "over_time", "predicts"}
     assert all(g.ok for g in p.gates.values())
-    assert p.trials >= 3 and p.hits / p.trials > p.cohort_rate  # proven out of sample
+    assert p.baseline_rate == round(1 / 3, 4)  # chance, from the hands it was in -- never other learners
+    assert p.trials >= 3 and p.hits / p.trials > p.baseline_rate  # proven out of sample
     assert "work through one concrete example" in p.statement
     assert "of the times offered" in p.gates["clear"].have  # read against the hands
 
@@ -62,12 +47,6 @@ def test_a_consistent_way_in_across_topics_and_time_is_confirmed_with_every_gate
 def test_the_same_choice_on_one_topic_only_is_not_a_style():
     p = _way_in(_takes_example(topic="integrals"))
     assert p.status == "emerging" and not p.gates["topics"].ok  # stable ACROSS topics is required
-
-
-def test_what_everyone_does_is_being_new_not_a_style():
-    everyone_example = _cohort(chooser=lambda h, r: "example" if "example" in h else r.choice(h))
-    p = _way_in(_takes_example(), cohort=everyone_example)
-    assert p.status == "emerging" and not p.gates["above_cohort"].ok  # measured against the cohort
 
 
 def test_a_learner_with_no_style_almost_never_gets_one():
@@ -83,7 +62,7 @@ def test_a_learner_with_no_style_almost_never_gets_one():
         for i in range(40):
             hand = deal_hand(draw_pool(rng), set(), rng=rng)
             picks.append(_pick(i, rng.choice(hand), hand))
-        found = sp.pick_patterns(picks, _EVERYONE) + sp.lean_patterns(picks, [c for _, c in _EVERYONE])
+        found = sp.pick_patterns(picks) + sp.lean_patterns(picks)
         false_alarms += any(p.status == "confirmed" for p in found)
     assert false_alarms <= 5
 
@@ -97,7 +76,7 @@ def test_a_broad_way_out_of_an_answer_is_confirmed_at_the_family_level():
         hand = deal_hand(draw_pool(rng), set(), rng=rng)
         real = [c for c in hand if FAMILY_OF[c] == "real"]
         picks.append(_pick(i, real[0] if real and rng.random() < 0.85 else rng.choice(hand), hand))
-    fam = [p for p in sp.pick_patterns(picks, _EVERYONE) if p.key == "family:real"]
+    fam = [p for p in sp.pick_patterns(picks) if p.key == "family:real"]
     assert fam and fam[0].kind == "way_in" and fam[0].status == "confirmed", fam
     assert "making it real" in fam[0].statement
 
@@ -105,7 +84,7 @@ def test_a_broad_way_out_of_an_answer_is_confirmed_at_the_family_level():
 def test_a_card_shown_often_is_not_a_style_just_for_being_shown():
     # "story" is in every hand and taken a third of the time -- chance.
     picks = [_pick(i, ("story", "debate", "summary")[i % 3], ("story", "debate", "summary")) for i in range(15)]
-    assert all(p.key != "story" or p.status != "confirmed" for p in sp.pick_patterns(picks, _EVERYONE))
+    assert all(p.key != "story" or p.status != "confirmed" for p in sp.pick_patterns(picks))
 
 
 def test_quick_and_rushed_taps_cannot_make_a_style():
@@ -126,7 +105,7 @@ def test_what_follows_what_is_its_own_pattern():
         s = uuid4()
         picks.append(_pick(2 * i, "example", ("example", "why", "next"), session=s, topic=f"t{i}"))
         picks.append(_pick(2 * i + 1, "use", ("use", "deeper", "compare"), prev="example", session=s, topic=f"t{i}"))
-    then = [p for p in sp.pick_patterns(picks, _EVERYONE) if p.kind == "then" and not p.key.startswith("family:")]
+    then = [p for p in sp.pick_patterns(picks) if p.kind == "then" and not p.key.startswith("family:")]
     assert [(p.key, p.status) for p in then] == [("example>use", "confirmed")]
     assert "After" in then[0].statement and "where it is used" in then[0].statement
 
@@ -148,14 +127,14 @@ def _lean_learner(axis_index, sign, n=24, seed=1):
 
 
 def test_a_lean_in_the_card_space_is_a_style_with_every_gate():
-    leans = [p for p in sp.lean_patterns(_lean_learner(0, +1), [c for _, c in _EVERYONE]) if p.key == "concrete"]
+    leans = [p for p in sp.lean_patterns(_lean_learner(0, +1)) if p.key == "concrete"]
     assert leans and leans[0].status == "confirmed", leans
     assert leans[0].rate > 0.25 and "more concrete" in leans[0].statement
     assert leans[0].hits / leans[0].trials > 0.5  # it picks the more concrete card, out of sample
 
 
 def test_a_lean_the_other_way_reads_the_other_way():
-    leans = [p for p in sp.lean_patterns(_lean_learner(1, -1), [c for _, c in _EVERYONE]) if p.key == "depth"]
+    leans = [p for p in sp.lean_patterns(_lean_learner(1, -1)) if p.key == "depth"]
     assert leans and leans[0].status == "confirmed" and "simpler" in leans[0].statement
 
 
@@ -173,17 +152,18 @@ def _moves(levels, knob="depth"):
 
 
 def test_a_depth_they_keep_setting_is_their_range():
-    [p] = sp.range_patterns(_moves([80, 85, 90, 85]), {})
+    [p] = sp.range_patterns(_moves([80, 85, 90, 85]))
     assert p.key == "depth" and p.status == "confirmed" and p.value == 85
     assert "leans rigorous" in p.statement
 
 
 def test_a_range_needs_to_be_set_by_them_consistently():
-    assert sp.range_patterns(_moves([85]), {}) == []  # once is not a range
-    scattered = sp.range_patterns(_moves([20, 90, 25, 85]), {})
+    assert sp.range_patterns(_moves([85])) == []  # once is not a range
+    scattered = sp.range_patterns(_moves([20, 90, 25, 85]))
     assert all(p.status != "confirmed" for p in scattered)
-    everyone_deep = sp.range_patterns(_moves([80, 85, 90, 85]), {"depth": [85, 80, 90, 85]})
-    assert all(p.status != "confirmed" for p in everyone_deep)  # the cohort goes as deep
+    # kept near where the slider starts: set, but not a range of their own
+    near_default = sp.range_patterns(_moves([55, 45, 60, 50]))
+    assert all(p.status != "confirmed" for p in near_default)
 
 
 # ----------------------------------------------------------------- topics
@@ -264,7 +244,7 @@ async def test_the_reader_finds_a_way_in_from_real_rows_and_the_api_shows_every_
             missing = await client.get("/api/learners/00000000-0000-0000-0000-000000000000/style-patterns")
         assert body["version"] == sp.STYLE_VERSION
         shown = next(p for p in body["patterns"] if p["kind"] == "way_in")
-        assert set(shown["gates"]) >= {"topics", "above_cohort", "predicts"}
+        assert set(shown["gates"]) >= {"topics", "predicts"} and "above_cohort" not in shown["gates"]
         assert all({"ok", "have", "need"} <= set(g) for g in shown["gates"].values())
         # what the sky is drawn from: the picks it rests on, and where each card sits
         assert shown["evidence"] and {"card", "offered", "supports", "session"} <= set(shown["evidence"][0])
@@ -287,7 +267,7 @@ def test_exploring_topic_trees_deeply_is_a_range_of_their_own():
                      "payload": {"max_depth_selected": 3, "lessons_chosen": 9, "lessons_total": 10}})
     obs = from_topic_signals(uuid4(), rows)
     assert {o.key for o in obs} == {"explore_depth", "explore_breadth"} and all(o.lens == "range" for o in obs)
-    found = {p.key: p for p in sp.range_patterns(obs, {})}
+    found = {p.key: p for p in sp.range_patterns(obs)}
     assert found["explore_depth"].status == "confirmed" and "goes deep" in found["explore_depth"].statement
     assert found["explore_breadth"].status == "confirmed" and "most of what's offered" in found["explore_breadth"].statement
 
@@ -329,7 +309,7 @@ def _situational(seed, n_chats, want, steps=4, topics=8):
 
 def test_a_choice_that_changes_with_the_situation_is_a_conditional_fact():
     picks = _situational(3, 30, lambda fam, stuck, step: "real" if step < 2 else "deeper")
-    [c] = [p for p in sp.conditional_patterns(picks, _EVERYONE) if p.status == "confirmed"]
+    [c] = [p for p in sp.conditional_patterns(picks) if p.status == "confirmed"]
     assert c.key == "position:real|deeper"
     assert c.statement.startswith("Opening a chat, goes to making it real; further into a chat, to going deeper")
     assert c.gates["differs"].ok and all(g.ok for g in c.gates.values())
@@ -337,14 +317,13 @@ def test_a_choice_that_changes_with_the_situation_is_a_conditional_fact():
 
 def test_being_stuck_can_change_the_way_they_go():
     picks = _situational(5, 30, lambda fam, stuck, step: "simpler" if stuck else "wider")
-    found = {p.key for p in sp.conditional_patterns(picks, _EVERYONE) if p.status == "confirmed"}
+    found = {p.key for p in sp.conditional_patterns(picks) if p.status == "confirmed"}
     assert "state:simpler|wider" in found
 
 
 def test_new_topics_against_familiar_ones_needs_enough_topics():
     want = lambda fam, stuck, step: ("deeper" if fam else "real") if step == 0 else None
-    found = [p for p in sp.conditional_patterns(_situational(2, 80, want, topics=40), _EVERYONE)
-             if p.status == "confirmed"]
+    found = [p for p in sp.conditional_patterns(_situational(2, 80, want, topics=40)) if p.status == "confirmed"]
     assert any(p.key == "familiarity:real|deeper" for p in found)
     assert found[0].statement.startswith("On a topic that's new to them, goes to making it real")
 
@@ -353,13 +332,13 @@ def test_the_same_tendency_everywhere_is_not_conditional_and_neither_is_noise():
     for seed in range(20):
         always_real = _situational(seed, 30, lambda fam, stuck, step: "real")
         noise = _situational(seed, 30, lambda fam, stuck, step: None)
-        assert not [p for p in sp.conditional_patterns(always_real, _EVERYONE) if p.status == "confirmed"]
-        assert not [p for p in sp.conditional_patterns(noise, _EVERYONE) if p.status == "confirmed"]
+        assert not [p for p in sp.conditional_patterns(always_real) if p.status == "confirmed"]
+        assert not [p for p in sp.conditional_patterns(noise) if p.status == "confirmed"]
 
 
 def test_patterns_pointing_the_same_way_become_one_fact_with_facets():
     picks = _situational(1, 30, lambda fam, stuck, step: "real")
-    found = sp.find_patterns(picks, [], _EVERYONE, {})
+    found = sp.find_patterns(picks, [])
     heads = [p for p in found if p.facet_of is None and p.status == "confirmed" and p.kind != "range"]
     facets = [p for p in found if p.facet_of is not None]
     assert len(heads) == 1, [(p.id, p.statement) for p in heads]  # one tendency, one fact
@@ -367,21 +346,6 @@ def test_patterns_pointing_the_same_way_become_one_fact_with_facets():
 
 
 # ------------------------------------ shape of a chat, passes over, speed
-
-def _others(n=40):
-    """Other learners with no preference, with their chats and timings."""
-    from dataclasses import replace
-
-    rng = random.Random(99)
-    out = []
-    for k in range(n):
-        out += [replace(p, elapsed_ms=int(rng.lognormvariate(math.log(6000), 0.5)))
-                for p in _situational(1000 + k, 6, lambda fam, stuck, step: None)]
-    return out
-
-
-_OTHERS = _others()
-
 
 def _timed(picks, seed, fast_family=None):
     """Give picks a reading time: ~6s, a third of that for `fast_family`."""
@@ -400,7 +364,7 @@ def _confirmed(found, kind):
 
 def test_a_chat_that_gets_deeper_as_it_goes_is_a_shape():
     picks = _situational(4, 30, lambda fam, stuck, step: "simpler" if step < 2 else "deeper")
-    [shape] = [p for p in _confirmed(sp.shape_patterns(picks, _OTHERS), "shape") if p.key == "depth"]
+    [shape] = [p for p in _confirmed(sp.shape_patterns(picks), "shape") if p.key == "depth"]
     assert shape.statement == "Their picks get deeper as a chat goes on (they start simpler)."
     assert all(g.ok for g in shape.gates.values())
 
@@ -419,7 +383,7 @@ def test_a_card_they_skip_when_their_favourite_is_not_taken_is_passed_over():
             out.append(p)
         return out
 
-    hits = sum(any(p.key == "summary" for p in _confirmed(sp.passes_over_patterns(skip_summary(s), _OTHERS),
+    hits = sum(any(p.key == "summary" for p in _confirmed(sp.passes_over_patterns(skip_summary(s)),
                                                            "passes_over")) for s in range(10))
     assert hits >= 7
     assert FAMILY_OF["summary"] == "simpler"
@@ -428,12 +392,12 @@ def test_a_card_they_skip_when_their_favourite_is_not_taken_is_passed_over():
 def test_a_strong_way_in_is_not_also_passing_over_everything_else():
     for seed in range(10):
         picks = _situational(seed, 30, lambda fam, stuck, step: "real")
-        assert not _confirmed(sp.passes_over_patterns(picks, _OTHERS), "passes_over")
+        assert not _confirmed(sp.passes_over_patterns(picks), "passes_over")
 
 
 def test_recognising_one_way_fast_is_a_speed_fact():
     picks = _timed(_situational(6, 30, lambda fam, stuck, step: None), 6, fast_family="deeper")
-    [speed] = _confirmed(sp.speed_patterns(picks, _OTHERS), "speed")
+    [speed] = _confirmed(sp.speed_patterns(picks), "speed")
     assert speed.key == "deeper" and "quicker" in speed.statement
 
 
@@ -442,17 +406,16 @@ def test_quick_taps_and_rushed_chats_say_nothing_about_speed():
 
     picks = _timed(_situational(6, 30, lambda fam, stuck, step: None), 6, fast_family="deeper")
     rushed = [replace(p, rushed=True) for p in picks]
-    assert not sp.speed_patterns(rushed, _OTHERS)
+    assert not sp.speed_patterns(rushed)
     taps = [replace(p, elapsed_ms=800) for p in picks]
-    assert not sp.speed_patterns(taps, _OTHERS)
+    assert not sp.speed_patterns(taps)
 
 
 def test_no_preference_learners_rarely_get_a_shape_pass_or_speed_fact():
     false = 0
     for seed in range(40):
         picks = _timed(_situational(500 + seed, 30, lambda fam, stuck, step: None), seed)
-        found = sp.shape_patterns(picks, _OTHERS) + sp.passes_over_patterns(picks, _OTHERS) + \
-            sp.speed_patterns(picks, _OTHERS)
+        found = sp.shape_patterns(picks) + sp.passes_over_patterns(picks) + sp.speed_patterns(picks)
         false += any(p.status == "confirmed" for p in found)
     assert false <= 2  # <= 5%
 
@@ -478,11 +441,8 @@ def _anything(rng):
     return rng.choice([*SLOTS, None])
 
 
-_OTHER_MISSES = [m for k in range(30) for m in _missing(2000 + k, 3, _anything)]
-
-
 def test_misses_that_keep_asking_the_same_way_are_a_fact():
-    found = sp.asks_for_patterns(_missing(1, 12, lambda r: "why" if r.random() < 0.7 else _anything(r)), _OTHER_MISSES)
+    found = sp.asks_for_patterns(_missing(1, 12, lambda r: "why" if r.random() < 0.7 else _anything(r)))
     [why] = [p for p in found if p.key == "why" and p.status == "confirmed"]
     assert why.statement.startswith("When the cards miss, asks for")
     assert all(g.ok for g in why.gates.values())
@@ -491,16 +451,10 @@ def test_misses_that_keep_asking_the_same_way_are_a_fact():
 def test_scattered_or_unread_misses_are_not_a_fact():
     false = 0
     for seed in range(40):
-        found = sp.asks_for_patterns(_missing(300 + seed, 15, _anything), _OTHER_MISSES)
+        found = sp.asks_for_patterns(_missing(300 + seed, 15, _anything))
         false += any(p.status == "confirmed" for p in found)
     assert false <= 2
-    assert not sp.asks_for_patterns(_missing(5, 15, lambda r: None), _OTHER_MISSES)
-
-
-def test_what_everyone_asks_for_is_not_a_fact_about_them():
-    everyone = [m for k in range(30) for m in _missing(4000 + k, 3, lambda r: "example")]
-    found = sp.asks_for_patterns(_missing(1, 12, lambda r: "example"), everyone)
-    assert not [p for p in found if p.key == "example" and p.status == "confirmed"]
+    assert not sp.asks_for_patterns(_missing(5, 15, lambda r: None))
 
 
 def test_follow_through_counts_a_match_found_after_a_miss_and_whether_it_held():
@@ -539,25 +493,25 @@ def _unit(i, dims=8, jitter=0.0, rng=None):
     return tuple(v)
 
 
-def test_new_moves_group_across_learners_and_a_common_one_is_a_candidate_card():
+def test_a_learners_new_moves_group_among_their_own_readings():
     rng = random.Random(3)
-    learners = [uuid4() for _ in range(4)]
+    me = uuid4()
     readings = []
     for k in range(12):
-        which = k % 3  # three different moves, each asked for by several learners
+        which = k % 3  # three different moves, each asked for four times
         readings.append(sp.MoveReading(
-            set_id=uuid4(), learner_id=learners[k % 4], session_id=uuid4(), at=_T0 + timedelta(hours=k),
+            set_id=uuid4(), learner_id=me, session_id=uuid4(), at=_T0 + timedelta(hours=k),
             move=["where the rule stops working", "what it costs to get wrong", "who decides this"][which],
             embedding=_unit(which, jitter=0.05, rng=rng)))
     of, groups = sp.discover_moves(readings)
     assert len(groups) == 3 and len(set(of.values())) == 3
-    assert all(g["readings"] == 4 and g["learners"] >= 3 for g in groups)
-    assert not any(g["candidate_card"] for g in groups)  # 4 readings: not yet
-    more = readings + [sp.MoveReading(set_id=uuid4(), learner_id=learners[0], session_id=uuid4(),
+    assert all(g["readings"] == 4 and g["sessions"] == 4 for g in groups)
+    assert all("learners" not in g and "candidate_card" not in g for g in groups)  # never pooled across people
+    more = readings + [sp.MoveReading(set_id=uuid4(), learner_id=me, session_id=uuid4(),
                                       at=_T0 + timedelta(hours=99), move="when does it break",
                                       embedding=_unit(0, jitter=0.05, rng=rng))]
     of2, groups2 = sp.discover_moves(more)
-    assert groups2[0]["candidate_card"] and groups2[0]["label"] == "where the rule stops working"
+    assert groups2[0]["readings"] == 5 and groups2[0]["label"] == "where the rule stops working"
     assert {k: v for k, v in of2.items() if k in of} == of  # a group never changes once made
 
 
@@ -571,8 +525,46 @@ def test_misses_that_keep_asking_for_a_move_the_cards_lack_are_a_fact():
                                   move_label="where the rule stops working" if move == "move:A" else "other"))
         return out
 
-    others = [m for k in range(20) for m in beyond(900 + k, 0.0)]
-    [fact] = [p for p in sp.asks_beyond_patterns(beyond(1, 0.7), others) if p.status == "confirmed"]
+    [fact] = [p for p in sp.asks_beyond_patterns(beyond(1, 0.7)) if p.status == "confirmed"]
     assert fact.key == "move:A" and "something they don't offer" in fact.statement
     assert "where the rule stops working" in fact.statement
-    assert not [p for p in sp.asks_beyond_patterns(beyond(2, 0.0), others) if p.status == "confirmed"]
+    assert not [p for p in sp.asks_beyond_patterns(beyond(2, 0.0)) if p.status == "confirmed"]
+
+
+# -------------------------------------------- only the learner's own data
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_another_learners_activity_never_changes_this_learners_style_or_guess(clean_pool):
+    """The privacy promise (2026-10-01): a learner's patterns, misses, new
+    moves and pick guesses are read from their own rows only -- so another
+    learner doing anything at all leaves every one of them exactly as it was."""
+    from versa.audit import TranscriptStore
+    from versa.directions import DirectionStore
+    from versa.learner import LearnerStore
+    from versa.pick_prediction import PredictionStore
+
+    learners, directions, transcript = LearnerStore(clean_pool), DirectionStore(clean_pool), TranscriptStore(clean_pool)
+    me = await learners.create(label="me")
+    for _ in range(5):
+        await _fresh_start_pick(clean_pool, directions, await transcript.create_session(me.id), "use")
+    reader = sp.StyleReader(clean_pool)
+
+    async def everything():
+        session = await transcript.create_session(me.id)
+        from versa.directions import CLASSIC_SLOTS, shuffled_positions
+        from versa.session_knobs import SessionKnobs
+
+        probe = await directions.add_set(session_id=session, turn_index=0, knobs=SessionKnobs(),
+                                         cards={s: f"card {s}" for s in CLASSIC_SLOTS},
+                                         positions=shuffled_positions())
+        guess = await PredictionStore(clean_pool).predict_for_set(learner_id=me.id, session_id=session,
+                                                                 set_id=probe.id)
+        patterns = [p.model_dump(exclude={"evidence"}) for p in await reader.patterns(me.id)]
+        return patterns, guess.scores, await reader.misses(me.id), await reader.learner_moves(me.id)
+
+    before = await everything()
+    other = await learners.create(label="someone else")
+    for _ in range(12):  # a very different chooser, lots of evidence
+        await _fresh_start_pick(clean_pool, directions, await transcript.create_session(other.id), "why", ms=2500)
+    after = await everything()
+    assert after == before

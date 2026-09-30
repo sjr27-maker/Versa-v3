@@ -415,7 +415,7 @@ def _options_prompt(
     if learner_history_block:
         # Wrapped, not placed raw: the block's own header is written for
         # FinalAnswer. Here the danger is different -- a live run
-        # (docs/verification-runs/cross_session_20260926.md) had a PAST
+        # (docs/verification-runs/machine-tested/cross_session_20260926.md) had a PAST
         # chat "settle" today's topic, so an approach-kind set silently
         # dropped the very reading the student had picked last time.
         past_block = (

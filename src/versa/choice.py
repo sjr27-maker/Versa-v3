@@ -14,8 +14,10 @@ module instead:
   luce_fit               a preference weight for every card type from
                          choices among different subsets (the Plackett-Luce
                          / conditional-logit model, fitted by Hunter's MM
-                         iteration), pulled toward a prior -- other
-                         learners' weights -- until there is evidence
+                         iteration), pulled toward a prior -- an even
+                         start -- until there is evidence (only the
+                         learner's own choices are ever fitted: no
+                         learner's data feeds another's, 2026-10-01)
   among                  those weights turned into the chance of each card
                          in a given hand
 
@@ -54,8 +56,8 @@ def win_stats(choices: Iterable[Shown], slot: str) -> tuple[float, float, float]
 
 
 def win_rate(wins: float, offered: float, prior_rate: float, prior_strength: float = 1.0) -> float:
-    """Times taken over times offered, pulled toward `prior_rate` (chance, or
-    other learners' rate) by `prior_strength` pseudo-offers."""
+    """Times taken over times offered, pulled toward `prior_rate` (chance)
+    by `prior_strength` pseudo-offers."""
     return (wins + prior_strength * prior_rate) / (offered + prior_strength)
 
 

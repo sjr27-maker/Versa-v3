@@ -63,9 +63,17 @@ Needs `gcloud` signed in (`gcloud auth login`) and billing on the project.
 ```
 
 It creates (only what's missing): the Cloud SQL instance + database, the
-secrets (a random session secret and a **tester code** it prints once — keep
-it), builds the image with Cloud Build, runs the migrations as a job, and
-deploys the service with sign-in on and invites required. It prints the URL.
+secrets (a random session secret, a **tester code** and a **judge code** it
+prints once — keep them), builds the image with Cloud Build, runs the
+migrations as a job, and deploys the service with sign-in on and invites
+required. It prints the URL.
+
+**Judges** sign in from the sign-in screen's "Judging Versa?" with ANY name
+plus the judge code (Secret Manager: `versa-judge-code`) — no invite. Each name
+is its own new account (the same name again returns to it; it never opens an
+existing learner, even one with that name). Testers and judges can skip the
+sign-up questions ("Skip for now"). To close judge sign-in, disable the
+secret's versions and redeploy (or deploy without `VERSA_JUDGE_CODE`).
 
 Settings worth knowing (all in the script): **one always-on instance**
 (`--min-instances=1 --max-instances=1`) because live chats and study rooms keep

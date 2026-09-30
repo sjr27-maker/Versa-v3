@@ -30,6 +30,8 @@ Map<String, dynamic> _question(String id, int position, String unit, {bool choic
       'kind': choice ? 'choice' : 'short',
       'prompt': 'Question $id?',
       'choices': choice ? ['Right $id', 'Wrong $id', 'Also wrong $id'] : <String>[],
+      'skill': choice ? 'apply' : 'analyse',
+      'form': choice ? 'puzzle' : 'quiz',
     };
 
 /// FakeBackend plus a scripted exams.py server.
@@ -38,6 +40,20 @@ class ExamHarness {
   final List<Map<String, dynamic>> createBodies = [];
   final List<String> createPaths = [];
   final List<Map<String, dynamic>> submitBodies = [];
+  final List<Map<String, dynamic>> checkBodies = [];
+  final List<String> sceneCalls = [];
+  final List<String> warmUpCalls = [];
+
+  Map<String, dynamic> warmUp(String unitId, String title) => {
+        'unit_id': unitId,
+        'unit_title': title,
+        'points': ['Key point of $title.', 'Another thing to remember.'],
+        'formula': 'v = u + at',
+        'example': 'A worked example for $title.',
+        'script': [
+          {'do': 'say', 'text': 'Here is the idea.'},
+        ],
+      };
   int? mockSecondsLeft = 600;
   bool taken = false;
 
@@ -125,6 +141,10 @@ class ExamHarness {
       'seconds_left': null,
       'submitted': true,
       'score': {'correct': q1Right ? 1 : 0, 'graded': 2, 'total': 2, 'percent': q1Right ? 50 : 0},
+      'skills': [
+        {'skill': 'apply', 'correct': q1Right ? 1 : 0, 'total': 1},
+        {'skill': 'analyse', 'correct': 0, 'total': 1},
+      ],
       'results': [
         {
           ..._question('q1', 0, 'Foundations'),
@@ -198,6 +218,39 @@ class ExamHarness {
       r = _json(quiz(mock: false));
     } else if (path == '/api/exams/exam-1/mock') {
       r = _json(quiz(mock: true));
+    } else if (path.startsWith('/api/exam-quizzes/') && path.endsWith('/check')) {
+      checkBodies.add(json);
+      final right = json['response'] == '0';
+      r = _json({
+        'question_id': json['question_id'],
+        'response': json['response'],
+        'correct': right,
+        'correct_index': 0,
+        'correct_answer': 'Right ${json['question_id']}',
+        'explanation': 'Because it follows from the rule.',
+      });
+    } else if (path.startsWith('/api/exam-units/') && path.endsWith('/warmup')) {
+      warmUpCalls.add(path);
+      r = _json(warmUp(request.url.pathSegments[2], 'Foundations'));
+    } else if (path == '/api/exams/exam-1/warmup') {
+      warmUpCalls.add(path);
+      r = _json([warmUp('u1', 'Foundations'), warmUp('u2', 'Mechanisms')]);
+    } else if (path.startsWith('/api/exam-questions/') && path.endsWith('/scene')) {
+      sceneCalls.add(request.url.pathSegments[2]);
+      r = _json({
+        'question_id': request.url.pathSegments[2],
+        'script': [
+          {'do': 'say', 'text': 'Here is the situation.'},
+          {
+            'do': 'ask',
+            'question': 'Question?',
+            'choices': [
+              {'id': '0', 'text': 'A'},
+              {'id': '1', 'text': 'B'},
+            ],
+          },
+        ],
+      });
     } else if (path.startsWith('/api/exam-quizzes/') && path.endsWith('/submit')) {
       submitBodies.add(json);
       taken = true;
@@ -213,11 +266,11 @@ class ExamHarness {
   VersaApi get api => VersaApi('http://test', client: client);
 }
 
-Future<void> _boot(WidgetTester tester, ExamHarness h) async {
+Future<void> _boot(WidgetTester tester, ExamHarness h, {Map<String, Object> settings = const {}}) async {
   tester.view.physicalSize = const Size(1400, 1100);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
-  SharedPreferences.setMockInitialValues({'learner_label': 'Asha'});
+  SharedPreferences.setMockInitialValues({'learner_label': 'Asha', ...settings});
   final prefs = await SharedPreferences.getInstance();
   final transport = FakeTransport();
   await tester.pumpWidget(VersaApp(
@@ -285,8 +338,17 @@ void main() {
     expect(find.byKey(const ValueKey('exam-start-mock')), findsOneWidget);
 
     await _tapKey(tester, 'exam-quiz-u1');
+    // warmed up on the chapter first: no quiz is written until they're ready
+    expect(h.warmUpCalls, ['/api/exam-units/u1/warmup']);
+    expect(find.text('WARM-UP'), findsOneWidget);
+    expect(find.text('Key point of Foundations.'), findsOneWidget);
+    expect(find.byKey(const ValueKey('warmup-formula')), findsOneWidget);
+    expect(find.text('A worked example for Foundations.'), findsOneWidget);
+    expect(find.text('1. Question q1?'), findsNothing);
+    await _tapKey(tester, 'warmup-start');
     expect(find.text('1. Question q1?'), findsOneWidget);
-    expect(find.text('2. Question q2?'), findsOneWidget);
+    expect(find.text('2. Question q2?'), findsNothing); // one question at a time
+    expect(find.byKey(const ValueKey('quiz-dot-1')), findsOneWidget);
     expect(find.byKey(const ValueKey('quiz-clock')), findsNothing); // a unit quiz is untimed
   });
 
@@ -295,8 +357,25 @@ void main() {
     await _boot(tester, h);
     await _buildChemistry(tester);
     await _tapKey(tester, 'exam-quiz-u1');
+    await _tapKey(tester, 'warmup-start');
 
+    // one question at a time, saying what it tests
+    expect(find.text('Question 1 of 2'), findsOneWidget);
+    expect(find.text('APPLY · PUZZLE'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quiz-next')), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.byKey(const ValueKey('quiz-next'))).onPressed, isNull,
+        reason: 'answer it first');
+
+    // a tap is checked there and then: right or not, the answer and why
     await _tapKey(tester, 'quiz-choice-q1-1'); // the wrong one
+    expect(h.checkBodies.single, {'question_id': 'q1', 'response': '1'});
+    expect(find.text('Not quite'), findsOneWidget);
+    expect(find.text('Because it follows from the rule.'), findsOneWidget);
+    await _tapKey(tester, 'quiz-choice-q1-0'); // no second go
+    expect(h.checkBodies.length, 1);
+
+    await _tapKey(tester, 'quiz-next');
+    expect(find.text('Question 2 of 2'), findsOneWidget);
     await tester.enterText(find.byKey(const ValueKey('quiz-typed-q2')), 'my own answer');
     await tester.pump();
     expect(find.text('2 of 2 answered'), findsOneWidget);
@@ -311,6 +390,9 @@ void main() {
     expect(find.text('Wrong q1'), findsOneWidget); // what they picked, as text
     expect(find.text('Right q1'), findsOneWidget); // the correct answer
     expect(find.text('You missed the essential point.'), findsOneWidget);
+    // what it tested, skill by skill
+    expect(find.byKey(const ValueKey('quiz-skills')), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const ValueKey('quiz-skill-apply'))).data, '0/1');
 
     await _tapKey(tester, 'quiz-done');
     expect(find.byKey(const ValueKey('exam-unit-score-u1')), findsOneWidget);
@@ -322,8 +404,11 @@ void main() {
     await _boot(tester, h);
     await _buildChemistry(tester);
     await _tapKey(tester, 'exam-quiz-u1');
+    await _tapKey(tester, 'warmup-start');
 
     await _tapKey(tester, 'quiz-choice-q1-0');
+    expect(find.text('Correct'), findsOneWidget);
+    await _tapKey(tester, 'quiz-next');
     await _tapKey(tester, 'quiz-submit');
     expect(find.textContaining('1 question is still unanswered'), findsOneWidget);
     expect(h.submitBodies, isEmpty);
@@ -341,11 +426,19 @@ void main() {
     addTearDown(() => quizClock = DateTime.now);
     await _boot(tester, h);
     await _buildChemistry(tester);
-    await _tapKey(tester, 'exam-start-mock', settle: false);
+    await _tapKey(tester, 'exam-start-mock');
+    // every chapter warmed up first -- the clock hasn't started
+    expect(find.text('WARM-UP · CHAPTER 1 OF 2'), findsOneWidget);
+    expect(find.byKey(const ValueKey('quiz-clock')), findsNothing);
+    await _tapKey(tester, 'warmup-next');
+    expect(find.text('Mechanisms'), findsWidgets);
+    await _tapKey(tester, 'warmup-start', settle: false);
 
     expect(find.byKey(const ValueKey('quiz-clock')), findsOneWidget);
     expect(find.text('0:03'), findsOneWidget);
     await _tapKey(tester, 'quiz-choice-q1-0', settle: false);
+    expect(h.checkBodies, isEmpty, reason: 'a mock is marked when it is handed in');
+    expect(find.byKey(const ValueKey('quiz-feedback')), findsNothing);
     now = now.add(const Duration(seconds: 1));
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('0:02'), findsOneWidget);
@@ -365,6 +458,29 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('with the stage on, each question is set up by the slime before its choices show', (tester) async {
+    final h = ExamHarness();
+    await _boot(tester, h, settings: {'show_stage_panel': true});
+    await _buildChemistry(tester);
+    await _tapKey(tester, 'exam-quiz-u1');
+    expect(find.byKey(const ValueKey('warmup-stage')), findsOneWidget); // the slime explains first
+    await _tapKey(tester, 'warmup-start', settle: false);
+    await tester.pump(const Duration(milliseconds: 500));
+
+    expect(find.byKey(const ValueKey('exam-stage')), findsOneWidget);
+    expect(h.sceneCalls, ['q1']);
+    expect(find.byKey(const ValueKey('quiz-watch-stage')), findsOneWidget);
+    // (the test binding doesn't run the stage's clock, so the slime never
+    // reaches its question here: the choices come after a short wait)
+    await tester.pump(const Duration(seconds: 11));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byKey(const ValueKey('quiz-choice-q1-0')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('quiz-choice-q1-0')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(h.checkBodies.single, {'question_id': 'q1', 'response': '0'});
+  });
+
   testWidgets('an exam can be built from one of your courses', (tester) async {
     final h = ExamHarness();
     await _boot(tester, h);
@@ -377,7 +493,7 @@ void main() {
     expect(find.text('Machine learning'), findsWidgets);
   });
 
-  testWidgets("a study plan is made, ticked, and starts today's quiz", (tester) async {
+  testWidgets("a study plan is made and starts today's quiz; nothing is ticked by hand", (tester) async {
     final h = ExamHarness();
     await _boot(tester, h);
     await _buildChemistry(tester);
@@ -390,14 +506,14 @@ void main() {
     expect(find.text('Revise Foundations'), findsOneWidget);
     expect(find.text('Revise Mechanisms'), findsNothing); // tomorrow is only in the full plan
 
-    await _tapKey(tester, 'plan-tick-i1');
-    expect(h.ticks.single, {'id': 'i1', 'done': true});
-    expect(find.text('12 days to go · 1 of 4 done'), findsOneWidget);
-    await _tapKey(tester, 'plan-tick-i1');
-    expect(h.ticks.last, {'id': 'i1', 'done': false});
+    await tester.tap(find.byKey(const ValueKey('plan-status-i1')));
+    await tester.pumpAndSettle();
+    expect(h.ticks, isEmpty);
+    expect(find.text('12 days to go · 0 of 4 done'), findsOneWidget);
 
     expect(find.byKey(const ValueKey('plan-start-i1')), findsNothing); // revising has no Start
     await _tapKey(tester, 'plan-start-i2');
+    await _tapKey(tester, 'warmup-start'); // warmed up first, from the plan too
     expect(find.text('1. Question q1?'), findsOneWidget); // the Foundations quiz opened
   });
 
@@ -413,8 +529,7 @@ void main() {
     expect(find.text('Today'), findsOneWidget);
     expect(find.text('Tomorrow'), findsOneWidget);
     expect(find.text('Revise Mechanisms'), findsOneWidget);
-    await _tapKey(tester, 'plan-tick-i3');
-    expect(h.ticks.single, {'id': 'i3', 'done': true});
+    expect(find.byKey(const ValueKey('plan-status-i3')), findsOneWidget);
     await _tapKey(tester, 'plan-back');
 
     await _tapKey(tester, 'plan-replan');

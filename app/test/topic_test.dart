@@ -589,6 +589,16 @@ void main() {
 
     expect(find.text('TASKS 1/4'), findsOneWidget);
     expect(find.byKey(const ValueKey('lesson-tasks')), findsOneWidget);
+    // the sliders aren't in the strip (the pad took the whole screen there);
+    // they open from the header's tune button
+    expect(find.byKey(const ValueKey('lesson-knob-pad')), findsNothing);
+    expect(find.byKey(const ValueKey('lesson-knob-length')), findsNothing);
+    await _tapKey(tester, 'lesson-knobs');
+    expect(find.byKey(const ValueKey('lesson-knobs-sheet')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lesson-knob-depth')), findsOneWidget);
+    expect(find.byKey(const ValueKey('lesson-knob-breadth')), findsOneWidget);
+    Navigator.of(tester.element(find.byKey(const ValueKey('lesson-knobs-sheet')))).pop();
+    await tester.pumpAndSettle();
     await _tapKey(tester, 'lesson-tasks-toggle');
     expect(find.byKey(const ValueKey('lesson-tasks')), findsNothing);
     expect(tester.takeException(), isNull);

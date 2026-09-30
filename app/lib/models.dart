@@ -194,7 +194,7 @@ class StyleGate {
   final String have;
   final String need;
 
-  /// "above_cohort" -> "above cohort"
+  /// "away_from_default" -> "away from default"
   String get label => name.replaceAll('_', ' ');
 }
 
@@ -231,15 +231,14 @@ class MissFollowThrough {
 /// A move this learner asked for that no card type covers (server:
 /// StyleReader.learner_moves) -- a way of thinking the cards don't offer yet.
 class NewMove {
-  const NewMove({required this.label, this.times = 0, this.chats = 0, this.others = 0});
+  const NewMove({required this.label, this.times = 0, this.chats = 0});
   final String label;
-  final int times, chats, others;
+  final int times, chats;
 
   factory NewMove.fromJson(Map<String, dynamic> j) => NewMove(
         label: j['label'] as String? ?? '',
         times: (j['times'] as num?)?.toInt() ?? 0,
         chats: (j['chats'] as num?)?.toInt() ?? 0,
-        others: (j['others'] as num?)?.toInt() ?? 0,
       );
 }
 

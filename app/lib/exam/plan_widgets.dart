@@ -17,12 +17,13 @@ String planDayLabel(DateTime day, DateTime today) => switch (day.difference(toda
 
 typedef PlanItemAction = void Function(PlanItem item);
 
-/// One plan item: a tick box, what to do, and a Start button for a quiz or
-/// a mock that isn't done yet.
+/// One plan item: whether it's done, what to do, and a Start button for a
+/// quiz or a mock that isn't done yet. Nothing is ticked off by hand
+/// (2026-10-01): a quiz or mock is done when it is handed in; the plan is a
+/// schedule to open in any order, not a checklist to complete.
 class PlanItemTile extends StatelessWidget {
-  const PlanItemTile({super.key, required this.item, required this.onToggle, required this.onStart, this.dayLabel});
+  const PlanItemTile({super.key, required this.item, required this.onStart, this.dayLabel});
   final PlanItem item;
-  final PlanItemAction onToggle;
   final PlanItemAction onStart;
   final String? dayLabel;
 
@@ -37,17 +38,13 @@ class PlanItemTile extends StatelessWidget {
       key: ValueKey('plan-item-${item.id}'),
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(children: [
-        InkWell(
-          key: ValueKey('plan-tick-${item.id}'),
-          borderRadius: BorderRadius.circular(20),
-          onTap: () => onToggle(item),
-          child: Padding(
-            padding: const EdgeInsets.all(4),
-            child: Icon(
-              item.done ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
-              size: 22,
-              color: item.done ? Paper.olive : Paper.faint,
-            ),
+        Padding(
+          key: ValueKey('plan-status-${item.id}'),
+          padding: const EdgeInsets.all(4),
+          child: Icon(
+            item.done ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+            size: 22,
+            color: item.done ? Paper.olive : Paper.faint,
           ),
         ),
         const SizedBox(width: 8),
@@ -90,7 +87,6 @@ class PlanCard extends StatelessWidget {
     required this.onMake,
     required this.onReplan,
     required this.onOpenFull,
-    required this.onToggle,
     required this.onStart,
     this.busy = false,
   });
@@ -100,7 +96,6 @@ class PlanCard extends StatelessWidget {
   final VoidCallback onMake;
   final VoidCallback onReplan;
   final VoidCallback onOpenFull;
-  final PlanItemAction onToggle;
   final PlanItemAction onStart;
   final bool busy;
 
@@ -173,7 +168,7 @@ class PlanCard extends StatelessWidget {
         Text(finished ? 'Nothing left on the plan.' : 'Nothing planned today.',
             key: const ValueKey('plan-today-empty'), style: sans(13, color: Paper.muted))
       else
-        for (final item in p.todayItems) PlanItemTile(item: item, onToggle: onToggle, onStart: onStart),
+        for (final item in p.todayItems) PlanItemTile(item: item, onStart: onStart),
       if (p.overdue.isNotEmpty) ...[
         const SizedBox(height: 12),
         Text('CATCH UP', style: mono(10, color: Paper.warn)),
@@ -181,7 +176,6 @@ class PlanCard extends StatelessWidget {
         for (final item in p.overdue.take(_overdueShown))
           PlanItemTile(
             item: item,
-            onToggle: onToggle,
             onStart: onStart,
             dayLabel: planDayLabel(item.day, p.today),
           ),
@@ -213,15 +207,12 @@ class PlanScreen extends StatefulWidget {
     super.key,
     required this.examTitle,
     required this.initial,
-    required this.onToggle,
     required this.onStart,
   });
 
   final String examTitle;
   final StudyPlan initial;
 
-  /// Ticks an item and returns the updated plan.
-  final Future<StudyPlan?> Function(PlanItem item) onToggle;
   final Future<void> Function(PlanItem item) onStart;
 
   @override
@@ -229,12 +220,7 @@ class PlanScreen extends StatefulWidget {
 }
 
 class _PlanScreenState extends State<PlanScreen> {
-  late StudyPlan _plan = widget.initial;
-
-  Future<void> _toggle(PlanItem item) async {
-    final updated = await widget.onToggle(item);
-    if (updated != null && mounted) setState(() => _plan = updated);
-  }
+  late final StudyPlan _plan = widget.initial;
 
   Future<void> _start(PlanItem item) async {
     await widget.onStart(item);
@@ -295,7 +281,7 @@ class _PlanScreenState extends State<PlanScreen> {
           Text(planDayLabel(d.day, today),
               style: sans(13, color: isToday ? Paper.accentDark : Paper.body, weight: FontWeight.w700)),
           const SizedBox(height: 4),
-          for (final item in d.items) PlanItemTile(item: item, onToggle: _toggle, onStart: _start),
+          for (final item in d.items) PlanItemTile(item: item, onStart: _start),
         ]),
       ),
     );

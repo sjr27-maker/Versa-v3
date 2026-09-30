@@ -122,15 +122,20 @@ class FakeBackend {
   /// Pretend this learner already filled in the sign-up questions.
   void seedProfile(String learnerId, Map<String, dynamic> answers) => profiles[learnerId] = answers;
 
-  Map<String, dynamic> _signedIn(String learnerId, String label) {
+  /// How each learner signed in: 'dev', 'judge' or 'google.com'.
+  final Map<String, String> _methods = {};
+
+  Map<String, dynamic> _signedIn(String learnerId, String label, {String method = 'dev'}) {
     final token = 'tok-$learnerId';
     _tokens[token] = learnerId;
     _labels[learnerId] = label;
+    _methods[learnerId] = method;
     return {
       'token': token,
       'learner': {'id': learnerId, 'label': (profiles[learnerId]?['name'] as String?) ?? label},
       'new_account': false,
       'profile_complete': profiles.containsKey(learnerId),
+      'sign_in_method': method,
     };
   }
 
@@ -214,7 +219,7 @@ class FakeBackend {
         'status': 'ok',
         'llm': llm,
         'auth': auth
-            ? {'required': true, 'firebase': true, 'dev': true, 'dev_code': false, 'invites': invites}
+            ? {'required': true, 'firebase': true, 'dev': true, 'dev_code': false, 'judge': true, 'invites': invites}
             : {'required': false},
       });
     }
@@ -227,6 +232,13 @@ class FakeBackend {
         }
         final label = name[0].toUpperCase() + name.substring(1);
         return _json(_signedIn('learner-$label', label));
+      }
+      if (path == '/api/auth/judge') {
+        // any name + the shared judge code ('judge-code' here)
+        final body = jsonDecode(request.body) as Map;
+        if (body['code'] != 'judge-code') return _json({'detail': 'Wrong judge code.'}, 403);
+        final name = (body['name'] as String).trim();
+        return _json(_signedIn('learner-judge-${name.toLowerCase()}', name, method: 'judge'));
       }
       if (path == '/api/auth/firebase') {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
@@ -247,7 +259,7 @@ class FakeBackend {
           _firebaseAccounts.add(uid);
         }
         final label = uid[0].toUpperCase() + uid.substring(1);
-        return _json(_signedIn('learner-$uid', label));
+        return _json(_signedIn('learner-$uid', label, method: 'google.com'));
       }
       if (path.startsWith('/api/auth/invites/')) {
         final ok = validInvites.contains(request.url.pathSegments.last.toUpperCase());
@@ -264,6 +276,7 @@ class FakeBackend {
           'learner': {'id': learnerId, 'label': (profiles[learnerId]?['name'] as String?) ?? _labels[learnerId]},
           'profile_complete': profiles.containsKey(learnerId),
           'email': null,
+          'sign_in_method': _methods[learnerId],
         });
       }
       if (segments.length == 4 && segments[1] == 'learners' && segments[3] == 'profile') {

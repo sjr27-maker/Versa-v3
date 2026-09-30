@@ -34,13 +34,9 @@ learner's past. The current turn is the lens that past gets framed
 through (oldest-first, most-recent-last, right before the live
 question), not content restated here.
 
-Population framing: `retrieve()`'s one population-scope candidate is a
-pattern across many learners, not this learner's history, and is
-rendered in a visibly different voice ("across other learners...") so
-it can never be attributed back to this specific learner — the exact
-failure the personal/population split (retrieval.py's own module
-docstring) exists to prevent, and one that would otherwise be invisible
-in the rendered prose.
+Only this learner's own past (2026-10-01): the "across other learners"
+paragraph built from population_patterns is gone, with retrieval's
+population scope -- nothing another learner did reaches this prompt.
 
 TEMPLATE_VERSION is bumped whenever the wording changes meaningfully —
 logged per turn (see loop.py) so a later regression in answer quality
@@ -61,7 +57,7 @@ from versa.domain_config import Domain
 from versa.retrieval import RetrievalContext, retrieve
 from versa.retrieval_config import RetrievalConfig
 
-TEMPLATE_VERSION = "history-block-v2"
+TEMPLATE_VERSION = "history-block-v3"
 
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
@@ -111,7 +107,6 @@ class HistoryItem:
     """Already-resolved render inputs -- no field here requires further
     I/O or judgment; `render_history_block` only ever reads these."""
 
-    is_population: bool
     source_id: UUID
     when_label: str | None = None  # personal only
     asked: str | None = None  # personal only, verbatim
@@ -119,8 +114,7 @@ class HistoryItem:
     given_excerpt: str | None = None  # personal only, condensed response_text
     next_question: str | None = None  # personal only
     outcome_phrase: str | None = None  # personal only, humanized
-    abstract_form: str | None = None  # personal (supporting) or population (primary)
-    distinct_learner_count: int | None = None  # population only
+    abstract_form: str | None = None
 
 
 def _condense(text: str | None, max_sentences: int, max_chars: int) -> str | None:
@@ -148,9 +142,7 @@ def _is_useful_personal_item(item: HistoryItem) -> bool:
     """A candidate carrying only `asked` (an offer turn with no
     response, or a turn nothing has classified/abstracted yet) is
     filler -- "what they asked" with nothing about what happened next
-    is not history worth a slot. Population items are never filtered
-    here (`_population_recall` guarantees `abstract_form` is always
-    set on the one row it can return)."""
+    is not history worth a slot."""
     return any([item.chose, item.given_excerpt, item.next_question, item.abstract_form])
 
 
@@ -173,19 +165,6 @@ def _render_personal_paragraph(item: HistoryItem) -> str:
     return " ".join(sentences)
 
 
-def _render_population_paragraph(item: HistoryItem) -> str:
-    support = (
-        f" (seen across {item.distinct_learner_count} learners)"
-        if item.distinct_learner_count
-        else ""
-    )
-    pattern_text = item.abstract_form or ""
-    return _ensure_period(
-        f"Across other learners, not specific to this one{support}, a "
-        f"recurring pattern: {pattern_text}"
-    )
-
-
 def render_history_block(
     items: list[HistoryItem], config: HistoryBlockConfig | None = None
 ) -> str:
@@ -198,17 +177,14 @@ def render_history_block(
     # shrink the final count below quota, but render_history_block
     # itself must never emit a useless paragraph even if a caller
     # (a test, a future call site) skips that step.
-    items = [item for item in items if item.is_population or _is_useful_personal_item(item)]
+    items = [item for item in items if _is_useful_personal_item(item)]
     if not items:
         return ""
-    paragraphs = [
-        _render_population_paragraph(item) if item.is_population else _render_personal_paragraph(item)
-        for item in items
-    ]
+    paragraphs = [_render_personal_paragraph(item) for item in items]
     body = "\n\n".join(paragraphs)
     block = (
-        "\nBackground on who you are teaching, drawn from their own history "
-        "and a broader pattern across other learners. Use it only to set "
+        "\nBackground on who you are teaching, drawn from their own history. "
+        "Use it only to set "
         "assumed prior knowledge, vocabulary, depth, and what can be "
         "skipped rather than re-explained -- it is background, not content "
         "to answer from. Never bring it up unprompted (no \"last time you "
@@ -280,10 +256,7 @@ async def assemble_history_block(
         ctx=RetrievalContext(domain=domain), config=overfetch_config,
     )
     personal = [c for c in result.candidates if c.scope == "personal"]
-    population = [c for c in result.candidates if c.scope == "population"][
-        : base_retrieval_config.quotas.population
-    ]
-    if not personal and not population:
+    if not personal:
         return "", []
 
     rows_by_id: dict[UUID, asyncpg.Record] = {}
@@ -315,17 +288,6 @@ async def assemble_history_block(
     items: list[HistoryItem] = []
     used_ids: list[UUID] = []
 
-    for c in population:
-        items.append(
-            HistoryItem(
-                is_population=True,
-                source_id=c.source_id,
-                abstract_form=c.text,
-                distinct_learner_count=c.distinct_learner_count,
-            )
-        )
-        used_ids.append(c.source_id)
-
     # Built in `personal`'s own order (retrieve()'s score ranking,
     # preserved through the overfetch) so the usefulness filter below
     # drops the WORST-ranked filler first, not an arbitrary one, before
@@ -339,7 +301,6 @@ async def assemble_history_block(
         asked = row["originating_question"] if is_resolution else row["question_text"]
         chose = row["question_text"] if is_resolution else None
         item = HistoryItem(
-            is_population=False,
             source_id=c.source_id,
             when_label=_when_label(row["session_id"], row["created_at"], session_id),
             asked=asked,

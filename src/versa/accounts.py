@@ -9,6 +9,10 @@ request carried. This module replaces that:
   answers with a Versa session token. The two dev testers (VERSA_DEV_LOGINS,
   "sooraj,adithya" on a local server) can instead sign in by name through
   `POST /api/auth/dev` -- on a deployed server only with VERSA_DEV_LOGIN_CODE.
+  Judges (VERSA_JUDGE_CODE, 2026-10-01) sign in with ANY name plus that one
+  shared code (`POST /api/auth/judge`, no invite needed): each name is its own
+  new account -- never an existing learner, whatever the name -- and the same
+  name again comes back to it. Unset the code to close judge sign-in.
 - Invites. Versa is invite-only: the FIRST sign-in of a new account needs an
   invite code (`versa invite create`), unless VERSA_INVITES=off. People who
   already have an account never need one again.
@@ -174,6 +178,8 @@ class Auth:
     verify_firebase: FirebaseVerifier | None = None
     dev_logins: frozenset[str] = frozenset()
     dev_login_code: str | None = None
+    # any name + this shared code signs in as a judge (None: judge sign-in off)
+    judge_code: str | None = None
     invites_required: bool = True
     firebase_project_id: str | None = None
     notes: list[str] = field(default_factory=list)
@@ -189,6 +195,7 @@ class Auth:
             "firebase": self.google,
             "dev": bool(self.dev_logins),
             "dev_code": self.dev_login_code is not None,
+            "judge": self.judge_code is not None,
             "invites": self.invites_required,
         }
 
@@ -224,6 +231,7 @@ class Auth:
             verify_firebase=firebase_verifier(project_id) if project_id else None,
             dev_logins=frozenset(dev),
             dev_login_code=dev_code,
+            judge_code=os.environ.get("VERSA_JUDGE_CODE", "").strip() or None,
             invites_required=os.environ.get("VERSA_INVITES", "on").strip().lower() != "off",
             firebase_project_id=project_id,
             notes=notes,
@@ -427,6 +435,45 @@ class AccountStore:
         return learner_id, identity_id, label
 
 
+    async def judge_learner(self, name: str) -> tuple[UUID, UUID, str]:
+        """A judge's learner: always their OWN account, found by the name they
+        typed (so signing in again with it comes back to it) and never one
+        that merely carries that name -- a judge typing "sooraj" gets a new,
+        separate account. Kept as a 'dev' identity with a `judge:` subject
+        (team testers' subjects never contain a colon), sign_in_method
+        'judge'. Returns (learner_id, identity_id, label)."""
+        label = " ".join(name.split())[:60]
+        subject = f"judge:{label.lower()}"
+        async with self._pool.acquire() as conn, conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", subject)
+            identity = await conn.fetchrow(
+                "SELECT i.id, i.learner_id, l.label FROM learner_identities i "
+                "JOIN learners l ON l.id = i.learner_id WHERE i.provider = 'dev' AND i.subject = $1",
+                subject,
+            )
+            if identity is not None:
+                return identity["learner_id"], identity["id"], identity["label"] or label
+            learner_id = uuid4()
+            # learner labels are unique: a name someone already has becomes
+            # "<name> (judge)", then gets a short tag if even that is taken
+            for candidate in (label, f"{label} (judge)", f"{label} (judge {learner_id.hex[:4]})"):
+                taken = await conn.fetchval(
+                    "SELECT 1 FROM learners WHERE lower(label) = lower($1)", candidate,
+                )
+                if not taken:
+                    label = candidate
+                    break
+            await conn.execute(
+                "INSERT INTO learners (id, label, created_at) VALUES ($1, $2, $3)",
+                learner_id, label, datetime.now(UTC),
+            )
+            identity_id = await self.add_identity(
+                conn, learner_id=learner_id, provider="dev", subject=subject,
+                sign_in_method="judge", display_name=label,
+            )
+        return learner_id, identity_id, label
+
+
 # ------------------------------------------------------------------ ownership
 
 # How to find the learner that owns a thing named by a path, query or body
@@ -441,6 +488,10 @@ OWNER_SQL: dict[str, str] = {
     "exam_id": "SELECT learner_id FROM exams WHERE id = $1",
     "unit_id": "SELECT e.learner_id FROM exam_units u JOIN exams e ON e.id = u.exam_id WHERE u.id = $1",
     "quiz_id": "SELECT e.learner_id FROM exam_quizzes q JOIN exams e ON e.id = q.exam_id WHERE q.id = $1",
+    "question_id": (
+        "SELECT e.learner_id FROM exam_questions x JOIN exam_quizzes q ON q.id = x.quiz_id "
+        "JOIN exams e ON e.id = q.exam_id WHERE x.id = $1"
+    ),
     "item_id": (
         "SELECT e.learner_id FROM exam_plan_items i JOIN exam_plans p ON p.id = i.plan_id "
         "JOIN exams e ON e.id = p.exam_id WHERE i.id = $1"
@@ -602,6 +653,9 @@ class SignInOut(BaseModel):
     learner: SignedInLearner
     new_account: bool
     profile_complete: bool
+    # 'dev' (a team tester), 'judge', or the Firebase method: testers and
+    # judges may skip the sign-up profile
+    sign_in_method: str | None = None
 
 
 def _label_for(user: FirebaseUser) -> str:
@@ -630,6 +684,7 @@ def build_auth_router(
             learner=SignedInLearner(id=learner_id, label=(await display_name(learner_id)) or label),
             new_account=new,
             profile_complete=await has_profile(learner_id),
+            sign_in_method=method,
         )
 
     @router.post("/auth/firebase", response_model=SignInOut)
@@ -675,6 +730,19 @@ def build_auth_router(
             raise HTTPException(status_code=403, detail="Wrong tester code.")
         learner_id, identity_id, label = await store.dev_learner(name)
         return await signed_in(learner_id, identity_id, label, method="dev", new=False)
+
+    @router.post("/auth/judge", response_model=SignInOut)
+    async def sign_in_judge(body: DevSignInIn) -> SignInOut:
+        """Any name + the shared judge code. No invite: the code is the gate."""
+        if auth.judge_code is None:
+            raise HTTPException(status_code=403, detail="Judge sign-in isn't open on this server.")
+        if not hmac.compare_digest((body.code or "").encode(), auth.judge_code.encode()):
+            raise HTTPException(status_code=403, detail="Wrong judge code.")
+        name = " ".join(body.name.split())
+        if len(name) < 2:
+            raise HTTPException(status_code=422, detail="Enter your name.")
+        learner_id, identity_id, label = await store.judge_learner(name)
+        return await signed_in(learner_id, identity_id, label, method="judge", new=False)
 
     @router.get("/auth/invites/{code}")
     async def check_invite(code: str) -> dict:

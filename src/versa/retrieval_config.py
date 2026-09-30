@@ -79,15 +79,11 @@ class RetrievalWeights(BaseModel):
 
 
 class RetrievalQuotas(BaseModel):
-    """Fixed quotas, assembled from two independently-ranked pools —
-    NOT one merged pool with the top 5 taken overall. Population
-    aggregates carry higher support and would crowd out personal
-    continuity if pooled, which is exactly what makes a session feel
-    like it remembers a specific learner (see retrieval.py's module
-    docstring)."""
+    """How many of this learner's own past interactions are retrieved.
+    (There was a population quota; it was removed 2026-10-01 -- no other
+    learner's data is ever retrieved.)"""
 
     personal: int = 4
-    population: int = 1
 
 
 class RetrievalConfig(BaseModel):
@@ -100,13 +96,6 @@ class RetrievalConfig(BaseModel):
     # pgvector HNSW search-time recall/speed knob (build-time m/
     # ef_construction are fixed at index-creation, migration 034).
     hnsw_ef_search: int = 40
-    # Population pattern readability gate (migration 034 / models.py's
-    # PopulationPattern docstring) — duplicated here as the config
-    # knob retrieval actually reads at query time, rather than only
-    # documented where the table is defined.
-    population_min_distinct_learners: int = 20
-    population_max_learner_share: float = 0.25
-
     # Cosine similarity two questions' embeddings must clear to count
     # as "the same subject" -- used by interactions.py's per-turn
     # entry_state computation (continuing/stuck_repeat/returning_

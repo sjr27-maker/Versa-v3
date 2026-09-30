@@ -113,6 +113,13 @@ if (-not (Exists @('secrets', 'describe', 'versa-dev-login-code', "--project=$Pr
     EnsureSecret 'versa-dev-login-code' $devCode
     Write-Host "  tester code for Sooraj / Adithya: $devCode   (also in Secret Manager: versa-dev-login-code)" -ForegroundColor Yellow
 }
+# Judges: ANY name + this one code signs in (each name its own account). Share
+# it with the judges; delete the secret's versions to close judge sign-in.
+$judgeCode = RandomSecret 9
+if (-not (Exists @('secrets', 'describe', 'versa-judge-code', "--project=$Project"))) {
+    EnsureSecret 'versa-judge-code' $judgeCode
+    Write-Host "  judge code (any name + this code): $judgeCode   (also in Secret Manager: versa-judge-code)" -ForegroundColor Yellow
+}
 $rcKey = FromDotEnv 'REVENUECAT_SECRET_KEY'
 $rcHook = FromDotEnv 'REVENUECAT_WEBHOOK_AUTH'
 if (-not $rcHook) { $rcHook = RandomSecret 32 }
@@ -161,7 +168,8 @@ options:
 }
 
 $secrets = "DATABASE_URL=versa-database-url:latest,GEMINI_API_KEY=versa-gemini-key:latest," +
-           "VERSA_SESSION_SECRET=versa-session-secret:latest,VERSA_DEV_LOGIN_CODE=versa-dev-login-code:latest"
+           "VERSA_SESSION_SECRET=versa-session-secret:latest,VERSA_DEV_LOGIN_CODE=versa-dev-login-code:latest," +
+           "VERSA_JUDGE_CODE=versa-judge-code:latest"
 if ($billing) {
     $secrets += ",REVENUECAT_SECRET_KEY=versa-revenuecat-key:latest,REVENUECAT_WEBHOOK_AUTH=versa-revenuecat-webhook:latest"
 }

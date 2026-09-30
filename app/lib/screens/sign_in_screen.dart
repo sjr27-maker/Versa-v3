@@ -28,6 +28,8 @@ class _SignInScreenState extends State<SignInScreen> {
   final _invite = TextEditingController();
   final _testerName = TextEditingController();
   final _testerCode = TextEditingController();
+  final _judgeName = TextEditingController();
+  final _judgeCode = TextEditingController();
 
   bool _busy = false;
   bool _creating = false;
@@ -37,13 +39,14 @@ class _SignInScreenState extends State<SignInScreen> {
   /// account is signed in on this device, the code finishes it.
   bool _awaitingInvite = false;
   bool _showTester = false;
+  bool _showJudge = false;
   bool _hidePassword = true;
   String? _error;
   String? _notice;
 
   @override
   void dispose() {
-    for (final c in [_name, _email, _password, _invite, _testerName, _testerCode]) {
+    for (final c in [_name, _email, _password, _invite, _testerName, _testerCode, _judgeName, _judgeCode]) {
       c.dispose();
     }
     super.dispose();
@@ -121,6 +124,12 @@ class _SignInScreenState extends State<SignInScreen> {
             );
       });
 
+  Future<void> _judge() => _run(() async {
+        if (_judgeName.text.trim().length < 2) throw ApiException('Enter your name.');
+        if (_judgeCode.text.trim().isEmpty) throw ApiException('Enter the judge code.');
+        await context.read<AppState>().signInAsJudge(_judgeName.text, _judgeCode.text);
+      });
+
   Future<void> _openSignIn() => _run(() async {
         final name = _name.text.trim();
         if (name.isEmpty) return;
@@ -136,9 +145,14 @@ class _SignInScreenState extends State<SignInScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: Image.asset('assets/brand/versa-logo.png', width: 72, height: 72),
+          ),
+          const SizedBox(height: 14),
           Text('Versa', style: serif(44)),
           const SizedBox(height: 6),
-          Text('A tutor that stops guessing.', style: sans(15, color: Paper.muted, height: 1.5)),
+          Text('Learn, how you think.', style: sans(15, color: Paper.muted, height: 1.5)),
           const SizedBox(height: 28),
           if (!app.serverReachable || config == null)
             const SizedBox.shrink()
@@ -261,6 +275,7 @@ class _SignInScreenState extends State<SignInScreen> {
             'Google and email sign-in work in the Versa app on your phone and in a web browser.',
             error: false,
           ),
+        if (config.judge) _judgeSection(),
         if (config.dev) _testerSection(config),
       ],
     ];
@@ -303,6 +318,45 @@ class _SignInScreenState extends State<SignInScreen> {
           child: const Text('Use a different account'),
         ),
       ];
+
+  /// Judges: any name, plus the one code they were given.
+  Widget _judgeSection() => Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextButton(
+              key: const ValueKey('judge-toggle'),
+              onPressed: () => setState(() => _showJudge = !_showJudge),
+              child: Text(_showJudge ? 'Hide judge sign-in' : 'Judging Versa?'),
+            ),
+            if (_showJudge) ...[
+              TextField(
+                key: const ValueKey('judge-name'),
+                controller: _judgeName,
+                textInputAction: TextInputAction.next,
+                style: sans(15),
+                decoration: paperInput('Your name', label: 'Your name'),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                key: const ValueKey('judge-code'),
+                controller: _judgeCode,
+                obscureText: true,
+                onSubmitted: (_) => _judge(),
+                style: sans(15),
+                decoration: paperInput('The code you were given', label: 'Judge code'),
+              ),
+              const SizedBox(height: 12),
+              SecondaryButton(
+                key: const ValueKey('judge-submit'),
+                label: 'Sign in as judge',
+                onPressed: _busy ? null : _judge,
+              ),
+            ],
+          ],
+        ),
+      );
 
   Widget _testerSection(AuthConfig config) => Padding(
         padding: const EdgeInsets.only(top: 12),

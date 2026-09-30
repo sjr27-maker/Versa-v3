@@ -1,5 +1,4 @@
-"""Deterministic retrieval over personal history and population-level
-patterns — three stages, no LLM call anywhere in this module, ~25ms
+"""Deterministic retrieval over this learner's own history — three stages, no LLM call anywhere in this module, ~25ms
 budget end to end. See `interaction_nodes.PredictSelection` for the
 one caller that currently exists: it uses `retrieve()`'s output as
 context for its own (LLM-based, swappable) scoring, but nothing in
@@ -58,16 +57,13 @@ STAGE 3 (`stage3_rerank`) computes one deterministic weighted score
 per candidate from `RetrievalWeights` — no LLM, no randomness, the
 same candidates in the same filter state always rank the same way.
 
-UNIFIED RETRIEVAL (`retrieve`) returns FIXED quotas — 4 personal + 1
-population by default — each ranked independently within its own
-scope and assembled afterward, never pooled together and truncated to
-5. Population aggregates carry higher support (by construction: a
-readable pattern already cleared 20+ distinct learners) and would
-crowd out personal continuity in a single merged ranking, which is
-exactly what makes a live session feel like it remembers a specific
-learner rather than reciting a population average. Every candidate
-keeps provenance: scope, source id, retrieval key, learner_id where
-applicable, similarity, recency, outcome, support counts.
+UNIFIED RETRIEVAL (`retrieve`) returns this learner's own interactions
+only (the personal quota). There is no population scope any more
+(2026-10-01, for privacy): nothing another learner did is ever
+retrieved into this learner's prompts. `population_patterns` (migration
+034) keeps whatever rows it has -- nothing reads or writes it. Every
+candidate keeps provenance: scope, source id, retrieval key, learner_id,
+similarity, recency, outcome.
 """
 
 from __future__ import annotations
@@ -110,9 +106,7 @@ class RetrievalContext(BaseModel):
     # The domain switch's storage/retrieval exception (domain_config.py):
     # personal-scope retrieval must never surface a different domain's
     # interactions for the same learner_id. None means "no domain
-    # filter" -- population scope has no domain column at all (see
-    # `_population_recall`'s own docstring for that gap, left
-    # unaddressed and reported rather than silently patched).
+    # filter".
     domain: Domain | None = None
 
 
@@ -127,9 +121,8 @@ class _WhereFragment:
 
 
 def stage1_filter(learner_id: UUID | None, ctx: RetrievalContext) -> _WhereFragment:
-    """Builds the WHERE fragment personal-scope (learner_id set) and
-    population-scope (learner_id None, filtering population_patterns
-    instead -- see `_population_where`) retrieval both start from.
+    """Builds the WHERE fragment personal-scope retrieval starts from
+    (always this learner_id).
 
     Deliberately a pure function returning SQL text + params, not
     something that itself talks to the database -- the "inspectable"
@@ -313,10 +306,7 @@ def stage3_rerank(
     match.
 
     `n_supported_claims` is keyed by interaction_id -- 0 (the config
-    default) for an ordinary personal interaction; population-scope
-    callers pass `population_patterns.support_count` through this same
-    parameter, keyed by the pattern's own id, so one scoring function
-    serves both scopes.
+    default) for an ordinary personal interaction.
     """
     cfg = config or RetrievalConfig()
     w = cfg.weights
@@ -371,78 +361,6 @@ def stage3_rerank(
     return candidates
 
 
-async def _population_recall(
-    pool: asyncpg.Pool,
-    query_vec: list[float],
-    config: RetrievalConfig,
-) -> list[RetrievalCandidate]:
-    """Population scope's own recall + rerank, kept separate from the
-    personal-scope path above rather than sharing stage1_filter/
-    stage2_recall's SQL -- a different table, a different readability
-    gate (distinct_learner_count/max_per_learner_share), and no
-    learner_id predicate at all (a pattern is not attributed to one
-    learner).
-
-    NOT domain-filtered: `population_patterns` (migration 034) has no
-    `domain` column, and adding one would mean threading domain through
-    the abstraction/aggregation pipeline (interaction_abstracts ->
-    `versa aggregate-patterns`) as well as this table -- out of scope
-    for what this feature's own spec asked for ("add a domain column
-    to interactions"). This is a genuine, unaddressed gap: a population
-    pattern aggregated from a mix of education- and general-domain
-    abstracts could still surface here regardless of which domain is
-    running. Reported as a known leak, not silently fixed."""
-    async with pool.acquire() as conn, conn.transaction():
-        await conn.execute(f"SET LOCAL hnsw.ef_search = {int(config.hnsw_ef_search)}")
-        rows = await conn.fetch(
-            """
-                SELECT id, abstract_form, support_count, distinct_learner_count,
-                       max_per_learner_share, created_at,
-                       1 - (embedding <=> $1) AS similarity
-                FROM population_patterns
-                WHERE distinct_learner_count >= $2 AND max_per_learner_share <= $3
-                ORDER BY embedding <=> $1
-                LIMIT $4
-                """,
-            query_vec,
-            config.population_min_distinct_learners,
-            config.population_max_learner_share,
-            config.stage2_top_n,
-        )
-
-    w = config.weights
-    candidates: list[RetrievalCandidate] = []
-    for row in rows:
-        recency_days = (datetime.now(UTC) - row["created_at"]).total_seconds() / 86400.0
-        support = min(row["support_count"] / w.support_normalization_cap, 1.0)
-        similarity = row["similarity"]
-        score = (
-            w.semantic_similarity_weight * similarity
-            + w.recency_weight * _recency_factor(row["created_at"], w.recency_half_life_days)
-            + w.support_weight * support
-            # No contradicted_outcome_bonus at population scope --
-            # population_patterns carries no per-row outcome; the
-            # bonus is a personal-interaction signal only.
-        )
-        candidates.append(
-            RetrievalCandidate(
-                scope="population",
-                source_id=row["id"],
-                retrieval_key=_ABSTRACT_KEY,
-                learner_id=None,
-                similarity=similarity,
-                recency_days=recency_days,
-                outcome=None,
-                support_count=row["support_count"],
-                distinct_learner_count=row["distinct_learner_count"],
-                text=row["abstract_form"],
-                score=score,
-            )
-        )
-    candidates.sort(key=lambda c: c.score, reverse=True)
-    return candidates
-
-
 @dataclass
 class RetrievalResult:
     candidates: list[RetrievalCandidate]
@@ -456,10 +374,8 @@ async def retrieve(
     ctx: RetrievalContext | None = None,
     config: RetrievalConfig | None = None,
 ) -> RetrievalResult:
-    """The unified interface: fixed quotas (default 4 personal + 1
-    population), each scope ranked independently, assembled after --
-    never one merged pool truncated to 5. See module docstring for why.
-    """
+    """The unified interface: this learner's own interactions, ranked,
+    up to the personal quota. Nothing from any other learner."""
     cfg = config or RetrievalConfig()
     context = ctx or RetrievalContext()
     start = time.monotonic()
@@ -467,11 +383,7 @@ async def retrieve(
     where = stage1_filter(learner_id, context)
     personal_hits = await stage2_recall(pool, query_vec, where, cfg)
     personal_ranked = stage3_rerank(personal_hits, cfg)
-    population_ranked = await _population_recall(pool, query_vec, cfg)
 
-    assembled = (
-        personal_ranked[: cfg.quotas.personal]
-        + population_ranked[: cfg.quotas.population]
-    )
+    assembled = personal_ranked[: cfg.quotas.personal]
     elapsed_ms = (time.monotonic() - start) * 1000
     return RetrievalResult(candidates=assembled, elapsed_ms=elapsed_ms)

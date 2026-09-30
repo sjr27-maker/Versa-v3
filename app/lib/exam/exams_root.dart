@@ -23,5 +23,7 @@ class ExamsRoot extends StatelessWidget {
 Future<void> pushExam(BuildContext context, String examId, {Exam? initial}) =>
     Navigator.of(context).push(topicRoute((_) => ExamScreen(examId: examId, initial: initial)));
 
-Future<void> pushQuiz(BuildContext context, {required String label, required Future<Quiz> Function() load}) =>
-    Navigator.of(context).push(topicRoute((_) => QuizScreen(label: label, load: load)));
+/// [warmUp]: a new sitting warms the student up on its chapters first.
+Future<void> pushQuiz(BuildContext context,
+        {required String label, required Future<Quiz> Function() load, Future<List<WarmUp>> Function()? warmUp}) =>
+    Navigator.of(context).push(topicRoute((_) => QuizScreen(label: label, load: load, warmUp: warmUp)));

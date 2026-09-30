@@ -17,16 +17,10 @@ from versa.embeddings import (
     StubEmbeddingClient,
     build_embedding_client,
 )
-from versa.interactions import InteractionAbstractStore
 from versa.learner import LearnerStore
 from versa.llm import ModelTierClients, StubLLMClient, build_tier_clients
 from versa.loop import SessionLoop
 from versa.models import Learner
-from versa.population_patterns import (
-    PopulationAggregationConfig,
-    PopulationPatternStore,
-    aggregate_population_patterns,
-)
 from versa.session_builder import build_session_loop
 
 
@@ -163,41 +157,6 @@ async def _consolidate_session(session_id_str: str, use_stub: bool) -> None:
         await pool.close()
 
 
-async def _aggregate_patterns() -> None:
-    """`versa aggregate-patterns` — the on-demand batch step of
-    population_patterns.py's pipeline (raw interaction -> abstract form
-    -> aggregation -> multi-learner support -> retrieval). Deliberately
-    explicit and on-demand, same "no automatic per-turn trigger"
-    precedent as `versa consolidate-session`: clustering every
-    learner's abstracts against every other learner's is a global
-    operation, not something to redo on every turn.
-    """
-    pool = await create_pool(_database_url(), min_size=1, max_size=2)
-    try:
-        abstract_store = InteractionAbstractStore(pool)
-        pattern_store = PopulationPatternStore(pool)
-        written = await aggregate_population_patterns(
-            abstract_store, pattern_store, PopulationAggregationConfig()
-        )
-        if not written:
-            print(
-                "versa: no readable population patterns this run -- every "
-                "cluster fell short of >=20 distinct learners or exceeded "
-                "the 25% single-learner share cap"
-            )
-            return
-        print(f"versa: wrote {len(written)} readable population pattern(s):")
-        for pattern in written:
-            print(
-                f"  {pattern.id}: {pattern.abstract_form!r} "
-                f"(support={pattern.support_count}, "
-                f"distinct_learners={pattern.distinct_learner_count}, "
-                f"max_share={pattern.max_per_learner_share:.2f})"
-            )
-    finally:
-        await pool.close()
-
-
 async def _run_migrations(status_only: bool, do_baseline: bool) -> None:
     pool = await create_pool(_database_url(), min_size=1, max_size=2)
     try:
@@ -232,52 +191,34 @@ async def _run_migrations(status_only: bool, do_baseline: bool) -> None:
         await pool.close()
 
 
-async def _discovered_moves(learner_spec: str | None = None) -> None:
-    """`versa discovered-moves` -- the moves learners asked for when none of
-    the cards matched and none of the library's types fit (migration 089),
-    grouped across learners (style_patterns.discover_moves). A group marked
-    CANDIDATE was asked for often enough, by enough learners, to consider as
-    a new card type -- a person decides; nothing changes the library on its
-    own. Read-only; no model call, writes nothing."""
-    from versa.style_patterns import (
-        DISCOVER_MIN_LEARNERS,
-        DISCOVER_MIN_READINGS,
-        StyleReader,
-    )
+async def _discovered_moves(learner_spec: str) -> None:
+    """`versa discovered-moves --learner X` -- the moves one learner asked for
+    when none of the cards matched and none of the library's types fit
+    (migration 089), grouped among their own readings
+    (style_patterns.discover_moves). Only that learner's data: moves are
+    never pooled across learners (2026-10-01). Read-only; no model call,
+    writes nothing."""
+    from versa.style_patterns import StyleReader
 
     pool = await create_pool(_database_url(), min_size=1, max_size=2)
     try:
-        if learner_spec:
-            learner = await _resolve_learner(LearnerStore(pool), learner_spec)
-            moves = await StyleReader(pool).learner_moves(learner.id)
-            if not moves:
-                print(f"learner {learner.id}: no new moves yet")
-                return
-            print(f"learner {learner.id}: {len(moves)} new move(s) -- asked for, not offered by any card")
-            for m in moves:
-                shared = f", also asked by {m['others']} other learner(s)" if m["others"] else ""
-                print(f"  \u201c{m['label']}\u201d -- {m['times']} time(s) in {m['chats']} chat(s){shared}")
+        learner = await _resolve_learner(LearnerStore(pool), learner_spec)
+        moves = await StyleReader(pool).learner_moves(learner.id)
+        if not moves:
+            print(f"learner {learner.id}: no new moves yet")
             return
-        # the instrument's own check: a learner typed the very move a card
-        # on screen offered -- that card's wording didn't land
+        print(f"learner {learner.id}: {len(moves)} new move(s) -- asked for, not offered by any card")
+        for m in moves:
+            print(f"  “{m['label']}” -- {m['times']} time(s) in {m['chats']} chat(s)")
+        # their own misses whose move a card on screen already offered: that
+        # card's wording didn't land for them
         missed_wording = await pool.fetch(
-            "SELECT tagged_as, count(*) AS n FROM direction_misses WHERE in_hand GROUP BY tagged_as ORDER BY n DESC")
+            "SELECT m.tagged_as, count(*) AS n FROM direction_misses m JOIN sessions se ON se.id = m.session_id "
+            "WHERE m.in_hand AND se.learner_id = $1 GROUP BY m.tagged_as ORDER BY n DESC", learner.id)
         if missed_wording:
-            print("cards whose wording missed (typed what a card on screen already offered):")
+            print("cards whose wording missed for them (typed what a card on screen already offered):")
             for r in missed_wording:
                 print(f"  {r['tagged_as']}: {r['n']} time(s)")
-        groups = await StyleReader(pool).discovered_moves()
-        if not groups:
-            print("no new moves yet -- every missed question so far fitted a card type, or none was read")
-            return
-        print(f"{len(groups)} group(s) of new moves (a candidate needs >= {DISCOVER_MIN_READINGS} readings "
-              f"from >= {DISCOVER_MIN_LEARNERS} learners)")
-        for g in groups:
-            mark = "CANDIDATE " if g["candidate_card"] else ""
-            print(f"  {mark}“{g['label']}” -- {g['readings']} reading(s), {g['learners']} learner(s), "
-                  f"{g['sessions']} chat(s)")
-            for example in g["examples"][1:]:
-                print(f"      also: {example}")
     finally:
         await pool.close()
 
@@ -646,13 +587,6 @@ def main() -> None:
         "real Gemini API (no GEMINI_API_KEY needed, no cost)",
     )
     subparsers.add_parser(
-        "aggregate-patterns",
-        help="cluster every learner's latest interaction_abstracts row "
-        "and write readable (>=20 distinct learners, <=25% single-"
-        "learner share) clusters to population_patterns -- the "
-        "on-demand aggregation step retrieval reads from",
-    )
-    subparsers.add_parser(
         "seed-demo-fixture",
         help="(re)apply demo_fixture.py's two hand-authored, opposite-"
         "portrait learners plus a fixed question set -- idempotent, "
@@ -719,12 +653,12 @@ def main() -> None:
     )
     discovered_parser = subparsers.add_parser(
         "discovered-moves",
-        help="read-only: moves learners asked for that no card type covers, grouped across "
-        "learners -- candidates for new card types (style_patterns.discover_moves)",
+        help="read-only: the moves one learner asked for that no card type covers, grouped among "
+        "their own readings (style_patterns.discover_moves)",
     )
     discovered_parser.add_argument(
-        "--learner", default=None,
-        help="only this learner's own new moves (label or UUID)",
+        "--learner", required=True,
+        help="the learner (label or UUID) -- moves are never pooled across learners",
     )
     score_predictions_parser = subparsers.add_parser(
         "score-predictions",
@@ -748,8 +682,6 @@ def main() -> None:
         asyncio.run(_serve(args.host, args.port, args.stub, args.web_dir))
     elif args.command == "consolidate-session":
         asyncio.run(_consolidate_session(args.session_id, args.stub))
-    elif args.command == "aggregate-patterns":
-        asyncio.run(_aggregate_patterns())
     elif args.command == "seed-demo-fixture":
         asyncio.run(_seed_demo_fixture())
     elif args.command == "compare-portraits":

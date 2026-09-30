@@ -7,11 +7,26 @@ Flow
        topic_resources, the same table Learn a topic reads), or from one of
        the learner's existing courses, whose chapters become the units (no
        model call).
-    2. Practise. A unit quiz is 5 fresh questions on one unit
-       (`WriteQuestions`); a mock test takes 2 from every unit (one call per
-       unit, in parallel) and runs against a clock. Questions are multiple
-       choice or short answer. The client never sees the answers until the
-       quiz is handed in.
+    2. Practise. Every question says what it TESTS -- `skill`: recall,
+       understand, apply or analyse -- and is a straight quiz question or a
+       puzzle (spot the mistake, what happens next, which comes first...),
+       so a result reads as what the student can DO, not one number (2026-10-01).
+       A unit quiz is 5 fresh questions on one unit (`WriteQuestions`), all
+       answered with a tap and ramping from recall to analysis; it is taken
+       one question at a time, each tap checked there and then
+       (`POST /api/exam-quizzes/{id}/check`, kept once in exam_checks and
+       used at hand-in). A mock test takes 2 from every unit (one call per
+       unit, in parallel), mixes in written answers and runs against a clock,
+       with nothing revealed until it is handed in.
+       Before a quiz or test, the student is WARMED UP on each chapter
+       (`POST /api/exam-units/{id}/warmup`, `/api/exams/{id}/warmup` for a
+       mock's every chapter, `ExamWarmUp`): the key points, the central
+       formula, one worked example, and the slime acting the idea out -- a
+       refresher, never a question. A mock's clock starts only after it.
+       With the stage on, a question is set up by the slime
+       (`POST /api/exam-questions/{id}/scene`, stage.exam_scene_prompt): a
+       focused scene that shows the situation and ends with the slime asking
+       it -- the question's own choices, never the answer.
     3. Hand in. Multiple choice is graded exactly; short answers are graded
        together in one `GradeAnswers` call. The result shows, per question,
        what was right, the correct answer and why.
@@ -43,6 +58,7 @@ import contextlib
 import json
 import logging
 import math
+import random
 import re
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
@@ -56,7 +72,8 @@ from pydantic import BaseModel, Field
 from versa import profiles as _profiles
 from versa import resources as _resources
 from versa.audit import to_jsonable
-from versa.formatting import MATH_STYLE_JSON
+from versa.formatting import MATH_STYLE_JSON, repair_latex_escapes
+from versa.stage import exam_scene_prompt, exam_warmup_prompt, parse_exam_scene, parse_exam_warmup
 from versa.learner import LearnerStore
 from versa.llm import LLMClient
 from versa.sparks import passed
@@ -65,6 +82,13 @@ from versa.topics import TopicStore
 logger = logging.getLogger(__name__)
 
 QuestionKind = Literal["choice", "short"]
+SKILLS = ("recall", "understand", "apply", "analyse")
+# A multiple-choice question's choices are shuffled here, not left where the
+# model put them (live 2026-10-01: 13 questions had the right answer at B
+# seven times and never at D -- a pattern a student could learn). Tests pin
+# the order by turning this off.
+SHUFFLE_CHOICES = True
+FORMS = ("quiz", "puzzle")
 PlanKind = Literal["revise", "quiz", "weakest", "mock"]
 
 _UNITS = (4, 10)
@@ -167,6 +191,47 @@ class QuestionOut(BaseModel):
     kind: QuestionKind
     prompt: str
     choices: list[str]
+    # what it tests, and how it is asked (None on questions from before 093)
+    skill: str | None = None
+    form: str | None = None
+
+
+class CheckIn(BaseModel):
+    question_id: UUID
+    response: str
+
+
+class CheckOut(BaseModel):
+    """A unit-quiz tap, checked at once: right or not, the answer and why."""
+
+    question_id: UUID
+    response: str
+    correct: bool
+    correct_index: int
+    correct_answer: str
+    explanation: str
+
+
+class SkillOut(BaseModel):
+    skill: str
+    correct: int
+    total: int
+
+
+class SceneOut(BaseModel):
+    question_id: UUID
+    script: list[dict]
+
+
+class WarmUpOut(BaseModel):
+    """A chapter's warm-up before its questions: what to have fresh in mind."""
+
+    unit_id: UUID
+    unit_title: str
+    points: list[str]
+    formula: str | None = None
+    example: str | None = None
+    script: list[dict] = []
 
 
 class QuestionResultOut(QuestionOut):
@@ -193,6 +258,10 @@ class QuizOut(BaseModel):
     over_time: bool = False
     score: ScoreOut | None = None
     results: list[QuestionResultOut] = []
+    # a unit quiz in progress: the taps already checked
+    checks: list[CheckOut] = []
+    # handed in: how each skill went
+    skills: list[SkillOut] = []
 
 
 class PlanIn(BaseModel):
@@ -281,6 +350,14 @@ class QuestionRow(BaseModel):
     correct_index: int | None
     model_answer: str
     explanation: str
+    skill: str | None = None
+    form: str | None = None
+
+
+class CheckRow(BaseModel):
+    question_id: UUID
+    response: str
+    correct: bool
 
 
 class SubmissionRow(BaseModel):
@@ -427,13 +504,61 @@ class ExamStore:
             )
             await conn.executemany(
                 "INSERT INTO exam_questions (id, quiz_id, unit_id, position, kind, prompt, "
-                "choices, correct_index, model_answer, explanation) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                "choices, correct_index, model_answer, explanation, skill, form) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
                 [(uuid4(), quiz_id, q["unit_id"], i, q["kind"], q["prompt"], q["choices"],
-                  q["correct_index"], q["model_answer"], q["explanation"])
+                  q["correct_index"], q["model_answer"], q["explanation"], q.get("skill"), q.get("form"))
                  for i, q in enumerate(questions)],
             )
         return quiz_id
+
+    async def add_check(self, *, quiz_id: UUID, question_id: UUID, response: str, correct: bool) -> CheckRow:
+        """Keep a unit-quiz tap, once per question: the first one stands
+        (a second call returns it, unchanged)."""
+        try:
+            await self._pool.execute(
+                "INSERT INTO exam_checks (id, quiz_id, question_id, response, correct) "
+                "VALUES ($1, $2, $3, $4, $5)",
+                uuid4(), quiz_id, question_id, response, correct,
+            )
+        except asyncpg.UniqueViolationError:
+            pass
+        row = await self._pool.fetchrow(
+            "SELECT question_id, response, correct FROM exam_checks WHERE question_id = $1", question_id,
+        )
+        return CheckRow(**dict(row))
+
+    async def list_checks(self, quiz_id: UUID) -> list[CheckRow]:
+        rows = await self._pool.fetch(
+            "SELECT question_id, response, correct FROM exam_checks WHERE quiz_id = $1 ORDER BY created_at",
+            quiz_id,
+        )
+        return [CheckRow(**dict(r)) for r in rows]
+
+    async def get_question(self, question_id: UUID) -> QuestionRow | None:
+        row = await self._pool.fetchrow("SELECT * FROM exam_questions WHERE id = $1", question_id)
+        return QuestionRow(**dict(row)) if row else None
+
+    async def latest_warmup(self, unit_id: UUID) -> dict | None:
+        """A chapter's warm-up, if one was made already (reused on a retake)."""
+        out = await self._pool.fetchval(
+            "SELECT output_json FROM exam_generations WHERE node_name = 'ExamWarmUp' "
+            "AND output_json IS NOT NULL AND input_json->'kwargs'->>'unit_id' = $1 "
+            "ORDER BY created_at DESC LIMIT 1",
+            str(unit_id),
+        )
+        return out if isinstance(out, dict) and out.get("points") else None
+
+    async def latest_scene(self, question_id: UUID) -> list[dict] | None:
+        """A question's stage scene, if one was made already (a question is
+        set up once, however often it is shown)."""
+        out = await self._pool.fetchval(
+            "SELECT output_json FROM exam_generations WHERE node_name = 'ExamScene' "
+            "AND output_json IS NOT NULL AND input_json->'kwargs'->>'question_id' = $1 "
+            "ORDER BY created_at DESC LIMIT 1",
+            str(question_id),
+        )
+        return out if isinstance(out, list) and out else None
 
     async def get_quiz(self, quiz_id: UUID) -> QuizRow | None:
         row = await self._pool.fetchrow("SELECT * FROM exam_quizzes WHERE id = $1", quiz_id)
@@ -615,7 +740,7 @@ def _json_object(raw: str) -> dict | None:
     if match is None:
         return None
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(repair_latex_escapes(match.group(0)))
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
@@ -665,8 +790,12 @@ def parse_questions(raw_questions: object, limit: int) -> list[dict]:
                 or not 0 <= idx < len(choices)
             ):
                 continue
+            right = choices[idx]
+            if SHUFFLE_CHOICES:
+                random.shuffle(choices)
+                idx = choices.index(right)
             q = {"kind": "choice", "prompt": prompt, "choices": choices, "correct_index": idx,
-                 "model_answer": choices[idx], "explanation": explanation}
+                 "model_answer": right, "explanation": explanation}
         elif kind == "short":
             answer = _clip(raw.get("answer"), 600)
             if not answer:
@@ -675,6 +804,10 @@ def parse_questions(raw_questions: object, limit: int) -> list[dict]:
                  "model_answer": answer, "explanation": explanation}
         else:
             continue
+        skill = str(raw.get("skill") or "").strip().lower()
+        form = str(raw.get("form") or "").strip().lower()
+        q["skill"] = skill if skill in SKILLS else None
+        q["form"] = form if form in FORMS else None
         seen.add(prompt.lower())
         out.append(q)
         if len(out) >= limit:
@@ -814,7 +947,8 @@ class WriteQuestions:
     def __init__(self, llm: LLMClient) -> None:
         self._llm = llm
 
-    def prompt(self, exam_title: str, unit: dict, count: int, excerpt: str, avoid: list[str]) -> str:
+    def prompt(self, exam_title: str, unit: dict, count: int, excerpt: str, avoid: list[str],
+               taps_only: bool = False) -> str:
         source = (
             f"The exam is based on this material -- test what it teaches:\n<<<\n{excerpt}\n>>>\n"
             if excerpt else ""
@@ -833,23 +967,84 @@ class WriteQuestions:
             f"{detail}"
             f"{source}"
             f"{avoid_block}"
-            f"\nWrite exactly {count} questions, mixing difficulty and testing "
-            "understanding, not trivia. Mostly multiple choice (`kind`: \"choice\", "
-            "4 `choices`, exactly one correct, `correct_index` 0-3, plausible wrong "
-            "choices, and vary which position is correct); about one in four short "
-            "answer (`kind`: \"short\", answerable in one or two sentences, with the "
-            "model `answer`). Every question has a one-or-two sentence `explanation` "
-            "of why the answer is right.\n"
+            f"\nWrite exactly {count} questions in the style of the real exam: focused, precise, "
+            "testing what the student can DO with the unit -- use it on unseen cases, reason with "
+            "it, spot what is wrong -- not trivia or wording tricks.\n"
+            "- Each question has a `skill` it tests: recall (knows the fact or definition), "
+            "understand (explains or recognises it in another form), apply (uses it on a new "
+            "case or calculation) or analyse (compares, finds the error, reasons several steps). "
+            "Go from recall to analyse through the set; most should be apply or analyse.\n"
+            "- `form`: \"quiz\" for a straight question, \"puzzle\" for one that makes them "
+            "think: spot the mistake in a worked step, what happens next, which comes first, odd "
+            "one out, which example fits. At least one puzzle in every set.\n"
+            + ("- Every question is multiple choice (`kind`: \"choice\") -- the student answers "
+               "each with ONE TAP, never by typing: 4 `choices`, exactly one correct, "
+               "`correct_index` 0-3, wrong choices that are believable mistakes, and vary which "
+               "position is correct.\n"
+               if taps_only else
+               "- Mostly multiple choice (`kind`: \"choice\", 4 `choices`, exactly one correct, "
+               "`correct_index` 0-3, wrong choices that are believable mistakes, and vary which "
+               "position is correct); about one in four short answer (`kind`: \"short\", "
+               "answerable in one or two sentences or a short working, with the model `answer`).\n")
+            + "- Every question has a one-or-two sentence `explanation` of why the answer is right.\n"
             f"{MATH_STYLE_JSON}\n"
-            'Respond with JSON: {"questions": [{"kind": "choice", "prompt": "...", '
-            '"choices": ["...", "...", "...", "..."], "correct_index": 0, '
-            '"explanation": "..."}, {"kind": "short", "prompt": "...", "answer": "...", '
-            '"explanation": "..."}]}'
+            'Respond with JSON: {"questions": [{"kind": "choice", "skill": "apply", "form": "quiz", '
+            '"prompt": "...", "choices": ["...", "...", "...", "..."], "correct_index": 0, '
+            '"explanation": "..."}, {"kind": "short", "skill": "analyse", "form": "puzzle", '
+            '"prompt": "...", "answer": "...", "explanation": "..."}]}'
         )
 
-    async def run(self, exam_title: str, unit: dict, count: int, excerpt: str, avoid: list[str]) -> list[dict]:
-        raw = await self._llm.complete(self.prompt(exam_title, unit, count, excerpt, avoid))
-        return parse_questions((_json_object(raw) or {}).get("questions"), count)
+    async def run(self, exam_title: str, unit: dict, count: int, excerpt: str, avoid: list[str],
+                  taps_only: bool = False) -> list[dict]:
+        raw = await self._llm.complete(self.prompt(exam_title, unit, count, excerpt, avoid, taps_only))
+        questions = parse_questions((_json_object(raw) or {}).get("questions"), count)
+        return [q for q in questions if q["kind"] == "choice"] if taps_only else questions
+
+
+class ExamWarmUp:
+    """One chapter -> its warm-up (stage.exam_warmup_prompt)."""
+
+    name = "ExamWarmUp"
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+
+    def prompt(self, unit_id: str, exam_title: str, unit_title: str, unit_summary: str, detail: str,
+               excerpt: str, brief: bool) -> str:
+        return exam_warmup_prompt(exam_title, unit_title, unit_summary, detail, excerpt, brief)
+
+    async def run(self, unit_id: str, exam_title: str, unit_title: str, unit_summary: str, detail: str,
+                  excerpt: str, brief: bool) -> dict:
+        prompt = self.prompt(unit_id, exam_title, unit_title, unit_summary, detail, excerpt, brief)
+        for _ in range(2):  # one retry on an unreadable reply (live 2026-10-01: 1 in 8 failed)
+            parsed = parse_exam_warmup(await self._llm.complete(prompt))
+            if parsed is not None:
+                return parsed
+        raise ValueError("no usable warm-up points in the reply")
+
+
+class ExamScene:
+    """One question set up on the stage (stage.exam_scene_prompt): a short,
+    focused scene ending with the slime asking it, never the answer."""
+
+    name = "ExamScene"
+
+    def __init__(self, llm: LLMClient) -> None:
+        self._llm = llm
+
+    def prompt(self, question_id: str, exam_title: str, unit_title: str, question: str,
+               choices: list[str], skill: str | None, form: str | None, mock: bool) -> str:
+        return exam_scene_prompt(exam_title, unit_title, question, choices, skill, form, mock)
+
+    async def run(self, question_id: str, exam_title: str, unit_title: str, question: str,
+                  choices: list[str], skill: str | None, form: str | None, mock: bool) -> list[dict]:
+        prompt = self.prompt(question_id, exam_title, unit_title, question, choices, skill, form, mock)
+        script: list[dict] = []
+        for _ in range(2):  # one retry when nothing of the scene came through
+            script = parse_exam_scene(await self._llm.complete(prompt), choices, question)
+            if any(a["do"] != "ask" for a in script):
+                return script
+        return script
 
 
 class GradeAnswers:
@@ -903,6 +1098,8 @@ class ExamService:
         self.syllabus = ExamSyllabus(llm)
         self.questions = WriteQuestions(llm)
         self.grader = GradeAnswers(llm)
+        self.stage = ExamScene(llm)
+        self.warm = ExamWarmUp(llm)
         # replaceable so tests can pin "today"
         self.today: Callable[[], date] = local_today
 
@@ -1055,6 +1252,10 @@ class ExamService:
             submitted=submission is not None,
         )
         if submission is None:
+            if quiz.kind == "unit":
+                by_id = {q.id: q for q in questions}
+                out.checks = [_check_out(by_id[c.question_id], c) for c in await self.store.list_checks(quiz_id)
+                              if c.question_id in by_id]
             return out
         answers = {a.question_id: a for a in await self.store.list_answers(quiz_id)}
         out.over_time = submission.over_time
@@ -1069,11 +1270,92 @@ class ExamService:
             )
             for q in questions
         ]
+        out.skills = skill_breakdown(questions, answers)
         return out
+
+    # ----------------------------------------------------------- one question
+
+    async def check(self, quiz_id: UUID, body: CheckIn) -> CheckOut:
+        """A unit-quiz tap, checked at once. Only a unit quiz's multiple-choice
+        questions, only before hand-in; the first tap per question stands."""
+        quiz = await self.store.get_quiz(quiz_id)
+        if quiz is None:
+            raise HTTPException(status_code=404, detail="unknown quiz")
+        if quiz.kind != "unit":
+            raise HTTPException(status_code=409, detail="a mock test is marked when it is handed in")
+        if await self.store.get_submission(quiz_id) is not None:
+            raise HTTPException(status_code=409, detail="this quiz was already handed in")
+        q = await self.store.get_question(body.question_id)
+        if q is None or q.quiz_id != quiz_id:
+            raise HTTPException(status_code=404, detail="unknown question")
+        response = body.response.strip()
+        if q.kind != "choice" or not response.isdigit() or not 0 <= int(response) < len(q.choices):
+            raise HTTPException(status_code=422, detail="tap one of the question's choices")
+        row = await self.store.add_check(
+            quiz_id=quiz_id, question_id=q.id, response=response, correct=int(response) == q.correct_index,
+        )
+        return _check_out(q, row)
+
+    async def warmup(self, unit_id: UUID, brief: bool = False) -> WarmUpOut:
+        """A chapter's warm-up before its questions -- made once, then reused."""
+        unit = await self.store.get_unit(unit_id)
+        if unit is None:
+            raise HTTPException(status_code=404, detail="unknown unit")
+        made = await self.store.latest_warmup(unit_id)
+        if made is None:
+            exam = await self.store.get_exam(unit.exam_id)
+            excerpt = ""
+            if exam.resource_id is not None:
+                text, _, _ = await self.topics.get_resource_text(exam.resource_id)
+                excerpt = text[:RESOURCE_EXCERPT_CHARS]
+            try:
+                made = await self._generate(
+                    self.warm, learner_id=exam.learner_id, exam_id=exam.id, unit_id=str(unit.id),
+                    exam_title=exam.title, unit_title=unit.title, unit_summary=unit.summary,
+                    detail=unit.detail or "", excerpt=excerpt, brief=brief,
+                )
+            except Exception:
+                logger.warning("exam %s: warm-up failed for unit %s", exam.id, unit.id, exc_info=True)
+                raise HTTPException(status_code=502, detail="could not write the warm-up, try again") from None
+        return WarmUpOut(unit_id=unit.id, unit_title=unit.title, **made)
+
+    async def warmups(self, exam_id: UUID) -> list[WarmUpOut]:
+        """Every chapter's warm-up, before a mock test (brief ones, in parallel).
+        A chapter whose warm-up fails is left out rather than holding the test up."""
+        if await self.store.get_exam(exam_id) is None:
+            raise HTTPException(status_code=404, detail="unknown exam")
+        units = await self.store.list_units(exam_id)
+        made = await asyncio.gather(*(self.warmup(u.id, brief=True) for u in units), return_exceptions=True)
+        out = [w for w in made if isinstance(w, WarmUpOut)]
+        if not out:
+            raise HTTPException(status_code=502, detail="could not write the warm-up, try again")
+        return out
+
+    async def scene(self, question_id: UUID) -> SceneOut:
+        """The question set up on the stage -- made once, then reused."""
+        q = await self.store.get_question(question_id)
+        if q is None:
+            raise HTTPException(status_code=404, detail="unknown question")
+        cached = await self.store.latest_scene(question_id)
+        if cached is not None:
+            return SceneOut(question_id=question_id, script=cached)
+        quiz = await self.store.get_quiz(q.quiz_id)
+        exam = await self.store.get_exam(quiz.exam_id)
+        unit = await self.store.get_unit(q.unit_id)
+        try:
+            script = await self._generate(
+                self.stage, learner_id=exam.learner_id, exam_id=exam.id,
+                question_id=str(q.id), exam_title=exam.title, unit_title=unit.title if unit else "",
+                question=q.prompt, choices=q.choices, skill=q.skill, form=q.form, mock=quiz.kind == "mock",
+            )
+        except Exception:
+            logger.warning("exam %s: stage scene failed for question %s", exam.id, q.id, exc_info=True)
+            raise HTTPException(status_code=502, detail="could not set this question on the stage") from None
+        return SceneOut(question_id=question_id, script=script)
 
     # ----------------------------------------------------------- sittings
 
-    async def _unit_questions(self, exam: ExamRow, unit: UnitRow, count: int) -> list[dict]:
+    async def _unit_questions(self, exam: ExamRow, unit: UnitRow, count: int, taps_only: bool = False) -> list[dict]:
         excerpt = ""
         if exam.resource_id is not None:
             text, _, _ = await self.topics.get_resource_text(exam.resource_id)
@@ -1084,6 +1366,7 @@ class ExamService:
             unit={"title": unit.title, "summary": unit.summary, "detail": unit.detail},
             count=count, excerpt=excerpt,
             avoid=await self.store.previous_prompts(unit.id, _AVOID_PREVIOUS),
+            taps_only=taps_only,
         )
         return [{**q, "unit_id": unit.id} for q in questions]
 
@@ -1092,7 +1375,7 @@ class ExamService:
         if unit is None:
             raise HTTPException(status_code=404, detail="unknown unit")
         exam = await self.store.get_exam(unit.exam_id)
-        questions = await self._unit_questions(exam, unit, UNIT_QUIZ_QUESTIONS)
+        questions = await self._unit_questions(exam, unit, UNIT_QUIZ_QUESTIONS, taps_only=True)
         if len(questions) < 3:
             raise HTTPException(status_code=502, detail="could not write questions for that unit, try again")
         quiz_id = await self.store.add_quiz(
@@ -1107,7 +1390,9 @@ class ExamService:
             raise HTTPException(status_code=404, detail="unknown exam")
         units = await self.store.list_units(exam_id)
         per_unit = await asyncio.gather(
-            *(self._unit_questions(exam, u, MOCK_QUESTIONS_PER_UNIT) for u in units),
+            # a written answer only in every other chapter: about one question in four
+            *(self._unit_questions(exam, u, MOCK_QUESTIONS_PER_UNIT, taps_only=i % 2 == 1)
+              for i, u in enumerate(units)),
             return_exceptions=True,
         )
         questions = [
@@ -1133,6 +1418,9 @@ class ExamService:
         responses = {a.question_id: " ".join(a.response.split())[:2000] for a in body.answers}
         if not set(responses) <= {q.id for q in questions}:
             raise HTTPException(status_code=422, detail="answers must be for this quiz's questions")
+        if quiz.kind == "unit":
+            # a tap checked during the quiz is the answer: it can't be changed after seeing it marked
+            responses.update({c.question_id: c.response for c in await self.store.list_checks(quiz_id)})
 
         answers: dict[UUID, dict] = {}
         to_grade: list[QuestionRow] = []
@@ -1270,8 +1558,30 @@ class ExamService:
 def _question_out(q: QuestionRow, units: dict[UUID, UnitRow]) -> QuestionOut:
     return QuestionOut(
         id=q.id, position=q.position, unit_title=units[q.unit_id].title if q.unit_id in units else "",
-        kind=q.kind, prompt=q.prompt, choices=q.choices,
+        kind=q.kind, prompt=q.prompt, choices=q.choices, skill=q.skill, form=q.form,
     )
+
+
+def _check_out(q: QuestionRow, c: CheckRow) -> CheckOut:
+    return CheckOut(
+        question_id=q.id, response=c.response, correct=c.correct, correct_index=q.correct_index or 0,
+        correct_answer=q.model_answer, explanation=q.explanation,
+    )
+
+
+def skill_breakdown(questions: list[QuestionRow], answers: dict[UUID, AnswerRow]) -> list[SkillOut]:
+    """How each skill went in a handed-in sitting, recall first. Questions
+    without a skill (before 093) and answers that couldn't be graded are
+    left out."""
+    counts: dict[str, list[int]] = {}
+    for q in questions:
+        a = answers.get(q.id)
+        if q.skill is None or a is None or a.correct is None:
+            continue
+        c = counts.setdefault(q.skill, [0, 0])
+        c[0] += 1 if a.correct else 0
+        c[1] += 1
+    return [SkillOut(skill=s, correct=counts[s][0], total=counts[s][1]) for s in SKILLS if s in counts]
 
 
 # ------------------------------------------------------------------ router
@@ -1367,6 +1677,26 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None,
     @router.get("/exam-quizzes/{quiz_id}", response_model=QuizOut)
     async def get_quiz(quiz_id: UUID) -> QuizOut:
         return await service.quiz_out(quiz_id)
+
+    @router.post("/exam-quizzes/{quiz_id}/check", response_model=CheckOut)
+    async def check(quiz_id: UUID, body: CheckIn) -> CheckOut:
+        """A unit-quiz tap, checked at once (the first one per question stands)."""
+        return await service.check(quiz_id, body)
+
+    @router.post("/exam-units/{unit_id}/warmup", response_model=WarmUpOut)
+    async def warmup(unit_id: UUID) -> WarmUpOut:
+        """Warm the student up on a chapter before its quiz."""
+        return await service.warmup(unit_id)
+
+    @router.post("/exams/{exam_id}/warmup", response_model=list[WarmUpOut])
+    async def warmups(exam_id: UUID) -> list[WarmUpOut]:
+        """Warm up on every chapter before a mock test (its clock starts after)."""
+        return await service.warmups(exam_id)
+
+    @router.post("/exam-questions/{question_id}/scene", response_model=SceneOut)
+    async def scene(question_id: UUID) -> SceneOut:
+        """The question set up on the stage, ending with the slime asking it."""
+        return await service.scene(question_id)
 
     @router.post("/exam-quizzes/{quiz_id}/submit", response_model=QuizOut)
     async def submit(quiz_id: UUID, body: SubmitIn) -> QuizOut:

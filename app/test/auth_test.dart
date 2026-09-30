@@ -93,6 +93,7 @@ void main() {
 
     // straight to the questions; Next won't move without an answer
     expect(find.text('Tell Versa about you'), findsOneWidget);
+    expect(find.byKey(const ValueKey('profile-skip')), findsOneWidget); // a tester may skip them
     await _enter(tester, 'profile-name', 'Sooraj');
     await _enter(tester, 'profile-age', '4');
     await _tap(tester, 'profile-next');
@@ -122,6 +123,31 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await _boot(tester, backend: backend, prefs: {'session_token': token});
     expect(find.text('Hello, Asha'), findsOneWidget);
+  });
+
+  testWidgets('a judge signs in with any name and the shared code, and can skip the questions', (tester) async {
+    _size(tester, 1400, 1800);
+    final backend = FakeBackend(auth: true);
+    await _boot(tester, backend: backend);
+
+    await _tap(tester, 'judge-toggle');
+    await _enter(tester, 'judge-name', 'Anna Judge');
+    await _enter(tester, 'judge-code', 'wrong');
+    await _tap(tester, 'judge-submit');
+    expect(find.text('Wrong judge code.'), findsOneWidget);
+    expect(find.text('Tell Versa about you'), findsNothing);
+
+    await _enter(tester, 'judge-code', 'judge-code');
+    await _tap(tester, 'judge-submit');
+    expect(find.text('Tell Versa about you'), findsOneWidget);
+    await _tap(tester, 'profile-skip');
+    expect(find.text('Tell Versa about you'), findsNothing); // straight into the app
+    expect(find.text('Hello, Anna Judge'), findsOneWidget);
+    expect(backend.profiles, isEmpty); // nothing was saved for them
+
+    // the skip is remembered for this account on this device
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('profile_skipped_learner-judge-anna judge'), isTrue);
   });
 
   testWidgets('under 18 needs a guardian; an age that does not fit asks "are you sure?"', (tester) async {
@@ -167,6 +193,7 @@ void main() {
     await _tap(tester, 'invite-continue');
 
     expect(find.text('Tell Versa about you'), findsOneWidget);
+    expect(find.byKey(const ValueKey('profile-skip')), findsNothing); // only testers and judges may skip
     await _fillSchoolProfile(tester);
     await _tap(tester, 'profile-save');
     // Adithya's plans screen comes after the questions

@@ -83,7 +83,7 @@ def _row_to_halfvec_list(mapped: dict, *columns: str) -> None:
 # embeddings of any two questions share a large common component (a chatty
 # "hey, can you show me..." reads alike whatever the subject), so raw cosine
 # can't tell subjects apart: in the staged run of 2026-09-29
-# (docs/verification-runs/adaptation_check_20260929.md) openers on six
+# (docs/verification-runs/machine-tested/adaptation_check_20260929.md) openers on six
 # different subjects scored 0.52-0.71 raw while consecutive turns of one chat
 # scored 0.58-1.00. Centred, different-subject openers fell to median 0.15
 # (max 0.37) and consecutive turns in a chat to median 0.46 (p10 0.28).
@@ -93,8 +93,11 @@ def _row_to_halfvec_list(mapped: dict, *columns: str) -> None:
 # something new a follow-up would shape its first answer, which must always
 # be a normal one, so this errs toward "new".
 CENTRED_FOLLOW_UP_THRESHOLD = 0.40
-# Too few questions on record to know what "average" looks like: then nothing
-# is judged a follow-up (every answer stays normal).
+# The centre is the average of THIS LEARNER'S OWN questions (2026-10-01: no
+# learner's data feeds another's -- it used to be every learner's). Too few of
+# their questions on record to know what "average" looks like: then nothing is
+# judged a follow-up (every answer stays normal) and every question is one
+# topic (so no thinking-style pattern can pass its "different topics" gate).
 CENTRE_MIN_QUESTIONS = 30
 CENTRE_WINDOW = 1000
 CENTRE_TTL_SECONDS = 600
@@ -144,8 +147,8 @@ STRUCTURAL_SESSION_END_VERSION = "structural-session-end"
 class InteractionStore:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
-        # (when fetched, the centre or None) -- see question_centre
-        self._centre_cache: tuple[float, list[float] | None] | None = None
+        # learner -> (when fetched, their centre or None) -- see question_centre
+        self._centre_cache: dict[UUID, tuple[float, list[float] | None]] = {}
 
     async def create(self, interaction: Interaction) -> Interaction:
         async with self._pool.acquire() as conn:
@@ -243,28 +246,32 @@ class InteractionStore:
             )
         return [self._row_to_interaction(row) for row in rows]
 
-    async def question_centre(self) -> list[float] | None:
-        """The average of the most recent learners' own questions (any
-        learner), or None while there are fewer than CENTRE_MIN_QUESTIONS.
-        One small query, cached per process for CENTRE_TTL_SECONDS -- the
-        average moves slowly."""
+    async def question_centre(self, learner_id: UUID) -> list[float] | None:
+        """The average of this learner's own most recent questions, or None
+        while they have asked fewer than CENTRE_MIN_QUESTIONS. Only their
+        own: no other learner's questions are read. One small query, cached
+        per process for CENTRE_TTL_SECONDS -- the average moves slowly."""
         now = time.monotonic()
-        cached = self._centre_cache
+        cached = self._centre_cache.get(learner_id)
         if cached is not None and now - cached[0] < CENTRE_TTL_SECONDS:
             return cached[1]
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT count(*) AS n, AVG(question_embedding) AS centre FROM ("
-                "  SELECT question_embedding FROM interactions WHERE question_author = 'learner' "
-                "  ORDER BY created_at DESC LIMIT $1) q",
-                CENTRE_WINDOW,
+                "  SELECT question_embedding FROM interactions "
+                "  WHERE learner_id = $1 AND question_author = 'learner' "
+                "  ORDER BY created_at DESC LIMIT $2) q",
+                learner_id, CENTRE_WINDOW,
             )
         centre = None
         if row is not None and row["n"] >= CENTRE_MIN_QUESTIONS and row["centre"] is not None:
             value = row["centre"]
             centre = value.to_list() if hasattr(value, "to_list") else list(value)
-        self._centre_cache = (now, centre)
+        self._centre_cache[learner_id] = (now, centre)
         return centre
+
+    async def session_learner(self, session_id: UUID) -> UUID | None:
+        return await self._pool.fetchval("SELECT learner_id FROM sessions WHERE id = $1", session_id)
 
     async def has_any_in_session(self, session_id: UUID) -> bool:
         async with self._pool.acquire() as conn:
@@ -466,34 +473,6 @@ class InteractionAbstractStore:
         _row_to_halfvec_list(mapped, "abstract_embedding")
         assert_row_consumed(InteractionAbstract, mapped)
         return InteractionAbstract(**mapped)
-
-    async def list_all_latest(self, limit: int = 50_000) -> list[InteractionAbstract]:
-        """The latest version of every distinct interaction_id's
-        abstract -- feeds population_patterns.aggregate_population_
-        patterns. A single full pass, not paginated: fine at this
-        pipeline's current scale, but a production version processing
-        millions of abstracts would need a cursor here rather than one
-        bulk fetch. `limit` is a hard ceiling so a runaway table can't
-        make one aggregation run try to load everything into memory."""
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT DISTINCT ON (interaction_id) *
-                FROM interaction_abstracts
-                ORDER BY interaction_id, seq DESC
-                LIMIT $1
-                """,
-                limit,
-            )
-        results = []
-        for row in rows:
-            mapped = dict(row)
-            mapped.pop("seq", None)
-            _row_to_halfvec_list(mapped, "abstract_embedding")
-            assert_row_consumed(InteractionAbstract, mapped)
-            results.append(InteractionAbstract(**mapped))
-        return results
-
 
 class TurnOutcomeStore:
     """Append-only: re-running the classifier writes a new row under a
@@ -836,7 +815,7 @@ class InteractionRecorder:
             recent = recent[1:]
         if not recent:
             return False
-        centre = await self._interactions.question_centre()
+        centre = await self._centre(session_id)
         if centre is None:
             return False
         embedding = await self._embeddings.embed(question, task_type=TASK_QUERY)
@@ -849,9 +828,14 @@ class InteractionRecorder:
         """`is_follow_up`, but None when it can't be told yet (no reliable
         centre): for a miss, "unknown" is kept as unknown rather than read as
         a new subject."""
-        if await self._interactions.question_centre() is None:
+        if await self._centre(session_id) is None:
             return None
         return await self.is_follow_up(session_id, turn_number, question)
+
+    async def _centre(self, session_id: UUID) -> list[float] | None:
+        """The centre of the session's learner's own questions."""
+        learner_id = await self._interactions.session_learner(session_id)
+        return None if learner_id is None else await self._interactions.question_centre(learner_id)
 
     async def record(
         self,

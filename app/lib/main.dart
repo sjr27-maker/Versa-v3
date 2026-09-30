@@ -110,12 +110,7 @@ class _Root extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     context.watch<SparksState>(); // a paid plan skips the plans screen
-    if (!app.loaded) {
-      return Scaffold(
-        backgroundColor: Paper.page,
-        body: Center(child: CircularProgressIndicator(color: Paper.accent)),
-      );
-    }
+    if (!app.loaded) return const LoadingScreen();
     final learner = app.learner;
     if (learner == null) return const SignInScreen();
     // Sign-in -> the sign-up questions (once) -> the plans (once) -> the app.
@@ -128,6 +123,39 @@ class _Root extends StatelessWidget {
       key: ValueKey(learner.id),
       create: (_) => ShellState(app: app, chatFactory: chatFactory),
       child: const SparksPaywallListener(child: Shell()),
+    );
+  }
+}
+
+/// What shows while the app starts: the logo on its navy (the same as the
+/// Android launch screen before it, so the hand-over is seamless) and the motto.
+class LoadingScreen extends StatelessWidget {
+  const LoadingScreen({super.key});
+
+  static const navy = Color(0xFF1C1A33);
+  static const cream = Color(0xFFF5EFE3);
+  static const motto = 'Learn, how you think.';
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: const ValueKey('loading-screen'),
+      backgroundColor: navy,
+      body: Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Image.asset('assets/brand/versa-logo.png', width: 160, height: 160),
+          const SizedBox(height: 8),
+          Text('Versa', style: serif(34, color: cream)),
+          const SizedBox(height: 6),
+          Text(motto, style: sans(15, color: cream.withValues(alpha: 0.75))),
+          const SizedBox(height: 28),
+          const SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.4, color: Color(0xFFFF6F5E)),
+          ),
+        ]),
+      ),
     );
   }
 }
