@@ -16,7 +16,7 @@ When a student's message is genuinely ambiguous, Versa generates a few distinct 
 
 Every resolution is written down in plain English as a searchable memory: what was unclear, and what was chosen. Before answering anything new, Versa searches that memory first — if it has seen this kind of ambiguity from this student before, it already knows the answer and skips the question.
 
-Across many sessions, it looks for a repeating *order* in how a student reaches understanding — concrete before abstract, or the reverse — and only names that as a real trait once it has been confirmed independently, many times, never from a single guess.
+After every answer it offers three directions the idea could go, and reads the student's picks — where they start, what they take next, what they pass over, how fast they recognise a direction, what they ask for when none of the cards fit — as their thinking style. A pattern is only called theirs once it holds across topics and over time and predicts their later picks better than chance. It is built **only from that student's own chats and sessions**: nothing another learner does contributes to what Versa concludes about them.
 
 Underneath the live tutoring loop, Versa also records a rich, append-only audit trail of everything it observed and every belief it formed. The audit trail is the point of the project: nothing is trusted just because it sounds right, and every claim about a learner traces back to stored, readable evidence.
 
@@ -36,34 +36,22 @@ What runs today is the lean core that survived that measurement:
 
 ## Architecture
 
-The live tutoring turn:
+A turn, as it runs today:
 
-```mermaid
-flowchart TD
-    A[Student message] --> M[EmbedAndSearchFacts + ConfirmFactMatch]
-    M -->|known ambiguity, branching skipped| E[FinalAnswer]
-    M -->|not resolved by memory| B[AssessAndBranch]
-    B -->|unambiguous| E
-    B -->|ambiguous| C[GenerateOptions]
-    C --> D{Student clicks<br/>or types}
-    D -->|click| E
-    D -->|types past options| B
-    E --> F[Response shown to student]
-    F --> G[WriteLearnerFact]
-    G --> H[(learner_facts<br/>pgvector)]
-    H -.->|semantic pre-check,<br/>every turn| M
-    F --> I[Session end]
-    I --> J[Consolidate: label the<br/>session's order-of-moves]
-    J --> K[(thinking_style_candidates)]
-    K -.->|after many confirmed independent sessions:<br/>shapes which options are offered| B
-```
+1. **Memory first.** The student's message is checked against what they resolved before (`learner_facts`); a past answer to the same ambiguity skips the question.
+2. **Ambiguity check.** If the message could mean different things, Versa offers 2–4 readings as options (free — no Sparks); otherwise it answers straight away.
+3. **The answer**, streamed as it is written. On a follow-up, it is shaped to the way this student usually goes into an idea (from their own picks); the first answer to anything new is always a normal one.
+4. **"Where this could go."** Three cards, dealt at random from a library of 16 card types in four families (make it real, go deeper, make it simpler, go wider). The cards are never shaped by what Versa believes about the student (invariant 14) — they are the measuring instrument. Before they are sent, Versa records its guess of which one the student will take (invariant 20); after the pick it shows whether it was right.
+5. **Reading the style.** Picks, passes, "other directions", slider moves and misses (the question they typed when no card fit) become the student's thinking-style patterns, derived fresh on every read (`style_patterns.py`) from their own data only, and the confirmed ones feed the ambiguity check, the options and Learn a topic.
 
-A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`). At most three LLM calls fully resolve one exchange — an ambiguity assessment, one clickable option per interpretation, and a final answer once the student has resolved which reading they meant. A plain-LLM `BASELINE` mode also exists as the measurement control.
+A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`). A plain-LLM `BASELINE` mode also exists as the measurement control.
 
 ### The layers, and what each is for
 
 - **Disambiguation flow** (`disambiguate.py`) — the live reasoning mode: assess ambiguity, offer 2–4 distinct readings as options, answer once one is chosen. Every assessment is persisted whether or not it decides to branch.
-- **Memory layer** (`memory.py`) — `learner_facts` (within-session recall that can skip branching entirely when a past fact resolves the current message) and `thinking_style_candidates` (a cross-session order-of-reasoning pattern; once confirmed by enough independent sessions it is fed to `AssessAndBranch` and `DisambiguationOptions` — it shapes which options are offered, not the answer text itself). Session-end consolidation runs from the app too (`POST /api/sessions/{id}/end`, plus a sweep of older unconsolidated chats when a new one starts).
+- **Memory layer** (`memory.py`) — `learner_facts`: recall of how this student resolved past ambiguity, which can skip branching entirely when a past fact resolves the current message. (The old free-text thinking-style detector and its `thinking_style_candidates` were retired on 2026-09-30; their rows stay on record.)
+- **Where this could go** (`directions.py`, `choice.py`) — the three cards after every answer, dealt at random from the card library; every pick is read against the hand it was taken from, so a card shown more often isn't mistaken for a preference. A pass (the student typing their own question instead) is kept as a miss, read against the library by embedding, and the next hand is widened at random.
+- **Thinking style** (`style_patterns.py`, `observations.py`, `pick_prediction.py`) — the patterns: way in, what comes next, lean, range, conditional (e.g. stuck vs going fine), the shape of a chat, what they pass over, speed, and what they ask for when the cards miss. Each must pass every gate (evidence, sessions, topics, both halves of their history, and predicting later picks better than chance) before it is called confirmed. **Only the learner's own data** (2026-10-01): baselines are chance, never other learners. The guess before each set starts even and learns only from their picks. Shown on the Thinking-style page and `versa observations`.
 - **Interaction / retrieval pipeline** (`interactions.py`, `retrieval.py`, `history_block.py`) — an append-only log of every exchange, with deterministic three-stage retrieval over a learner's own history only (never other learners'). Feeds the history block into the final-answer prompt; its LLM-based selection *predictions* are recorded but do not yet influence the student's response.
 - **Claim layer** (`claims.py`) — a durable, cross-session model of a learner's standing preferences, extracted **only** from episodes that were actually surprising (high prediction error), each claim carrying a falsifiable `test` and promoted only past an evidence/topic-spread gate.
 - **Parked: capability & instrument layers** (`archive/instrument_layer/`) — a separate capability-claim store plus purpose-built interactions (`locate`, `predict`) whose event streams were interpreted by hand-written deterministic contracts. Removed from the live architecture; nothing imports it and `pytest` never collects it. Restore steps are in that directory's README. Their migrations and tables remain in the schema, dormant.
@@ -72,8 +60,13 @@ A single reasoning mode is live: `minimal_branch` (`ReasoningMode.DISAMBIGUATE`)
 - **Exam preparation** (`exams.py`) — the third live app mode. An exam is a title, an optional date and syllabus units, built from a search, a PDF or link, or one of the learner's courses. The student takes a 5-question quiz per unit (retakes ask new questions) and timed mock tests across every unit; multiple choice is marked exactly and short answers by one grading call. Scores are derived from stored answers, never stored themselves, and exam prep is walled off from the personal learner model (invariant 13).
 - **Sparks** (`sparks.py`) — learning credits: *pay for learning, never for confusion*. An answer costs 1 Spark, exploring a topic 2, building a course 5, creating an exam 3, a unit quiz 3, a mock test 8; a clarifying-options turn is always free. Passing a quiz (+2) or mock (+4), finishing a lesson (+3) and a 5-day study streak (+5) earn Sparks back. Balances refill every 12 hours up to a cap (Free: +10 up to 20; Plus: +50 up to 100; new learners start with 20). One append-only ledger (`spark_events`, invariant 16), balances derived, every write idempotent; `GET /api/learners/{id}/sparks` shows the balance, and an unaffordable action answers HTTP 402 / a `paywall` chat event. `VERSA_SPARKS=off` turns charging off. Plans come from billing (below).
 - **Billing** (`billing.py`) — connects RevenueCat. The RevenueCat customer id is the learner id. Plus comes from RevenueCat's `versa_plus` entitlement (cached briefly; a RevenueCat outage keeps the last known plan). A bought Spark Pack adds its Sparks once per store transaction. An Exam Pass becomes Plus-level access until the day after the exam it was bought for (or the nearest upcoming exam, else 30 days). Purchases arrive via `POST /api/learners/{id}/billing/sync` (the app, right after buying) or RevenueCat's webhook `POST /api/billing/revenuecat/webhook` (needs a public URL), applied once whichever comes first; `GET /api/learners/{id}/billing` shows the plan. Append-only (invariant 17). Configure with `REVENUECAT_SECRET_KEY`, `REVENUECAT_PROJECT_ID`, `REVENUECAT_WEBHOOK_AUTH`; without the key billing is off and everyone is Free.
-- **Accounts** (`accounts.py`) — sign-in with Google or email/password (Firebase; the server verifies the ID token and issues its own session token), invite-only sign-up (`versa invite create|list|revoke`, links at `/invite/CODE`), and name-only sign-in for the two testers (on a laptop; a deployed server also wants `VERSA_DEV_LOGIN_CODE`). A guard on every route checks the token and that every learner, session, exam, topic, claim… a request names belongs to the signed-in learner. Append-only (invariant 18).
+- **Accounts** (`accounts.py`) — sign-in with Google or email/password (Firebase; the server verifies the ID token and issues its own session token), invite-only sign-up (`versa invite create|list|revoke`, links at `/invite/CODE`), name-only sign-in for the two testers (on a laptop; a deployed server also wants `VERSA_DEV_LOGIN_CODE`), and a judge sign-in (any name plus `VERSA_JUDGE_CODE`, shown as "Judging Versa?" when the server has one). A guard on every route checks the token and that every learner, session, exam, topic, claim… a request names belongs to the signed-in learner. Append-only (invariant 18).
 - **Sign-up profile** (`profiles.py`) — asked once after the first sign-in: name, age, what they're doing (school / university / working / other), country and state, board and class or institution, course and year, subjects, goals, and consent (a guardian's too under 18). One model call reads it into a level and a likely starting point; age that doesn't fit what they said is ignored rather than trusted. It shapes the ambiguity check, the options, the answer, Learn-a-topic and exam syllabus search — never "where this could go".
+- **Pictures** (`images.py`) — a photo attached to a message is read once, on upload, by one model call; only that written reading goes further (invariant 21).
+- **Revision notes** (`notes.py`) — notes for a chat, made only when the student asks, with a PDF to download or share.
+- **Study with others** (`rooms/`) — group study chats with Versa as a member; a record of how a group learned, walled off from each person's own learner model (invariant 12).
+- **The stage** (`stage.py`, `app/lib/stage/`) — a short scene acted out by the app's slime character while the answer is written, with a quick check (invariant 15).
+- **Home feed** (`feed.py`) — what to pick up again and what to explore next.
 - **Learn a topic** (`topics.py`, `resources.py`) — the second live app mode. A keyword search, an uploaded PDF or a web link becomes a tree of branches the student can expand and tick; ticked branches become a course of chapters and lessons, each lesson a list of tasks ending in end-of-lesson questions. A lesson chat is an ordinary session run through the same loop, with the lesson's context added to the ambiguity check and the answer, and a background `JudgeLessonProgress` step that marks tasks done (progress is derived from those append-only events, never stored). What the system knows about the learner (thinking style, confirmed claims, stated preference, related past chats, sliders, other courses) shapes the branches, the lesson plans and the tutoring; what the student searches, expands, picks or skips, and how lessons go, is logged to `topic_signals` as episodic evidence. A plain course outline, not a learner model (invariant 4).
 
 Every entry point builds the loop through the single assembly point `session_builder.build_session_loop`, so no two entry points can silently diverge in which stores they wire in. `versa chat` and `versa serve` (the API the app talks to) both build their loop through it.
@@ -86,9 +79,9 @@ Every entry point builds the loop through the single assembly point `session_bui
 
 **Server:** FastAPI + uvicorn (`src/versa/server.py`), started with `versa serve`: REST for sign-in/sessions and one WebSocket per chat that streams the answer as it is written.
 
-**App:** Flutter (Dart), one codebase for web, Windows, Android and iOS, in `app/`. Today: a working Sandbox chat plus labelled placeholders for everything else.
+**App:** Flutter (Dart), one codebase for web, Windows, Android and iOS, in `app/`. Live: Sandbox chat, Learn a topic, Exam prep, Study with others, the Thinking-style page and Plans (RevenueCat). Shipped as an Android APK and as the web app the server hosts.
 
-**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 84 ordered SQL migrations in `src/versa/migrations/`, applied via `versa migrate` and tracked in a `schema_migrations` ledger.
+**Database:** PostgreSQL 16 with the [`pgvector`](https://github.com/pgvector/pgvector) extension (Docker locally, Cloud SQL in production). Schema is managed by 93 ordered SQL migrations (plus one for rooms) in `src/versa/migrations/`, applied via `versa migrate` and tracked in a `schema_migrations` ledger.
 
 **LLM / embeddings:** Google Gen AI SDK (`google-genai`), Gemini API. Every LLM-calling command accepts `--stub` to run against an in-memory stub client that needs no key and costs nothing.
 
@@ -185,7 +178,7 @@ uv run versa serve                           # API + the built app at http://loc
 
 Flutter is not on your PATH by default here: use `C:\src\flutter\bin\flutter`. Other targets: `flutter run -d windows`, or `flutter run -d edge --dart-define=VERSA_API=http://localhost:8000` for hot reload against a running `versa serve`.
 
-The server has **no authentication** and binds to 127.0.0.1: local development only.
+Sign-in is on by default. On a laptop the two testers can sign in by name (`sooraj`, `adithya`); `VERSA_AUTH=off` gives an open server, allowed only on 127.0.0.1.
 
 ---
 
@@ -196,15 +189,18 @@ Every command is available as `uv run versa <command>`. Commands that call an LL
 | Command | What it does |
 |---|---|
 | `versa serve [--port 8000] [--stub]` | Run the API the app talks to, and serve the built web app (`app/build/web`) at `/`. |
+| `versa invite create\|list\|revoke` | Invite codes for new accounts (Versa is invite-only); `create` prints each code with its `/invite/CODE` link. |
 | `versa chat --learner <label\|uuid>` | Start an interactive disambiguation-mode session. A label resumes a matching learner or creates one; a UUID must already exist. Accepts `--stub`. |
 | `versa migrate` | Apply pending SQL migrations in order, once each (idempotent). |
 | `versa migrate --status` | Show applied/pending migrations without changing anything. |
 | `versa migrate --baseline` | Stamp every migration as already-applied without running it — for a DB that already has the full schema but no ledger. |
-| `versa consolidate-session <session-id>` | Run the cross-session thinking-style detection step for one completed session on demand. Accepts `--stub`. |
+| `versa consolidate-session <session-id>` | Run session-end consolidation for one completed session on demand. Accepts `--stub`. |
 | `versa seed-demo-fixture` | (Re)apply two hand-authored, opposite-portrait demo learners plus a fixed question set. Idempotent; no LLM/embedding call. |
 | `versa compare-portraits [--question]` | Three-column wrong-portrait control: the same question run against the concrete portrait, the abstract portrait, and a zero-claims control, side by side. Accepts `--stub` (under a stub all three columns are identical by construction). |
 | `versa review-claims --learner <label\|uuid>` | Read-only listing of one learner's claims: statement, test, status, confidence, evidence count, topic spread, and the interactions behind each evidence row. |
-| `versa score-predictions [--exclude-contaminated]` | Read-only reliability-diagram check: observed-vs-predicted hit rate per confidence bucket plus an overall Brier score, pooled across all learners. |
+| `versa observations --learner <label\|uuid>` | Read-only: one learner's observation ledger by lens, what counts for less, the pick guesser's record and their way in. |
+| `versa discovered-moves --learner <label\|uuid>` | Read-only: the moves one learner asked for that no card type covers, grouped among their own readings. |
+| `versa score-predictions [--exclude-contaminated]` | Read-only operator report on the claim-confidence formula: observed-vs-predicted hit rate per confidence bucket plus an overall Brier score, pooled across all learners. Nothing it computes feeds back into any learner's model. |
 
 ---
 
@@ -251,6 +247,7 @@ This codebase is a research artifact whose whole premise is auditing how beliefs
 
 - **Every reasoning store is append-only.** No store deletes rows or overwrites evidence — the hypothesis, world-model-revision, branch, option, disambiguation, memory, evidence, turn-diagnostics, and tier-change stores all model "retirement" as a status change (archived, superseded, rejected, retired), never a delete. An AST-based check enforces the no-`delete`/no-`DELETE` rule.
 - **Every node call is persisted.** Every invocation of a node's primary method is recorded to `node_calls` with its inputs, outputs, and timestamp, by routing all node calls through `SessionLoop._call_node`. If a node ran and its inputs+outputs aren't on disk, the audit trail is broken.
+- **Only a learner's own data shapes what Versa concludes about them** (decided 2026-10-01). No pattern, guess, retrieved history or prompt draws on another learner's chats; the one pooled report (`score-predictions`) is for operators and feeds nothing back.
 - **The concept graph is retired.** It was removed on measured evidence (it lost to a plain-LLM baseline at 20–40× the cost); nothing in the current architecture reads one, and it should not be restored to satisfy a task that assumes it exists.
 
 See `CLAUDE.md` for the full, numbered set with the rationale behind each one.
@@ -271,6 +268,15 @@ src/versa/
   interactions.py        # append-only interaction log + recorder
   retrieval.py           # deterministic 3-stage retrieval (no LLM)
   claims.py              # durable preference-claim layer
+  directions.py          # "where this could go": card library, hands, misses
+  choice.py              # reading a pick against the hand it came from
+  style_patterns.py      # the thinking style (own data only, against chance)
+  observations.py        # the observation ledger + session readings
+  pick_prediction.py     # the guess before each set, and the answer's way in
+  accounts.py, profiles.py  # sign-in, invites, judge/tester sign-in; sign-up profile
+  images.py, notes.py    # attached pictures; revision notes
+  stage.py, feed.py      # the slime's stage; the Home feed
+  rooms/                 # Study with others
   domain_config.py       # education/general prompts-only switch
   model_config.py        # Gemini tier→model mapping
   llm.py, embeddings.py  # Gemini + stub clients
@@ -279,14 +285,14 @@ src/versa/
   sparks.py              # Sparks: learning credits -- costs, rewards, refills (append-only ledger)
   billing.py             # RevenueCat: plans, Spark packs, Exam Passes (sync + webhook)
   resources.py           # PDF / web-link reading (SSRF-guarded) for Learn a topic
-  migrations/*.sql        # 73 ordered schema migrations
+  migrations/*.sql        # 93 ordered schema migrations (+ rooms_001)
 tests/                    # pytest suite (stub-backed, no external calls)
 app/                      # the Flutter app (web, Windows, Android, iOS)
-scripts/                  # start.ps1 (one-command launcher), measure_turn.py, eval_assess_thinking.py, bench_retrieval.py
+scripts/                  # start.ps1 (one-command launcher), deploy_gcp.ps1, build_apk.ps1, measure_turn.py, eval_assess_thinking.py, bench_retrieval.py
 docs/verification-runs/   # saved output from past staged/grounding verification runs
 archive/instrument_layer/ # parked capability + instrument code (not imported; see its README)
 docker-compose.yml        # local Postgres 16 + pgvector (port from VERSA_DB_PORT, default 5434)
-Dockerfile                # container image (uv sync; no entrypoint yet)
+Dockerfile                # the server image: API + the web app (Cloud Run), and the Flutter SDK stage the APK build reuses
 docs/IDEAS.md             # parked ideas, deferred work, known issues, decisions log
 ```
 
@@ -301,3 +307,5 @@ docs/IDEAS.md             # parked ideas, deferred work, known issues, decisions
 ## Deployment
 
 Deployed on Google Cloud Run, backed by Cloud SQL (Postgres + pgvector) and Secret Manager for credentials; the Android app talks to it. `scripts/deploy_gcp.ps1` does the whole thing (database, secrets, Cloud Build image with the web app, migrations as a job, the service) and `scripts/build_apk.ps1` builds the APK in Docker. Step by step, including Firebase setup, invites and showing the phone on a laptop screen: [docs/DEPLOY.md](docs/DEPLOY.md).
+
+Getting the app: the web app shows a "Get the Versa app" popup on every visit (not on iPhone/iPad), whose button goes to `/download/android` — a redirect to the current APK (`VERSA_ANDROID_URL`, a public Cloud Storage file). Publishing a new version is a version bump in `app/pubspec.yaml`, `scripts/build_apk.ps1`, and one upload over that file; no server redeploy. The Firebase API keys are restricted to the app's package + signing key and to the site's own domains.

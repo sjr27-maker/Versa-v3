@@ -43,5 +43,63 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <!--
+    "Get the Android app": shown on every visit, over the web app, offering
+    the APK (the server's /download/android redirects to wherever the current
+    one is hosted -- VERSA_ANDROID_URL). Not on iPhone/iPad (an APK can't
+    install there) and not when opened as an installed home-screen app.
+    "Continue in browser" just closes it for this visit.
+  -->
+  <style>
+    #get-app { position: fixed; inset: 0; z-index: 2147483647; display: none;
+      align-items: flex-end; justify-content: center; padding: 16px;
+      background: rgba(8, 6, 24, .55); backdrop-filter: blur(3px);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #get-app.show { display: flex; }
+    @media (min-width: 640px) { #get-app { align-items: center; } }
+    #get-app .card { width: 100%; max-width: 380px; box-sizing: border-box; padding: 24px 22px 18px;
+      border-radius: 22px; color: #EDEBFA; text-align: center;
+      background: radial-gradient(120% 90% at 20% 0%, #232a6e 0%, #0B0820 60%, #1a0b24 100%);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .45); animation: get-app-in .28s ease-out; }
+    @keyframes get-app-in { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+    #get-app img { width: 72px; height: 72px; border-radius: 18px; }
+    #get-app h2 { margin: 12px 0 6px; font-size: 20px; font-weight: 700; }
+    #get-app p { margin: 0 0 18px; font-size: 14px; line-height: 1.45; color: #B9B6D8; }
+    #get-app a.install { display: block; padding: 13px; border-radius: 14px; text-decoration: none;
+      font-weight: 700; font-size: 15px; color: #1b0f08;
+      background: linear-gradient(90deg, #9fd8ff 0%, #b98cff 50%, #ff9a4d 100%); }
+    #get-app button { margin-top: 8px; width: 100%; padding: 11px; border: 0; border-radius: 14px;
+      background: transparent; color: #B9B6D8; font-size: 14px; cursor: pointer; }
+    #get-app .hint { margin-top: 10px; font-size: 12px; color: #8C89AE; }
+  </style>
+  <div id="get-app" role="dialog" aria-modal="true" aria-labelledby="get-app-title">
+    <div class="card">
+      <img src="icons/Icon-192.png" alt="">
+      <h2 id="get-app-title">Get the Versa app</h2>
+      <p id="get-app-text">Versa is made for your phone. Install the Android app for the full experience.</p>
+      <a class="install" href="download/android">Install for Android</a>
+      <button type="button" id="get-app-close">Continue in browser</button>
+      <div class="hint" id="get-app-hint">After downloading, open the file and allow installing from your browser.</div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var ua = navigator.userAgent || "";
+      var ios = /iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+      var installed = window.matchMedia && window.matchMedia("(display-mode: standalone)").matches;
+      if (ios || installed) return;
+      var box = document.getElementById("get-app");
+      if (!/Android/i.test(ua)) {
+        document.getElementById("get-app-text").textContent =
+          "Versa is made for your phone. Download the Android app, or keep going here.";
+        document.getElementById("get-app-hint").textContent =
+          "On a computer? Open this page on your Android phone to install it there.";
+      }
+      document.getElementById("get-app-close").onclick = function () { box.classList.remove("show"); };
+      box.addEventListener("click", function (e) { if (e.target === box) box.classList.remove("show"); });
+      box.classList.add("show");
+    })();
+  </script>
 </body>
 </html>

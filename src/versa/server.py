@@ -152,7 +152,7 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import HTTPConnection
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -1834,6 +1834,15 @@ def create_app(
         """What an invite link opens: the code, and where to get the app."""
         problem = accounts.invite_problem(await accounts.get_invite(code), datetime.now(UTC))
         return HTMLResponse(render_invite_page(code, problem, android_download_url))
+
+    @app.get("/download/android", include_in_schema=False)
+    async def download_android() -> RedirectResponse:
+        """Where the web app's "Install the Android app" popup points: the
+        current APK (VERSA_ANDROID_URL), so the web build never hard-codes
+        where it is hosted. 404 while no APK is published."""
+        if not android_download_url:
+            raise HTTPException(status_code=404, detail="the Android app isn't published yet")
+        return RedirectResponse(android_download_url, status_code=302)
 
     # The built Flutter web app, if there is one, at "/" -- registered last so
     # it can never shadow /api. One command, one URL.
