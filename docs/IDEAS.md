@@ -375,6 +375,12 @@ per-session pending-options state in the loop. See the decisions log.
 
 ## 5. Known issues & cleanup
 
+- **The rooms export's app half doesn't build on its own** (found 2026-10-01):
+  `scripts/export_rooms.py` copies `app/lib/room/`, whose chat, screen and
+  create-room page import `picture.dart`, but neither that file nor an
+  `/api/images` route is part of the export (true since pictures were added
+  to room messages; creating a room from a photo now leans on it too). The
+  server half exports cleanly, both rooms migrations included. Not fixed.
 - `versa --help` prints a garbled dict for `aggregate-patterns` (a `%` in its
   help string). One-character fix.
 - `archive/instrument_layer/README.md` says removed work is in a git stash;
@@ -449,6 +455,52 @@ per-session pending-options state in the loop. See the decisions log.
 ---
 
 ## 6. Decisions log
+
+- **2026-10-01** — A photo as the source, and the branch map on a phone.
+  - *A course, an exam or a study room can be built from a photo* (a page,
+    a syllabus, notes), next to a search, a PDF and a link -- PDFs were
+    already there in all three. The photo is read once on upload, in full
+    (`purpose=resource`, up to ~1200 words instead of a message picture's
+    ~250), and that reading is the material: kept as the resource's text for
+    a course or an exam (kind `image`, migrations 095 / rooms_002), sent as
+    text to a room. One picture per source; a multi-page document is still a
+    PDF. Costs what a PDF costs, plus the one reading call.
+  - *The branch map on a phone:* the tidy tree was several screens wide.
+    Under 700 px it now grows down one column -- each branch a full-width
+    card, its own branches under it and stepped in, a vine down the left --
+    so nothing is off to the side. The wide layout is unchanged.
+
+- **2026-10-01** — Seven fixes from the phone (your screenshots).
+  - *Names on the stage printed over each other:* every painted word now
+    says where it will be, and steps down or up by its own height until it
+    is clear of the words before it, the speech bubble and the formulas
+    (`stage/painter.dart`). The bubble's and formulas' sizes are estimates.
+  - *Cards cut off:* on a phone the "where this could go" cards stay one
+    under another and the whole hand slides sideways (no card is hidden
+    off-screen, so what is on offer is unchanged).
+  - *Hiding the stage no longer turns Animations off* -- only the switch
+    does. A hidden stage is kept out of sight with its clock stopped; the
+    answer's performance is still asked for and plays when the stage is
+    shown again. (So a hidden stage still costs its one model call per
+    answer.) New button on the stage: just the animation; the old one is
+    "just the chat".
+  - *A new chat's length slider starts at 40*, not 50 (migration 094;
+    existing chats keep their level). An untouched chat's prompt therefore
+    now carries the length line (~110 words). The keyboard goes down on send
+    on a phone, and its Enter sends.
+  - *Raw LaTeX in an answer:* maths the typesetter can't read is shown in
+    ordinary symbols (`texToPlain`), and MATH_STYLE tells the model not to
+    draw pictures or circuit symbols with LaTeX.
+  - *Settings:* the design lab and the old "coming later" list are gone
+    from Settings (the lab screen's code stays, unreachable).
+  - *Home's Continue cards* say what a chat is about -- a title and one
+    sentence from one fast model call after the chat's first answer
+    (`chat_titles.py`, recorded in `node_calls`, read back from there;
+    Sandbox chats only; again once the chat has grown by 6 turns) -- and
+    their picture is the chat's latest stage performance, played small and
+    silent. This reverses `ChatSummary`'s old "never re-summarized" rule for
+    the title only; `preview` is still the opening message. A chat from
+    before this, or with no stage, shows its opening words on a plain tile.
 
 - **2026-10-01** — The thinking style reframed, honestly. Your words:
   "he learns topics, uses multiple modes; what we find, how he approached,

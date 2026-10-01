@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 READING_LIMIT = 2500
+# A picture a course is built from is transcribed in full (read_resource_prompt).
+RESOURCE_READING_LIMIT = 12000
 
 # Sniffed from the bytes, never taken from the client's word for it.
 _SIGNATURES: tuple[tuple[bytes, str], ...] = (
@@ -86,6 +88,31 @@ def read_prompt(filename: str | None = None) -> str:
     )
 
 
+def read_resource_prompt(filename: str | None = None) -> str:
+    """The reading asked for when the picture is what a course, an exam or a
+    room is to be BUILT from (a page of a textbook, a syllabus, a sheet of
+    notes) rather than a question about it: all of it, in full, with its
+    structure kept -- the outline is made from this text."""
+    return (
+        "IMAGE:READ\n"
+        "A student photographed this to learn from it: a page of a book or of notes, a "
+        "syllabus, a list of topics, a worksheet or a diagram. A course will be built from "
+        "what you write, by someone who cannot see the picture. Write down everything in it:\n"
+        "- Transcribe ALL text, word for word, in reading order. Keep its structure: put each "
+        "heading, unit or chapter title on its own line, and keep lists, numbering and "
+        "sub-points under the heading they belong to.\n"
+        "- Write every formula, equation and symbol as LaTeX: inline $...$, on its own line "
+        "$$...$$.\n"
+        "- A diagram, graph, table or figure: what it is, its labels, axes, values and what "
+        "it shows, in plain sentences.\n"
+        "- Handwriting: transcribe it the same way; write a word you cannot make out as "
+        "[unclear], never a guess.\n"
+        "Begin with one line naming what this is (\"Syllabus: Class 10 Physics, Electricity\"). "
+        "Only what is there -- no summary, no teaching, no advice. Up to about 1200 words.\n"
+        + (f"(Its file name: {filename[:80]!r}.)\n" if filename else "")
+    )
+
+
 def with_image(text: str, reading: str) -> str:
     """The message a turn is given for words + a picture: the words, then what
     the picture shows. A picture sent alone asks about the picture."""
@@ -101,10 +128,13 @@ class ReadImage:
     def __init__(self, llm) -> None:
         self._llm = llm
 
-    async def run(self, data: bytes, mime_type: str, filename: str | None = None) -> tuple[str, str]:
-        prompt = read_prompt(filename)
+    async def run(
+        self, data: bytes, mime_type: str, filename: str | None = None, purpose: str = "message",
+    ) -> tuple[str, str]:
+        resource = purpose == "resource"
+        prompt = read_resource_prompt(filename) if resource else read_prompt(filename)
         raw = await self._llm.complete_with_image(prompt, data, mime_type)
-        return prompt, (raw or "").strip()[:READING_LIMIT]
+        return prompt, (raw or "").strip()[: RESOURCE_READING_LIMIT if resource else READING_LIMIT]
 
 
 class StoredImage(BaseModel):
@@ -114,6 +144,7 @@ class StoredImage(BaseModel):
     byte_count: int
     reading: str | None
     error: str | None
+    filename: str | None = None
 
 
 class ImageStore:
@@ -138,7 +169,7 @@ class ImageStore:
 
     async def get(self, image_id: UUID) -> StoredImage | None:
         row = await self._pool.fetchrow(
-            "SELECT id, learner_id, mime_type, byte_count, reading, error FROM images WHERE id = $1",
+            "SELECT id, learner_id, mime_type, byte_count, reading, error, filename FROM images WHERE id = $1",
             image_id,
         )
         return StoredImage(**dict(row)) if row else None
@@ -160,10 +191,16 @@ def build_images_router(pool: asyncpg.Pool, llm) -> APIRouter:
     reader = ReadImage(llm)
 
     @router.post("/images", response_model=ImageOut)
-    async def upload(learner_id: UUID = Form(...), file: UploadFile = File(...)) -> ImageOut:
+    async def upload(
+        learner_id: UUID = Form(...), file: UploadFile = File(...), purpose: str = Form("message"),
+    ) -> ImageOut:
         """A picture for a message: kept, read once, and the reading returned
         (the app shows it nowhere; it sends `id` with the message, or -- in a
-        room or an exam answer -- the reading itself)."""
+        room or an exam answer -- the reading itself). `purpose=resource`: the
+        picture is what a course, an exam or a room will be built from, so it
+        is transcribed in full (read_resource_prompt)."""
+        if purpose not in ("message", "resource"):
+            raise HTTPException(status_code=422, detail="purpose: message or resource")
         if await pool.fetchval("SELECT 1 FROM learners WHERE id = $1", learner_id) is None:
             raise HTTPException(status_code=404, detail="unknown learner")
         data = await file.read(MAX_IMAGE_BYTES + 1)
@@ -173,9 +210,9 @@ def build_images_router(pool: asyncpg.Pool, llm) -> APIRouter:
             mime = sniff_mime(data)
         except ImageError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from None
-        prompt = read_prompt(file.filename)
+        prompt = read_resource_prompt(file.filename) if purpose == "resource" else read_prompt(file.filename)
         try:
-            prompt, reading = await reader.run(data, mime, file.filename)
+            prompt, reading = await reader.run(data, mime, file.filename, purpose)
         except Exception as exc:  # noqa: BLE001 -- recorded, then reported
             logger.warning("reading an image failed", exc_info=True)
             await store.add(learner_id=learner_id, data=data, mime_type=mime, filename=file.filename,
@@ -199,3 +236,16 @@ def build_images_router(pool: asyncpg.Pool, llm) -> APIRouter:
 
     router.image_store = store  # type: ignore[attr-defined]  # exposed for server.py and tests
     return router
+
+
+async def picture_resource(pool: asyncpg.Pool, learner_id: UUID, image_id: UUID):
+    """The learner's own picture as something to build a course or an exam
+    from (resources.ExtractedResource, kind 'image'): its READING is the text,
+    exactly as it was written down on upload -- nothing sees the pixels
+    again. None when the picture isn't theirs or was never read."""
+    from versa import resources as _resources
+
+    picture = await ImageStore(pool).get(image_id)
+    if picture is None or picture.learner_id != learner_id or not picture.reading:
+        return None
+    return _resources.resource_from_reading(picture.reading, picture.filename)

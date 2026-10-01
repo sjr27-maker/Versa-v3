@@ -8,7 +8,7 @@ from pathlib import Path
 import versa.exams as exams_module
 from tests.test_rooms_append_only import _string_literals
 
-_MIGRATIONS = ("075_exams.sql", "076_exam_plans.sql", "093_exam_focus.sql")
+_MIGRATIONS = ("075_exams.sql", "076_exam_plans.sql", "093_exam_focus.sql", "095_image_resources.sql")
 
 
 def test_exams_module_never_deletes_or_updates():

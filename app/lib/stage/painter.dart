@@ -24,6 +24,33 @@ class Slime {
   static const sweat = Color(0xFF8CC7EA);
 }
 
+/// Where the slime's speech bubble goes: beside the head (the "?" owns the
+/// space right above it), on whichever side has more room. [side] is its
+/// distance from that side's edge of the stage, [bottom] from the bottom, in
+/// pixels. The view places the bubble with it (stage_view.dart); the painter
+/// keeps the names of things out from under it.
+({bool onRight, double side, double bottom, double maxWidth}) bubblePlace(StageEngine e, Size size) {
+  const maxW = 280.0;
+  final r = e.blobRadius;
+  final headX = e.blobPos.dx * size.width;
+  final headTop = e.blobTop.dy * size.height;
+  final onRight = headX < size.width * 0.55;
+  final bottom = (size.height - headTop - r * 0.3).clamp(8.0, math.max(8.0, size.height - 40)).toDouble();
+  return onRight
+      ? (
+          onRight: true,
+          side: (headX + r * 0.9).clamp(8.0, math.max(8.0, size.width - 120)),
+          bottom: bottom,
+          maxWidth: (size.width - headX - r * 0.9 - 12).clamp(110.0, maxW),
+        )
+      : (
+          onRight: false,
+          side: (size.width - headX + r * 0.9).clamp(8.0, math.max(8.0, size.width - 120)),
+          bottom: bottom,
+          maxWidth: (headX - r * 0.9 - 12).clamp(110.0, maxW),
+        );
+}
+
 /// Named colours a script may ask for (never raw hex -- see SpawnAction).
 Color propColor(String? name, Color fallback) => switch (name) {
       'accent' => Paper.accent,
@@ -46,9 +73,64 @@ class StagePainter extends CustomPainter {
   /// Words asked for while painting a thing, drawn after everything else
   /// (with the transform they were asked for under), so no object, the
   /// slime or a later prop can cover them.
-  final List<(Float64List, void Function(Canvas))> _words = [];
+  ///
+  /// A word that says where it will be ([box], in the coordinates it is
+  /// drawn in) is also kept clear of the words placed before it, of the
+  /// slime's speech bubble and of the typeset formulas: it steps down or up
+  /// by its own height until it has a place of its own (2026-10-01: three
+  /// things standing side by side had their names printed over each other).
+  final List<(Float64List, Rect?, void Function(Canvas))> _words = [];
 
-  void _later(Canvas canvas, void Function(Canvas) draw) => _words.add((canvas.getTransform(), draw));
+  void _later(Canvas canvas, void Function(Canvas) draw, {Rect? box}) =>
+      _words.add((canvas.getTransform(), box, draw));
+
+  /// What the words must not cover, and can't see being painted: the speech
+  /// bubble and the formulas are widgets on top (stage_view.dart). Sizes are
+  /// estimates -- near enough to keep a name out from under them.
+  List<Rect> _reserved(Size size) {
+    final e = engine;
+    final out = <Rect>[];
+    final text = e.bubbleText;
+    if (text != null && text.isNotEmpty) {
+      final place = bubblePlace(e, size);
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: sans(13.5, height: 1.4)),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: math.max(40, place.maxWidth - 26));
+      final w = tp.width + 26, h = tp.height + 20;
+      final left = place.onRight ? place.side : size.width - place.side - w;
+      out.add(Rect.fromLTWH(left, size.height - place.bottom - h, w, h));
+    }
+    for (final p in e.props.values) {
+      final tex = p.tex;
+      if (p.kind != PropKind.math || tex == null || tex.isEmpty || p.diedAt != null) continue;
+      final at = e.propAt(p);
+      final fontSize = 18 * p.size;
+      // a command (\frac, \Delta) is about one symbol wide; a fraction is tall
+      final symbols = tex.replaceAll(RegExp(r'\\[a-zA-Z]+'), 'x').replaceAll(RegExp(r'[{}^_\\\s]'), '').length;
+      out.add(Rect.fromCenter(
+        center: Offset(at.dx * size.width, at.dy * size.height),
+        width: (symbols * fontSize * 0.6).clamp(30.0, size.width * 0.8),
+        height: fontSize * (tex.contains(r'\frac') ? 2.4 : 1.5),
+      ));
+    }
+    return out;
+  }
+
+  /// How far down (or up) [r] must go to stand clear of everything in
+  /// [taken]; zero when it already does, or when nowhere near is free.
+  @visibleForTesting
+  static Offset clearOf(Rect r, List<Rect> taken, Size size) {
+    bool free(Rect x) => !taken.any((t) => t.overlaps(x.inflate(1)));
+    if (free(r)) return Offset.zero;
+    final step = r.height + 2;
+    for (final k in const [1, -1, 2, -2, 3, -3, 4]) {
+      final moved = r.shift(Offset(0, k * step));
+      if (moved.top < 0 || moved.bottom > size.height) continue;
+      if (free(moved)) return Offset(0, k * step);
+    }
+    return Offset.zero;
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -122,9 +204,18 @@ class StagePainter extends CustomPainter {
     _paintParticles(canvas, size, t);
     // back to each word's own transform, from the one the frame started in
     final undo = Matrix4.fromFloat64List(base)..invert();
-    for (final (m, draw) in _words) {
+    final taken = _reserved(size);
+    for (final (m, box, draw) in _words) {
+      final own = undo.clone()..multiply(Matrix4.fromFloat64List(m));
+      var shift = Offset.zero;
+      if (box != null) {
+        final on = MatrixUtils.transformRect(own, box);
+        shift = clearOf(on, taken, size);
+        taken.add(on.shift(shift));
+      }
       canvas.save();
-      canvas.transform((undo.clone()..multiply(Matrix4.fromFloat64List(m))).storage);
+      if (shift != Offset.zero) canvas.translate(shift.dx, shift.dy);
+      canvas.transform(own.storage);
       draw(canvas);
       canvas.restore();
     }
@@ -1266,10 +1357,7 @@ class StagePainter extends CustomPainter {
   }
 
   /// A little tag under an emoji, that flashes when it changes.
-  void _caption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) =>
-      _later(canvas, (c) => _drawCaption(c, text, center, alpha, sinceChange));
-
-  void _drawCaption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) {
+  void _caption(Canvas canvas, String text, Offset center, double alpha, double sinceChange) {
     final tp = TextPainter(
       text: TextSpan(
         text: text,
@@ -1277,11 +1365,14 @@ class StagePainter extends CustomPainter {
       ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: 150);
+    final box = Rect.fromCenter(center: center, width: tp.width + 14, height: tp.height + 6);
+    _later(canvas, (c) => _drawCaption(c, tp, box, alpha, sinceChange), box: box);
+  }
+
+  void _drawCaption(Canvas canvas, TextPainter tp, Rect box, double alpha, double sinceChange) {
+    final center = box.center;
     final flash = sinceChange < 0 ? 1.0 : (1 - sinceChange / 0.6).clamp(0.0, 1.0);
-    final r = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: center, width: tp.width + 14, height: tp.height + 6),
-      const Radius.circular(8),
-    );
+    final r = RRect.fromRectAndRadius(box, const Radius.circular(8));
     canvas.drawRRect(r, Paint()..color = Color.lerp(Colors.white, const Color(0xFFFFE9A8), flash)!.withValues(alpha: 0.95 * alpha));
     canvas.drawRRect(
       r,
@@ -1387,7 +1478,7 @@ class StagePainter extends CustomPainter {
     _later(canvas, (c) {
       halo.paint(c, at);
       tp.paint(c, at);
-    });
+    }, box: at & tp.size);
   }
 
   // ----------------------------------------------------------------- blob

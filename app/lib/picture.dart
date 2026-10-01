@@ -82,11 +82,16 @@ Future<PickedPicture?> choosePicture(BuildContext context) async {
 typedef PictureUploader = Future<AttachedPicture> Function(Uint8List bytes, String name);
 
 extension PictureApi on VersaApi {
-  Future<AttachedPicture> uploadPicture(String learnerId, Uint8List bytes, String name) async {
+  /// [asResource]: the picture is what a course, an exam or a room will be
+  /// built from (a page, a syllabus, notes), so the server writes all of it
+  /// down, not the short reading a message gets.
+  Future<AttachedPicture> uploadPicture(String learnerId, Uint8List bytes, String name,
+      {bool asResource = false}) async {
     final request = http.MultipartRequest('POST', Uri.parse('$baseUrl/api/images'))
       ..fields['learner_id'] = learnerId
       ..files.add(http.MultipartFile.fromBytes('file', bytes, filename: name));
-    final streamed = await httpClient.send(request).timeout(const Duration(seconds: 60));
+    if (asResource) request.fields['purpose'] = 'resource';
+    final streamed = await httpClient.send(request).timeout(Duration(seconds: asResource ? 120 : 60));
     final r = await http.Response.fromStream(streamed);
     if (r.statusCode != 200) {
       var detail = 'could not read that picture';

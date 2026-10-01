@@ -11,6 +11,7 @@ import 'package:versa_app/app_state.dart';
 import 'package:versa_app/chat_controller.dart';
 import 'package:versa_app/main.dart';
 import 'package:versa_app/models.dart';
+import 'package:versa_app/picture.dart';
 import 'package:versa_app/topic/topics_home_screen.dart';
 
 import 'support/fakes.dart';
@@ -43,6 +44,11 @@ class TopicHarness {
   final List<Map<String, dynamic>> createdTopicBodies = [];
   final List<String> expandCalls = [];
   List<Map<String, dynamic>>? allSessions;
+
+  /// Pictures sent to be read (the raw multipart bodies), and the
+  /// from-image requests that followed.
+  final List<String> pictureUploads = [];
+  final List<Map<String, dynamic>> imageBodies = [];
 
   /// Serve lessons taught point by point (courses from 2026-10-01 on).
   bool points = false;
@@ -163,6 +169,11 @@ class TopicHarness {
       final text = latin1.decode(bytes);
       if (!text.contains('filename="notes.pdf"')) return _stream(http.Response('no file', 422));
       return _stream(_json(exploration('pdf', 'Notes')));
+    }
+    if (path == '/api/images') pictureUploads.add(latin1.decode(bytes)); // then read by the fake backend
+    if (path == '/api/topic-explorations/from-image') {
+      imageBodies.add(json);
+      return _stream(_json(exploration('image', 'Class 10 Physics: Electricity')));
     }
     if (path.startsWith('/api/topic-nodes/') && path.endsWith('/expand')) {
       final id = request.url.pathSegments[2];
@@ -309,6 +320,72 @@ void main() {
     expect(find.text('Foundations'), findsOneWidget);
     final upload = h.topicRequests.firstWhere((r) => r.url.path == '/api/topic-explorations/from-pdf');
     expect(upload.headers['content-type'], startsWith('multipart/form-data'));
+  });
+
+  testWidgets('a photo is read in full, then mapped into branches', (tester) async {
+    final h = TopicHarness();
+    final realPicture = picturePicker, realCamera = canTakePhoto;
+    addTearDown(() {
+      picturePicker = realPicture;
+      canTakePhoto = realCamera;
+    });
+    canTakePhoto = () => false; // a laptop: straight to the file dialog
+    picturePicker = () async => (name: 'syllabus.jpg', bytes: Uint8List.fromList([0xFF, 0xD8, 0xFF, 1, 2, 3]));
+    await _boot(tester, h);
+    await _openTopics(tester);
+
+    await _tapKey(tester, 'topic-upload-image');
+    expect(find.text('FROM YOUR PICTURE'), findsOneWidget);
+    expect(find.text('Foundations'), findsOneWidget);
+    expect(h.pictureUploads.single, contains('name="purpose"'), reason: 'read as a resource, not as a message');
+    expect(h.pictureUploads.single, contains('resource'));
+    expect(h.pictureUploads.single, contains('filename="syllabus.jpg"'));
+    expect(h.imageBodies.single, {'learner_id': 'learner-Asha', 'image_id': 'img-1'});
+  });
+
+  testWidgets('on a phone the whole branch map fits the screen: one column, nothing off to the side',
+      (tester) async {
+    final h = TopicHarness();
+    await _boot(tester, h, size: const Size(390, 844));
+    await tester.tap(find.byType(NavigationDestination).at(1)); // a phone's bottom bar: Modes
+    await tester.pumpAndSettle();
+    await _tapKey(tester, 'mode-learn');
+    await tester.enterText(find.byKey(const ValueKey('topic-search-field')), 'machine learning');
+    await _tapKey(tester, 'topic-search-go');
+
+    Rect slot(String id) => tester.getRect(find.byKey(ValueKey('slot-$id')));
+    for (final id in ['__seed__', 'n1', 'n2', 'n3']) {
+      expect(slot(id).left, greaterThanOrEqualTo(0), reason: id);
+      expect(slot(id).right, lessThanOrEqualTo(390), reason: '$id is on screen');
+    }
+    // one under another, each across the screen
+    expect(slot('n2').top, greaterThan(slot('n1').bottom));
+    expect(slot('n3').top, greaterThan(slot('n2').bottom));
+    expect(slot('n1').width, greaterThan(300));
+
+    // branch one further: its branches come in under it, stepped in, still on screen
+    await _tapKey(tester, 'branch-n1');
+    expect(h.expandCalls, ['n1']);
+    for (final id in ['n1a', 'n1b', 'more-n1']) {
+      expect(slot(id).left, greaterThan(slot('n1').left), reason: '$id is stepped in under its parent');
+      expect(slot(id).right, lessThanOrEqualTo(390), reason: id);
+      expect(slot(id).top, greaterThan(slot('n1').bottom - 1), reason: id);
+    }
+    expect(slot('n2').top, greaterThan(slot('n1b').bottom), reason: 'the next branch moved down to make room');
+
+    // ticking and building work as on a wide screen
+    await _tapKey(tester, 'select-n1a');
+    await _tapKey(tester, 'select-n2');
+    expect(find.text('2 selected'), findsOneWidget);
+    await _tapKey(tester, 'branch-n1'); // hide them again
+    expect(find.byKey(const ValueKey('slot-n1a')), findsNothing);
+    expect(tester.takeException(), isNull);
+
+    const shots = String.fromEnvironment('VERSA_SHOTS');
+    if (shots.isNotEmpty) {
+      await _tapKey(tester, 'branch-n1');
+      await expectLater(find.byType(MaterialApp), matchesGoldenFile('$shots/branch_phone.png'));
+    }
   });
 
   testWidgets('a web link is checked, then mapped', (tester) async {

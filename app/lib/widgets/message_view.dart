@@ -450,29 +450,44 @@ class _DirectionsStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      key: const ValueKey('directions'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('WHERE THIS COULD GO', style: mono(9.5)),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final c in cards)
-              ActionChip(
-                key: ValueKey('direction-${c.id}'),
-                label: Text(c.text, style: sans(13, color: Paper.ink)),
-                avatar: Icon(Icons.north_east_rounded, size: 14, color: Paper.accent),
-                onPressed: enabled ? () => onPick(c) : null,
-                backgroundColor: Paper.card,
-                side: BorderSide(color: Paper.border),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
-              ),
-          ],
+    final chips = [
+      for (final c in cards)
+        ActionChip(
+          key: ValueKey('direction-${c.id}'),
+          label: Text(c.text, style: sans(13, color: Paper.ink)),
+          avatar: Icon(Icons.north_east_rounded, size: 14, color: Paper.accent),
+          onPressed: enabled ? () => onPick(c) : null,
+          backgroundColor: Paper.card,
+          side: BorderSide(color: Paper.border),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(100)),
         ),
-      ],
+    ];
+    return LayoutBuilder(
+      builder: (context, box) => Column(
+        key: const ValueKey('directions'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('WHERE THIS COULD GO', style: mono(9.5)),
+          const SizedBox(height: 8),
+          if (box.maxWidth < 520)
+            // A phone: a card is wider than the screen, and a chip cuts its
+            // words off. The cards stay one under another, every one in
+            // view, and the whole hand slides sideways to read them to the end.
+            SingleChildScrollView(
+              key: const ValueKey('directions-scroll'),
+              scrollDirection: Axis.horizontal,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final (i, chip) in chips.indexed)
+                    Padding(padding: EdgeInsets.only(top: i == 0 ? 0 : 8), child: chip),
+                ],
+              ),
+            )
+          else
+            Wrap(spacing: 8, runSpacing: 8, children: chips),
+        ],
+      ),
     );
   }
 }

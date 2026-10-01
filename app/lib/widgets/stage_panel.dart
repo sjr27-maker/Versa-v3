@@ -33,7 +33,21 @@ class StagePanel extends StatefulWidget {
     this.chat,
     this.engine,
     this.quiz,
+    this.hidden = false,
+    this.full = false,
+    this.onFull,
   });
+
+  /// Minimized: kept, but out of sight (widgets/stage_split.dart). Animations
+  /// stay on -- the chat goes on asking for each answer's performance, which
+  /// waits here, paused, and plays when the stage is shown again. A lesson's
+  /// quiz doesn't wait for a stage nobody can see: its card asks it.
+  final bool hidden;
+
+  /// The stage has the whole screen; [onFull] switches that on and off
+  /// (null: no such button).
+  final bool full;
+  final VoidCallback? onFull;
 
   /// A lesson's quiz on the point just explained (topic/lesson_quiz.dart):
   /// once the explanation's performance is over, the slime acts out a short
@@ -47,7 +61,7 @@ class StagePanel extends StatefulWidget {
   final bool compact;
 
   /// The stage's height when [compact] -- set by dragging the handle under
-  /// it (widgets/stage_split.dart). Null: the usual 280.
+  /// it (widgets/stage_split.dart). Null: it fills the room it is given.
   final double? compactHeight;
 
   /// The chat this stage performs for. Null = the stage runs on its own
@@ -111,7 +125,7 @@ class _StagePanelState extends State<StagePanel> {
       );
     };
     _attach(widget.chat);
-    _attachQuiz(widget.quiz);
+    if (!widget.hidden) _attachQuiz(widget.quiz);
     _engine.addListener(_maybePlayQuiz);
   }
 
@@ -138,7 +152,7 @@ class _StagePanelState extends State<StagePanel> {
 
   void _onQuiz() {
     final quiz = widget.quiz;
-    if (quiz == null) return;
+    if (quiz == null || widget.hidden) return;
     final asked = _quizShown != null && _engine.question?.key.startsWith('skit-') == true;
     if (asked && quiz.quiz?.activityId == _quizShown && quiz.picked != null) {
       // answered on the card: the slime takes the same answer and reacts
@@ -155,7 +169,7 @@ class _StagePanelState extends State<StagePanel> {
   void _maybePlayQuiz() {
     final quiz = widget.quiz;
     final q = quiz?.quiz;
-    if (quiz == null || q == null) return;
+    if (quiz == null || q == null || widget.hidden) return;
     if (_quizShown == q.activityId) {
       if (_quizRunning && _engine.question?.key.startsWith('skit-') == true) quiz.stageAsked();
       return;
@@ -171,9 +185,9 @@ class _StagePanelState extends State<StagePanel> {
   @override
   void didUpdateWidget(covariant StagePanel old) {
     super.didUpdateWidget(old);
-    if (old.quiz != widget.quiz) {
-      _detachQuiz(old.quiz);
-      _attachQuiz(widget.quiz);
+    if (old.quiz != widget.quiz || old.hidden != widget.hidden) {
+      if (!old.hidden) _detachQuiz(old.quiz);
+      if (!widget.hidden) _attachQuiz(widget.quiz);
     }
     if (old.chat != widget.chat) {
       _detach(old.chat);
@@ -270,7 +284,7 @@ class _StagePanelState extends State<StagePanel> {
   @override
   void dispose() {
     _detach(widget.chat);
-    _detachQuiz(widget.quiz);
+    if (!widget.hidden) _detachQuiz(widget.quiz);
     _engine.removeListener(_maybePlayQuiz);
     _engine.stop();
     _engine.onNote = null;
@@ -408,9 +422,21 @@ class _StagePanelState extends State<StagePanel> {
               ),
             ),
           ),
+          if (widget.onFull != null)
+            IconButton(
+              key: const ValueKey('stage-panel-full'),
+              tooltip: widget.full ? 'Back to the stage and the chat' : 'Just the animation',
+              visualDensity: VisualDensity.compact,
+              onPressed: widget.onFull,
+              icon: Icon(
+                widget.full ? Icons.fullscreen_exit_rounded : Icons.fullscreen_rounded,
+                size: 20,
+                color: Paper.faint,
+              ),
+            ),
           IconButton(
             key: const ValueKey('stage-panel-collapse'),
-            tooltip: 'Minimize stage',
+            tooltip: 'Just the chat',
             visualDensity: VisualDensity.compact,
             onPressed: widget.onCollapse,
             icon: Icon(
@@ -478,19 +504,26 @@ class _StagePanelState extends State<StagePanel> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           header,
-          compact ? SizedBox(height: widget.compactHeight ?? 280, child: stage) : Expanded(child: stage),
+          compact && widget.compactHeight != null
+              ? SizedBox(height: widget.compactHeight, child: stage)
+              : Expanded(child: stage),
           if (_notes.isNotEmpty || _flights.isNotEmpty)
             KeyedSubtree(key: _notesKey, child: _KeepInMind(notes: _notes, compact: compact)),
         ],
       ),
     );
-    return Stack(
-      key: _panelKey,
-      children: [
-        panel,
-        for (final f in _flights)
-          _FlyingNote(key: ValueKey('flying-note-${f.id}'), flight: f, onLanded: () => _landed(f)),
-      ],
+    // Out of sight, the stage's clock stands still: a performance that
+    // arrives meanwhile waits, and plays once the stage is shown again.
+    return TickerMode(
+      enabled: !widget.hidden,
+      child: Stack(
+        key: _panelKey,
+        children: [
+          panel,
+          for (final f in _flights)
+            _FlyingNote(key: ValueKey('flying-note-${f.id}'), flight: f, onLanded: () => _landed(f)),
+        ],
+      ),
     );
   }
 }

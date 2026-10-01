@@ -353,6 +353,15 @@ class ChatSummary(BaseModel):
     written, don't regenerate it" discipline `history_block.py` and
     `session_history.py` both follow.
 
+    `title` / `about` (2026-10-01) are what the chat is about in clean
+    words, for the Home feed's cards: the latest `DescribeChat` call's
+    output, read from `node_calls` (chat_titles.py). None for a chat that
+    was never described — the client falls back to `preview`.
+
+    `scene` is the chat's latest stage performance (the `StageDirector`
+    call's recorded script), which the Home feed plays as the card's
+    picture. Only the feed fills it in; None everywhere else.
+
     `last_activity_at` is the latest turn's timestamp, falling back to
     `created_at` for a turn-less chat — sidebar order tracks USE, not
     creation, so a chat you keep returning to stays near the top.
@@ -364,6 +373,9 @@ class ChatSummary(BaseModel):
     created_at: datetime
     last_activity_at: datetime
     preview: str | None = None
+    title: str | None = None
+    about: str | None = None
+    scene: list[dict] | None = None
     # A Learn-a-topic lesson chat's lesson (migration 074); None otherwise.
     lesson_id: UUID | None = None
 

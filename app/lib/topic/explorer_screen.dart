@@ -178,6 +178,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
               eyebrow: switch (e?.sourceKind) {
                 'pdf' => 'FROM YOUR PDF',
                 'link' => 'FROM A WEB PAGE',
+                'image' => 'FROM YOUR PICTURE',
                 _ => 'EXPLORE A TOPIC',
               },
               title: e?.suggestedTitle ?? widget.label,
@@ -208,6 +209,9 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
     );
     final showTree = !_loading && _error == null && e != null && e.rootNodes.isNotEmpty;
     return LayoutBuilder(builder: (context, c) {
+      // a phone: the tree runs down one column that fits the screen, instead
+      // of spreading several screens wide (topic/branch_tree.dart)
+      final narrow = c.maxWidth < 700;
       return SingleChildScrollView(
         key: const ValueKey('branch-tree-scroll'),
         padding: const EdgeInsets.only(bottom: 40),
@@ -230,6 +234,7 @@ class _ExplorerScreenState extends State<ExplorerScreen> {
                       selected: _selected,
                       branching: _branching,
                       growing: _growing,
+                      narrowWidth: narrow ? c.maxWidth - 24 : null,
                       onToggle: _toggle,
                       onBranch: (n) => _branch(n),
                       onMore: (n) => _branch(n, more: true),

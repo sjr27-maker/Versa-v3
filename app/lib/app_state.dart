@@ -359,6 +359,11 @@ class ShellState extends ChangeNotifier {
   bool historyRailCollapsed = false;
   bool stagePanelCollapsed = false;
 
+  /// The stage has the whole chat screen (the chat is out of sight until the
+  /// same button, or "just the chat", brings it back). Collapsing the stage
+  /// hides it but leaves Animations on: only the switch turns them off.
+  bool stageFull = false;
+
   /// Where the learner dragged the handle between the stage and the chat
   /// (widgets/stage_split.dart): the stage's height above the chat on a
   /// phone, and its share of the row beside the chat on a wide screen.
@@ -380,6 +385,13 @@ class ShellState extends ChangeNotifier {
 
   void toggleStagePanelCollapsed() {
     stagePanelCollapsed = !stagePanelCollapsed;
+    stageFull = false;
+    notifyListeners();
+  }
+
+  void toggleStageFull() {
+    stageFull = !stageFull;
+    stagePanelCollapsed = false;
     notifyListeners();
   }
 
@@ -634,6 +646,7 @@ class ShellState extends ChangeNotifier {
     sandboxHistory.clear();
     historyRailCollapsed = false;
     stagePanelCollapsed = false;
+    stageFull = false;
     knobsRailCollapsed = false;
     notifyListeners();
   }

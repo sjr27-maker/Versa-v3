@@ -1,7 +1,8 @@
 """Reading a learning resource into text for "Learn a topic" (topics.py): a
-PDF the student uploads, or a web page they link.
+PDF the student uploads, a web page they link, or a picture they took (a
+page, a syllabus, their notes -- already read into words by images.py).
 
-Both paths return an `ExtractedResource`: a title, the plain text, and the
+Every path returns an `ExtractedResource`: a title, the plain text, and the
 headings found (PDF outline entries, HTML h1-h3), so the course outline can be
 built from the document's own structure rather than guessed.
 
@@ -44,7 +45,7 @@ class ResourceError(Exception):
 
 
 class ExtractedResource(BaseModel):
-    kind: str  # 'pdf' | 'link'
+    kind: str  # 'pdf' | 'link' | 'image'
     title: str
     text: str
     headings: list[str] = []
@@ -103,6 +104,35 @@ def extract_pdf(data: bytes, filename: str | None = None) -> ExtractedResource:
         title = (filename or "").rsplit(".", 1)[0].strip() or text.split("\n", 1)[0][:80]
     return ExtractedResource(
         kind="pdf", title=title[:200], text=text, headings=headings[:200], filename=filename
+    )
+
+
+# ---------------------------------------------------------------- pictures
+
+# A camera or a gallery names a picture after itself ("IMG_2041.jpg",
+# "image_picker_8A.png", "WhatsApp Image 2026-..."): never a title.
+_CAMERA_NAME = re.compile(r"^(img|image|dsc|pxl|photo|screenshot|scaled|whatsapp|\d)", re.IGNORECASE)
+_HEADING_LINE = re.compile(r"^(#{1,3}\s+|(unit|chapter|module|part|section|topic|lesson)\s+\S+|\d{1,2}[.)]\s+\S)",
+                           re.IGNORECASE)
+
+
+def resource_from_reading(reading: str, filename: str | None = None) -> ExtractedResource:
+    """A picture, as a resource: its written reading (images.py -- the
+    picture is read once, on upload, and only that reading goes further) is
+    the text. Headings are the lines that read as one ("Unit 2: ...",
+    "3. Magnetism"), so a photographed syllabus keeps its own structure."""
+    text = _clean(reading)
+    if not text:
+        raise ResourceError("that picture has nothing readable in it")
+    lines = [" ".join(line.split()) for line in text.split("\n") if line.strip()]
+    headings = [line.lstrip("# ").strip()[:120] for line in lines if _HEADING_LINE.match(line) and len(line) <= 120]
+    stem = (filename or "").rsplit(".", 1)[0].strip()
+    title = lines[0].lstrip("# ").strip()
+    if len(title) > 90 and stem and not _CAMERA_NAME.match(stem):
+        title = stem
+    return ExtractedResource(
+        kind="image", title=title[:90].rstrip(" .:") or "Your picture", text=text, headings=headings[:200],
+        filename=filename,
     )
 
 

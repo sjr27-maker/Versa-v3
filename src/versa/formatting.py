@@ -15,7 +15,9 @@ MATH_STYLE = (
     "or between double dollar signs on its own line for a displayed equation ($$...$$). Never "
     "write maths as plain text (no x^2, sqrt(2), a/b for fractions). Use **bold** for a key term "
     "sparingly; '- ' bullets or '1. ' steps only when the content really is a list. No tables, "
-    "no HTML."
+    "no HTML. LaTeX is for maths only: never use it to draw a picture, a diagram or a circuit "
+    "symbol, or to position text (no \\hspace, \\phantom, \\begin{array} or tikz) -- describe a "
+    "symbol or a shape in words instead."
 )
 
 # The same, for a JSON field's text: inside JSON every backslash is doubled.

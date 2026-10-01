@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import '../theme.dart';
 import 'topic_api.dart';
 import 'topic_models.dart';
@@ -21,7 +22,8 @@ Future<PickedPdf?> Function() topicPdfPicker = () async {
   return (name: file.name, bytes: await file.readAsBytes());
 };
 
-/// Learn a topic: the person's courses, and the three ways to start one.
+/// Learn a topic: the person's courses, and the ways to start one (a
+/// search, a PDF, a photo, a web link).
 class TopicsHomeScreen extends StatefulWidget {
   const TopicsHomeScreen({super.key});
 
@@ -87,6 +89,28 @@ class _TopicsHomeScreenState extends State<TopicsHomeScreen> {
     _reload();
   }
 
+  /// A photo of a page, a syllabus or their notes: read on upload, then
+  /// mapped into branches like a PDF.
+  Future<void> _startPicture() async {
+    final PickedPicture? picked;
+    try {
+      picked = await choosePicture(context);
+    } catch (e) {
+      _toast('Could not open the picture ($e)');
+      return;
+    }
+    if (picked == null || !mounted) return;
+    final app = context.read<AppState>();
+    final api = _api;
+    final learnerId = _learnerId;
+    final (:name, :bytes) = picked;
+    await pushExplorer(context, label: 'your picture', load: () async {
+      final picture = await app.api.uploadPicture(learnerId, bytes, name, asResource: true);
+      return api.exploreImage(learnerId, picture.id);
+    });
+    _reload();
+  }
+
   Future<void> _startLink() async {
     final url = await showDialog<String>(context: context, builder: (_) => const _LinkDialog());
     if (url == null || !mounted) return;
@@ -140,7 +164,7 @@ class _TopicsHomeScreenState extends State<TopicsHomeScreen> {
                     final topics = snap.data ?? const [];
                     if (topics.isEmpty) {
                       return Text(
-                        'No topics yet. Search one above, or bring a PDF or a web page, '
+                        'No topics yet. Search one above, or bring a PDF, a photo or a web page, '
                         'and pick what you want to cover.',
                         key: const ValueKey('topics-empty'),
                         style: sans(13.5, color: Paper.muted, height: 1.5),
@@ -232,6 +256,12 @@ class _TopicsHomeScreenState extends State<TopicsHomeScreen> {
               icon: Icons.picture_as_pdf_outlined,
               label: 'Upload a PDF',
               onTap: _startPdf,
+            ),
+            _SourceButton(
+              buttonKey: const ValueKey('topic-upload-image'),
+              icon: canTakePhoto() ? Icons.photo_camera_outlined : Icons.add_photo_alternate_outlined,
+              label: canTakePhoto() ? 'Take or add a photo' : 'Add a picture',
+              onTap: _startPicture,
             ),
             _SourceButton(
               buttonKey: const ValueKey('topic-link'),

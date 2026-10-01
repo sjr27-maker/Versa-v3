@@ -702,7 +702,7 @@ void main() {
 
       await tester.pump(const Duration(milliseconds: 700));
       await tester.pump();
-      expect(backend.patchedKnobs.single, {'answer_length': 50, 'depth': 80, 'breadth': 25});
+      expect(backend.patchedKnobs.single, {'answer_length': 40, 'depth': 80, 'breadth': 25});
       expect(transport.sent.last, {'type': 'regenerate', 'request_id': transport.sent.last['request_id'],
           'directions': 'fork'});
     });
@@ -1004,7 +1004,7 @@ void main() {
 
       final length = find.byKey(const ValueKey('knob-length'));
       Text value() => tester.widget(find.byKey(const ValueKey("[<'knob-length'>]-value"))) as Text;
-      expect(value().data, '50');
+      expect(value().data, '40', reason: 'a new chat starts a little shorter than the middle');
 
       final center = tester.getCenter(length);
       final pointer = TestPointer(1, PointerDeviceKind.mouse);
@@ -1013,15 +1013,15 @@ void main() {
       await tester.pump();
       await tester.sendEventToBinding(pointer.scroll(const Offset(0, 40)));
       await tester.pump();
-      expect(value().data, '60');
+      expect(value().data, '50');
       await tester.sendEventToBinding(pointer.scroll(const Offset(0, -40)));
       await tester.pump();
-      expect(value().data, '55');
+      expect(value().data, '45');
 
       await tester.pump(const Duration(milliseconds: 700));
       await tester.pump();
       expect(backend.patchedKnobs, [
-        {'answer_length': 55, 'depth': 50, 'breadth': 50},
+        {'answer_length': 45, 'depth': 50, 'breadth': 50},
       ]);
     });
   });

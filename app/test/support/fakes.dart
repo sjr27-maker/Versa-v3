@@ -173,7 +173,7 @@ class FakeBackend {
   bool failKnobPatches = false;
 
   Map<String, int> _knobs(String id) =>
-      knobsBySession.putIfAbsent(id, () => {'answer_length': 50, 'depth': 50, 'breadth': 50});
+      knobsBySession.putIfAbsent(id, () => {'answer_length': 40, 'depth': 50, 'breadth': 50});
 
   /// `upsertLearner`'s deterministic id for a given label — lets a test seed
   /// a chat for a learner before that learner has actually signed in.

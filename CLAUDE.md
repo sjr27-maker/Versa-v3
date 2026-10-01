@@ -445,7 +445,9 @@ delete or update rows. Concretely:
   guard against counting its own nudges as evidence. The one thing read
   from outside is the sign-up profile's stated board and level
   (profiles.py, invariant 18) when an exam is set up from a search -- what
-  the student said, not something concluded about them.
+  the student said, not something concluded about them. (An exam set up
+  from a picture takes that picture's reading as its material, invariant
+  21: what the student gave, the same as a PDF.)
 - Verified by `tests/test_exams_append_only.py`, the same AST-based check
   used for invariants 1, 4, 6-12.
 
@@ -690,6 +692,15 @@ with the guess, not recomputed later from data that has since grown.
   and an exam answer carry it as text the app wrote in (rooms and exams stay
   walled off, invariants 12/13). Nothing downstream is given the pixels, so
   what any turn was told about a picture is always readable afterwards.
+- (2026-10-01, migrations 095 and rooms_002) A picture can also be what a
+  course, an exam or a room is BUILT from (a page, a syllabus, notes), next
+  to a search, a PDF and a link. It is uploaded with `purpose=resource`,
+  which only changes the reading asked for (all of it, in full; the prompt
+  is on the row as always). Learn a topic and exam prep look the reading up
+  by `image_id` -- the learner's own picture only -- and keep it as the
+  resource's text (`topic_resources.kind = 'image'`); a room, which has no
+  learner, is sent the reading as text. Still read once, still no pixels
+  downstream.
 - The reading call is recorded on the row itself (prompt + output/error) --
   invariant 2's payload in images' own table, since there may be no session.
 - Verified by `tests/test_images.py`, the same AST-based check used for

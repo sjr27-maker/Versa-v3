@@ -69,10 +69,15 @@ class SandboxScreen extends StatelessWidget {
               tooltip: 'Show stage',
               onExpand: shell.toggleStagePanelCollapsed,
             ),
+          // A minimized stage is only out of sight (StageSplitView.chatOnly):
+          // Animations stay on until the switch turns them off.
           Expanded(
-            child: stageOpen
+            child: showStagePanel
                 ? StageSplit(
                     wide: wide,
+                    view: !stageOpen
+                        ? StageSplitView.chatOnly
+                        : (shell.stageFull ? StageSplitView.stageOnly : StageSplitView.split),
                     height: shell.stageHeight,
                     fraction: shell.stageFraction,
                     onHeight: (h) => shell.stageHeight = h,
@@ -81,6 +86,9 @@ class SandboxScreen extends StatelessWidget {
                       chat: chat,
                       compact: !wide,
                       compactHeight: height,
+                      hidden: !stageOpen,
+                      full: shell.stageFull,
+                      onFull: shell.toggleStageFull,
                       onCollapse: shell.toggleStagePanelCollapsed,
                     ),
                     chat: chatColumn,

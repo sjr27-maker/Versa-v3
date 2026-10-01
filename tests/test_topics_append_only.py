@@ -10,7 +10,8 @@ from pathlib import Path
 import versa.resources as resources_module
 import versa.topics as topics_module
 
-_MIGRATIONS = ("072_topic_explorations.sql", "073_topics.sql", "074_lesson_progress.sql", "092_topic_points.sql")
+_MIGRATIONS = ("072_topic_explorations.sql", "073_topics.sql", "074_lesson_progress.sql", "092_topic_points.sql",
+               "095_image_resources.sql")
 
 
 def _string_literals(path: Path):

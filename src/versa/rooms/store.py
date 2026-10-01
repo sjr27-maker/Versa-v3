@@ -32,7 +32,7 @@ class RoomRow(BaseModel):
     id: UUID
     code: str
     title: str
-    source_kind: Literal["search", "pdf", "link"]
+    source_kind: Literal["search", "pdf", "link", "image"]
     query: str
     resource_url: str | None = None
     resource_filename: str | None = None

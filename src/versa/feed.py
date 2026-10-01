@@ -9,7 +9,8 @@ did:
 
 - continue -- the learner's most recent Sandbox chats that have at least one
   turn, read live on every request (never cached, so a chat you just had
-  shows up at once).
+  shows up at once). Each carries what it is about in clean words
+  (chat_titles.py) and its latest stage performance, the card's picture.
 - related  -- topics next to what they have asked about, each with a reason
   naming the thing it came from ("because you asked about recursion").
 - explore  -- topics outside anything in their history.
@@ -359,7 +360,10 @@ class FeedService:
 
     async def _continue(self, learner_id: UUID) -> list[ChatSummary]:
         chats = await self._transcript.list_session_summaries(learner_id, "sandbox")
-        return [c for c in chats if c.turn_count > 0][:_CONTINUE_LIMIT]
+        chats = [c for c in chats if c.turn_count > 0][:_CONTINUE_LIMIT]
+        # each card's picture: the chat's latest stage performance, if it had one
+        scenes = await self._transcript.latest_scenes([c.session_id for c in chats])
+        return [c.model_copy(update={"scene": scenes.get(c.session_id)}) for c in chats]
 
     def _needs_generation(
         self, cached: FeedGeneration | None, history: LearnerHistory, refresh: bool

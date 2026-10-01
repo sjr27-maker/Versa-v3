@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../feed_api.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'scene_preview.dart';
 
 /// "just now", "5 min ago", "3 h ago", "2 days ago".
 String timeAgo(DateTime when, {DateTime? now}) {
@@ -151,7 +152,11 @@ class ContinueCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final preview = chat.preview ?? 'Chat';
+    // What the chat is about, in clean words (server: chat_titles.py); a
+    // chat that was never described falls back to its opening message.
+    final title = chat.title ?? chat.cleanPreview ?? 'Chat';
+    final about = chat.title == null ? null : chat.about;
+    final scene = chat.scene;
     final messages = chat.turnCount == 1 ? '1 message' : '${chat.turnCount} messages';
     return _CardShell(
       cardKey: ValueKey('feed-continue-${chat.sessionId}'),
@@ -159,9 +164,21 @@ class ContinueCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _Tile(seed: chat.sessionId, icon: Icons.forum_outlined, text: '“$preview”'),
+          // the picture: the chat's own animation when it has one
+          if (scene != null && scene.isNotEmpty)
+            ScenePreview(key: ValueKey('feed-scene-${chat.sessionId}'), actions: scene)
+          else
+            _Tile(seed: chat.sessionId, icon: Icons.forum_outlined, text: title),
           const SizedBox(height: 10),
-          Text(preview, maxLines: 2, overflow: TextOverflow.ellipsis, style: sans(14.5, weight: FontWeight.w600)),
+          Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: sans(14.5, weight: FontWeight.w600)),
+          if (about != null && about.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(about,
+                key: ValueKey('feed-about-${chat.sessionId}'),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: sans(13, color: Paper.body, height: 1.4)),
+          ],
           const SizedBox(height: 4),
           Text('$messages · ${timeAgo(chat.lastActivityAt)}', style: sans(12.5, color: Paper.muted)),
         ],

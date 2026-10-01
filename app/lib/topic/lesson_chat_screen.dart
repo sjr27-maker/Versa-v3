@@ -186,9 +186,13 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
             ),
           // stage and chat, split where the learner drags the handle (widgets/stage_split.dart)
           Expanded(
-            child: stageOpen
+            // a minimized stage is only out of sight: Animations stay on
+            child: showStage
                 ? StageSplit(
                     wide: wide,
+                    view: !stageOpen
+                        ? StageSplitView.chatOnly
+                        : (shell.stageFull ? StageSplitView.stageOnly : StageSplitView.split),
                     height: shell.stageHeight,
                     fraction: shell.stageFraction,
                     onHeight: (h) => shell.stageHeight = h,
@@ -198,6 +202,9 @@ class _LessonChatScreenState extends State<LessonChatScreen> {
                       quiz: _quiz,
                       compact: !wide,
                       compactHeight: height,
+                      hidden: !stageOpen,
+                      full: shell.stageFull,
+                      onFull: shell.toggleStageFull,
                       onCollapse: shell.toggleStagePanelCollapsed,
                     ),
                     chat: column,

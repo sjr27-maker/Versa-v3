@@ -69,6 +69,7 @@ import asyncpg
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from versa import images as _images
 from versa import profiles as _profiles
 from versa import resources as _resources
 from versa.audit import to_jsonable
@@ -123,6 +124,13 @@ class ExamIn(BaseModel):
 class ExamFromLinkIn(BaseModel):
     learner_id: UUID
     url: str
+    title: str | None = None
+    exam_date: date | None = None
+
+
+class ExamFromImageIn(BaseModel):
+    learner_id: UUID
+    image_id: UUID
     title: str | None = None
     exam_date: date | None = None
 
@@ -1641,6 +1649,19 @@ def build_exams_router(pool: asyncpg.Pool, llm: LLMClient, *, link_fetcher=None,
             raise HTTPException(status_code=422, detail=str(exc)) from None
         async with priced(learner_id, "create_exam", source="pdf"):
             return await service.create_from_resource(learner_id, resource, title, exam_date)
+
+    @router.post("/exams/from-image", response_model=ExamOut)
+    async def create_from_image(body: ExamFromImageIn) -> ExamOut:
+        """From a picture the learner took (a syllabus, a page, their notes):
+        its reading, written down once on upload (images.py), is the
+        material -- what the student gave, like a PDF, nothing concluded
+        about them."""
+        await require_learner(body.learner_id)
+        resource = await _images.picture_resource(pool, body.learner_id, body.image_id)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="unknown picture")
+        async with priced(body.learner_id, "create_exam", source="image"):
+            return await service.create_from_resource(body.learner_id, resource, body.title, body.exam_date)
 
     @router.post("/exams/from-course", response_model=ExamOut)
     async def create_from_course(body: ExamFromCourseIn) -> ExamOut:

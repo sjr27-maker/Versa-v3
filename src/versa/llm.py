@@ -98,6 +98,13 @@ _DEFAULT_PATH_REQUIREMENT = json.dumps(
 )
 
 
+def _stub_describe_chat(prompt: str) -> str:
+    first = next((line[4:] for line in prompt.splitlines() if line.startswith("  - ")), "this chat")
+    words = first.rstrip("?.! ").split()
+    title = " ".join(words[:6]) or "This chat"
+    return json.dumps({"title": title[:1].upper() + title[1:], "about": f"A chat about: {' '.join(words[:14])}."})
+
+
 def _stub_room_director(prompt: str) -> str:
     """rooms.RoomDirector on the stub: welcome and give a task to whoever
     created or joined the room, answer whoever talks to Versa or clicks an
@@ -441,6 +448,8 @@ _DEFAULT_RESPONSES: dict[str, CannedResponse] = {
     "LESSON:JUDGE": json.dumps(
         {"completed": False, "evidence": "", "drifted": False, "check_passed": None}
     ),
+    # chat_titles.DescribeChat: named after the chat's own first message.
+    "CHAT:DESCRIBE": lambda prompt: _stub_describe_chat(prompt),
     # feed.GenerateFeed. The parser drops `related` for a learner with no
     # history, so a static answer is right for both cases.
     "FEED:RECOMMEND": json.dumps(

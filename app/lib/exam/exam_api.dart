@@ -66,6 +66,12 @@ class ExamApi {
       Exam.fromJson(await _post('/exams/from-link', {..._setup(learnerId, title, examDate), 'url': url},
           'could not read that link') as Map<String, dynamic>);
 
+  /// From a picture already uploaded and read (picture.dart `uploadPicture`
+  /// with `asResource`).
+  Future<Exam> createFromImage(String learnerId, String imageId, {String? title, DateTime? examDate}) async =>
+      Exam.fromJson(await _post('/exams/from-image', {..._setup(learnerId, title, examDate), 'image_id': imageId},
+          'could not read that picture') as Map<String, dynamic>);
+
   Future<Exam> createFromCourse(String learnerId, String topicId, {String? title, DateTime? examDate}) async =>
       Exam.fromJson(await _post('/exams/from-course', {..._setup(learnerId, title, examDate), 'topic_id': topicId},
           'could not use that course') as Map<String, dynamic>);

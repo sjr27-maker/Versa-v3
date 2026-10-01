@@ -82,6 +82,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from versa import embeddings as _embeddings
+from versa import images as _images
 from versa import profiles as _profiles
 from versa import resources as _resources
 from versa import stage as _stage
@@ -162,6 +163,11 @@ class ExplorationIn(BaseModel):
 class LinkIn(BaseModel):
     learner_id: UUID
     url: str = Field(min_length=1, max_length=2000)
+
+
+class ImageIn(BaseModel):
+    learner_id: UUID
+    image_id: UUID
 
 
 class ExpandIn(BaseModel):
@@ -1661,10 +1667,15 @@ def build_selection(nodes: list[NodeRow], selected: set[UUID]) -> list[dict]:
 # ================================================================ lesson context (tutoring)
 
 
+# What a lesson calls the thing it is taught from (a picture's "text" is the
+# reading made of it on upload, images.py).
+_SOURCE_WORD = {"pdf": "PDF", "image": "picture"}
+
+
 def _point_goal(lp: LessonProgress, current: TaskRow, source_kind: str | None) -> str:
     number = next(i for i, t in enumerate(lp.tasks, 1) if t.id == current.id)
     faithful = (
-        f"- Teach it from the {source_kind.upper() if source_kind == 'pdf' else 'resource'}'s text below, "
+        f"- Teach it from the {_SOURCE_WORD.get(source_kind, 'resource')}'s text below, "
         "faithfully: what it says, in its terms -- add only what is needed to understand it.\n"
         if source_kind else ""
     )
@@ -2290,6 +2301,17 @@ def build_topics_router(
             raise HTTPException(status_code=422, detail=str(exc)) from None
         async with priced(learner_id, "explore_topic", source="pdf"):
             return await service.explore_resource(learner_id, resource)
+
+    @router.post("/topic-explorations/from-image", response_model=ExplorationOut)
+    async def explore_image(body: ImageIn) -> ExplorationOut:
+        """A picture the learner took (a page, a syllabus, their notes),
+        uploaded and read once by images.py: its reading is the resource."""
+        await require_learner(body.learner_id)
+        resource = await _images.picture_resource(pool, body.learner_id, body.image_id)
+        if resource is None:
+            raise HTTPException(status_code=404, detail="unknown picture")
+        async with priced(body.learner_id, "explore_topic", source="image"):
+            return await service.explore_resource(body.learner_id, resource)
 
     @router.get("/topic-explorations/{exploration_id}", response_model=ExplorationOut)
     async def get_exploration(exploration_id: UUID) -> ExplorationOut:

@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -83,8 +82,18 @@ class _ComposerState extends State<Composer> {
     _controller.clear();
     setState(() => _picture = null);
     widget.onSend(text, picture);
-    _focus.requestFocus();
+    // On a phone the on-screen keyboard goes down so the answer has the
+    // room; with a real keyboard the box keeps the cursor for the next one.
+    if (_touchKeyboard || MediaQuery.viewInsetsOf(context).bottom > 0) {
+      _focus.unfocus();
+    } else {
+      _focus.requestFocus();
+    }
   }
+
+  /// A phone or tablet: typing is on an on-screen keyboard, whose Enter sends.
+  bool get _touchKeyboard =>
+      defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
 
   Future<void> _attach() async {
     final upload = widget.uploadPicture;
@@ -208,6 +217,11 @@ class _ComposerState extends State<Composer> {
                     autofocus: true,
                     minLines: 1,
                     maxLines: 6,
+                    // the on-screen keyboard's Enter sends (a long message
+                    // still wraps); a real keyboard's is handled by _onKey
+                    keyboardType: _touchKeyboard ? TextInputType.text : null,
+                    textInputAction: _touchKeyboard ? TextInputAction.send : null,
+                    onSubmitted: _touchKeyboard ? (_) => _submit() : null,
                     style: sans(14.5),
                     cursorColor: Paper.accent,
                     decoration: InputDecoration(

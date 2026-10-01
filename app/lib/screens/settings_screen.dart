@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../app_state.dart';
 import '../billing/sparks_widgets.dart';
 import '../models.dart';
-import 'directions_lab_screen.dart';
 import 'profile_screen.dart';
 import '../theme.dart';
 import '../widgets/placeholder_page.dart';
@@ -183,31 +182,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     contentPadding: EdgeInsets.zero,
                     activeThumbColor: Colors.white,
                     activeTrackColor: Paper.accent,
-                    title: Text('Stage panel', style: sans(14)),
+                    title: Text('Animations', style: sans(14)),
                     subtitle: Text(
-                        'Reserves space for an animation reactive to the chat (not built yet) '
-                        'in any mode — same as the Animations knob in Sandbox.',
+                        'The stage beside the chat, where each answer is acted out — same as the '
+                        'Animations knob in Sandbox.',
                         style: sans(12.5, color: Paper.muted)),
                     value: app.showStagePanel,
                     onChanged: app.setShowStagePanel,
-                  ),
-                ),
-              ]),
-              card([
-                Text('Design lab', style: serif(19)),
-                const SizedBox(height: 6),
-                Text('Three ways to show "where this could go" -- a hand of three, a compass, a '
-                    'constellation. Design only: sample cards, nothing is recorded.',
-                    style: sans(12.5, color: Paper.muted)),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    key: const ValueKey('open-design-lab'),
-                    onPressed: () => Navigator.of(context)
-                        .push(MaterialPageRoute<void>(builder: (_) => const DirectionsLabScreen())),
-                    icon: const Icon(Icons.explore_outlined, size: 16),
-                    label: const Text('Open design lab'),
                   ),
                 ),
               ]),
@@ -218,21 +199,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const ComingSoonPill(),
                 ]),
                 const SizedBox(height: 10),
-                for (final (title, detail) in const [
-                  ('Learning defaults', 'Animations, depth, cross-topic memory, reminders.'),
-                  ('Model of you', 'Export what Versa remembers, or pause its learning.'),
-                  ('Appearance', 'Light, dark and more.'),
-                ])
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(title, style: sans(14, color: Paper.faint)),
-                        Text(detail, style: sans(12.5, color: Paper.faint)),
-                      ],
-                    ),
-                  ),
+                Text('Improved thinking style adaptation mechanism arriving soon.',
+                    key: const ValueKey('coming-later'), style: sans(13.5, color: Paper.muted, height: 1.4)),
               ]),
             ],
           ),

@@ -16,9 +16,13 @@ import 'script.dart';
 /// would make every `pumpAndSettle` time out); tests step
 /// [StageEngine.tick] by hand, or pass `animate: true`.
 class StageView extends StatefulWidget {
-  const StageView({super.key, required this.engine, this.onChoice, this.animate});
+  const StageView({super.key, required this.engine, this.onChoice, this.animate, this.quiet = false});
 
   final StageEngine engine;
+
+  /// A small replay with nobody to talk to (a Home card's picture): the
+  /// scene only, without the speech bubble or any choices.
+  final bool quiet;
 
   /// Called when a choice bubble is tapped. Null = choices shown but not
   /// clickable right now (e.g. the chat is mid-turn).
@@ -71,8 +75,8 @@ class _StageViewState extends State<StageView> with SingleTickerProviderStateMix
               children: [
                 ..._photos(size),
                 ..._formulas(size),
-                ..._speech(size),
-                ..._choices(size),
+                if (!widget.quiet) ..._speech(size),
+                if (!widget.quiet) ..._choices(size),
               ],
             ),
           ),
@@ -257,40 +261,20 @@ class _StageViewState extends State<StageView> with SingleTickerProviderStateMix
     final e = widget.engine;
     final text = e.bubbleText;
     if (text == null || text.isEmpty) return const [];
-    final pos = e.blobPos;
-    final r = e.blobRadius;
-    final headX = pos.dx * size.width;
-    final headTop = e.blobTop.dy * size.height;
-    // Beside the head (the "?" owns the space right above it), on whichever
-    // side has more room.
-    final onRight = headX < size.width * 0.55;
-    const maxW = 280.0;
-    final bottom = size.height - headTop - r * 0.3;
+    final place = bubblePlace(e, size);
     final bubble = _Bubble(
       key: ValueKey('stage-bubble${e.asking ? '-question' : ''}'),
       text: text,
       question: e.asking,
-      tailOnLeft: onRight,
+      tailOnLeft: place.onRight,
     );
     return [
-      if (onRight)
-        Positioned(
-          left: (headX + r * 0.9).clamp(8.0, size.width - 120),
-          bottom: bottom.clamp(8.0, size.height - 40),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: (size.width - headX - r * 0.9 - 12).clamp(110.0, maxW)),
-            child: bubble,
-          ),
-        )
-      else
-        Positioned(
-          right: (size.width - headX + r * 0.9).clamp(8.0, size.width - 120),
-          bottom: bottom.clamp(8.0, size.height - 40),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: (headX - r * 0.9 - 12).clamp(110.0, maxW)),
-            child: bubble,
-          ),
-        ),
+      Positioned(
+        left: place.onRight ? place.side : null,
+        right: place.onRight ? null : place.side,
+        bottom: place.bottom,
+        child: ConstrainedBox(constraints: BoxConstraints(maxWidth: place.maxWidth), child: bubble),
+      ),
     ];
   }
 

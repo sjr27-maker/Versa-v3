@@ -66,6 +66,12 @@ class TopicApi {
     return Exploration.fromJson(_decode(r, 'could not read that PDF') as Map<String, dynamic>);
   }
 
+  /// From a picture already uploaded and read (picture.dart `uploadPicture`
+  /// with `asResource`): its reading is mapped like a PDF's text.
+  Future<Exploration> exploreImage(String learnerId, String imageId) async => Exploration.fromJson(
+      await _post('/topic-explorations/from-image', {'learner_id': learnerId, 'image_id': imageId},
+          'could not read that picture', _generate));
+
   Future<Exploration> getExploration(String id) async =>
       Exploration.fromJson(await _get('/topic-explorations/$id', 'could not load this map') as Map<String, dynamic>);
 

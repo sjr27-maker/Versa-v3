@@ -1,6 +1,8 @@
 """HTTP + WebSocket routes for rooms, mounted by server.py.
 
-    POST /api/rooms                  {code, name, topic | link}  create (topic search or web link)
+    POST /api/rooms                  {code, name, topic | link | picture}
+                                                                 create (topic search, web link, or a
+                                                                 picture's reading: {reading, filename})
     POST /api/rooms/from-pdf         multipart code, name, file  create from an uploaded PDF
     POST /api/rooms/{code}/join      {name}                      join (the same name rejoins)
     GET  /api/rooms/{code}/state     ?member_id=                 everything this person can see
@@ -48,11 +50,21 @@ _CODE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,23}$")
 _RESERVED_NAMES = {"versa", "system", "everyone", "all"}
 
 
+class PictureIn(BaseModel):
+    """A picture the room is built from, as the words read out of it (the app
+    uploads it, images.py reads it once, and the app writes the reading in
+    here -- a room has no learner to look a picture up by, invariant 12)."""
+
+    reading: str = Field(min_length=1, max_length=12000)
+    filename: str | None = Field(None, max_length=200)
+
+
 class CreateIn(BaseModel):
     code: str
     name: str
     topic: str | None = None
     link: str | None = None
+    picture: PictureIn | None = None
 
 
 class JoinIn(BaseModel):
@@ -110,6 +122,14 @@ def build_rooms_router(hub: RoomHub, *, link_fetcher: Callable | None = None) ->
     @router.post("/rooms")
     async def create_room(body: CreateIn) -> dict:
         code, name = _check_code(body.code), _check_name(body.name)
+        if body.picture is not None:
+            if await store.get_room_by_code(code) is not None:
+                raise HTTPException(status_code=409, detail=f"the room code {code!r} is taken -- pick another, or join it")
+            try:
+                resource = _resources.resource_from_reading(body.picture.reading, body.picture.filename)
+            except _resources.ResourceError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from None
+            return await create(code, name, resource=resource, source_kind="image")
         if body.link and body.link.strip():
             if await store.get_room_by_code(code) is not None:
                 raise HTTPException(status_code=409, detail=f"the room code {code!r} is taken -- pick another, or join it")
@@ -120,7 +140,7 @@ def build_rooms_router(hub: RoomHub, *, link_fetcher: Callable | None = None) ->
             return await create(code, name, resource=resource, source_kind="link")
         topic = " ".join((body.topic or "").split())
         if not topic:
-            raise HTTPException(status_code=422, detail="give the room a topic, a link or a PDF")
+            raise HTTPException(status_code=422, detail="give the room a topic, a link, a PDF or a picture")
         return await create(code, name, query=topic[:200], source_kind="search")
 
     @router.post("/rooms/from-pdf")

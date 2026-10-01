@@ -156,6 +156,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from versa import chat_titles as _chat_titles
 from versa import chatter as _chatter
 from versa import directions as _directions
 from versa import images as _images
@@ -521,6 +522,8 @@ def create_app(
     explain_item = ExplainItem(tiers.fast)
     answer_item_question = AnswerItemQuestion(tiers.fast)
     stage_director = StageDirector(tiers.stage or tiers.fast)
+    # What a chat is about, for the Home feed's cards (chat_titles.py).
+    describe_chat = _chat_titles.DescribeChat(tiers.fast)
     # Pictures attached to messages (images.py): read once on upload; a turn
     # gets the reading with its message.
     images_router = _images.build_images_router(pool, tiers.fast)
@@ -1542,6 +1545,27 @@ def create_app(
             with contextlib.suppress(Exception):
                 _style_patterns.forget(await transcript.get_learner_id(session_id))
 
+    async def _describe_chat(session_id: UUID, turn_index: int, message: str, answer: str) -> None:
+        """A clean title and one sentence for a Sandbox chat's Home card
+        (chat_titles.py): after its first answer, and again once it has grown.
+        In the background, recorded through `_call_node`; a failure only
+        leaves the card showing the chat's opening message."""
+        try:
+            if await pool.fetchval("SELECT app_mode FROM sessions WHERE id = $1", session_id) != "sandbox":
+                return
+            last = await node_calls.get_latest_call(session_id, _chat_titles.NODE_NAME)
+            # an attempt that gave no title is tried again on the next answer
+            if (last is not None and isinstance(last.output_json, dict) and last.output_json.get("title")
+                    and turn_index - last.turn_index < _chat_titles.REDESCRIBE_AFTER_TURNS):
+                return
+            # this turn's own row is written in its deferred tail: take its
+            # message from the turn itself, the earlier ones from the record
+            earlier = [t.text for t in await transcript.list_turns(session_id) if t.turn_index < turn_index]
+            await loop._call_node(describe_chat, session_id, turn_index,
+                                  messages=[*earlier, message], answer=answer)
+        except Exception:
+            logger.warning("describing chat %s failed", session_id, exc_info=True)
+
     async def _more_directions(session_id: UUID, data: dict, send) -> None:
         """"Other directions": nothing in this hand matched. Kept as a `more`
         event on the hand (a signal in itself), then the next hand is dealt
@@ -1786,6 +1810,8 @@ def create_app(
                 "total_ms": round(total_ms),
             },
         })
+        if not options:
+            loop._fire_background(_describe_chat(session_id, turn_index, text, message))
         presentation = _presentation(data)
         if not options and presentation:
             # Only for a client that shows the strip (it asks, like "stage"):

@@ -15,6 +15,13 @@ import 'topic_models.dart';
 /// Laid out as a tidy tree: a branch sits centred over its children; wide
 /// trees scroll sideways (the caller wraps this in scroll views), and the
 /// view follows whatever just grew.
+///
+/// On a phone ([narrowWidth]) a tidy tree is several screens wide -- five
+/// branches side by side showed two at a time (2026-10-01). There the same
+/// tree grows down ONE column instead: every branch is a full-width card,
+/// its own branches sit under it, stepped in, and a vine runs down the left
+/// joining them. Nothing is off to the side; the whole map scrolls only up
+/// and down.
 class BranchTree extends StatefulWidget {
   const BranchTree({
     super.key,
@@ -27,7 +34,21 @@ class BranchTree extends StatefulWidget {
     required this.onBranch,
     required this.onMore,
     this.growing,
+    this.narrowWidth,
   });
+
+  /// The width to fit the whole tree into, as one column (a phone). Null: the
+  /// tidy tree, as wide as it needs.
+  final double? narrowWidth;
+
+  /// One column: a card's height, the step in per level (up to
+  /// [maxIndents] levels -- deeper branches line up under their parent),
+  /// and the gap between rows.
+  static const double rowHeight = 98;
+  static const double indent = 18;
+  static const int maxIndents = 5;
+  static const double rowGap = 12;
+  static const double gutter = 22;
 
   /// The topic itself: the top of the tree.
   final String title;
@@ -73,13 +94,59 @@ class _Slot {
 enum _SlotKind { seed, node, more, leaf }
 
 class _Layout {
-  _Layout(this.slots, this.size);
+  _Layout(this.slots, this.size, {this.column = false});
   final Map<String, _Slot> slots;
   final Size size;
 
+  /// One column (a phone): branches run down the left, not across.
+  final bool column;
+
   static const seedId = '__seed__';
 
+  /// The tree down one column of [width]: each branch a full-width row, its
+  /// children under it and stepped in.
+  static _Layout _column(BranchTree t, double width) {
+    final slots = <String, _Slot>{};
+    var y = BranchTree.seedHeight + 16;
+
+    void place(String id, TopicNode? node, _SlotKind kind, String parent, int depth, int index) {
+      final left = BranchTree.gutter + math.min(depth - 1, BranchTree.maxIndents) * BranchTree.indent;
+      final w = math.max(160.0, width - left - 4);
+      final small = kind == _SlotKind.more || kind == _SlotKind.leaf;
+      final h = small ? 40.0 : BranchTree.rowHeight;
+      slots[id] = _Slot(
+        id: id,
+        rect: Rect.fromLTWH(left, y, w, h),
+        node: node,
+        parent: parent,
+        depth: depth,
+        index: index,
+        kind: kind,
+      );
+      y += h + BranchTree.rowGap;
+      if (kind != _SlotKind.node || node == null || !t.open.contains(node.id)) return;
+      var i = 0;
+      for (final c in node.children) {
+        place(c.id, c, _SlotKind.node, id, depth + 1, i++);
+      }
+      if (node.children.isEmpty) place('leaf-${node.id}', null, _SlotKind.leaf, id, depth + 1, i++);
+      if (node.canBranch) place('more-${node.id}', node, _SlotKind.more, id, depth + 1, i);
+    }
+
+    for (var i = 0; i < t.roots.length; i++) {
+      place(t.roots[i].id, t.roots[i], _SlotKind.node, seedId, 1, i);
+    }
+    slots[seedId] = _Slot(
+      id: seedId,
+      rect: Rect.fromLTWH(2, 6, math.min(width - 4, 280), 44),
+      kind: _SlotKind.seed,
+    );
+    return _Layout(slots, Size(width, y + 28), column: true);
+  }
+
   static _Layout of(BranchTree t) {
+    final narrow = t.narrowWidth;
+    if (narrow != null) return _column(t, narrow);
     const w = BranchTree.cardWidth, h = BranchTree.cardHeight, gap = BranchTree.gapX;
     const level = h + BranchTree.levelGap;
     final slots = <String, _Slot>{};
@@ -240,7 +307,7 @@ class _BranchTreeState extends State<BranchTree> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-              for (final slot in layout.slots.values) _slot(slot, g, lit),
+              for (final slot in layout.slots.values) _slot(layout, slot, g, lit),
             ],
           );
         },
@@ -248,18 +315,20 @@ class _BranchTreeState extends State<BranchTree> with TickerProviderStateMixin {
     );
   }
 
-  Widget _slot(_Slot slot, double grow, Set<String> lit) {
+  Widget _slot(_Layout layout, _Slot slot, double grow, Set<String> lit) {
     // a child of the branch that is growing appears as its branch reaches it
     final fresh = slot.parent != null && slot.parent == widget.growing;
     final reveal = fresh ? ((grow - 0.45 - 0.06 * slot.index.clamp(0, 6)) / 0.4).clamp(0.0, 1.0) : 1.0;
     final key = _keys.putIfAbsent(slot.id, GlobalKey.new);
     final Widget child = switch (slot.kind) {
       _SlotKind.seed => _Seed(title: widget.title),
-      _SlotKind.leaf => Center(
+      _SlotKind.leaf => Align(
+          alignment: layout.column ? Alignment.centerLeft : Alignment.center,
           child: Text('This branch doesn\'t split further.',
               textAlign: TextAlign.center, style: sans(11.5, color: Paper.faint)),
         ),
-      _SlotKind.more => Center(
+      _SlotKind.more => Align(
+          alignment: layout.column ? Alignment.centerLeft : Alignment.center,
           child: TextButton.icon(
             key: ValueKey('more-${slot.node!.id}'),
             onPressed: widget.branching.contains(slot.node!.id) ? null : () => widget.onMore(slot.node!),
@@ -279,6 +348,7 @@ class _BranchTreeState extends State<BranchTree> with TickerProviderStateMixin {
           onPath: lit.contains(slot.node!.id),
           open: widget.open.contains(slot.node!.id),
           branching: widget.branching.contains(slot.node!.id),
+          row: layout.column,
           onToggle: () => widget.onToggle(slot.node!),
           onBranch: () => widget.onBranch(slot.node!),
         ),
@@ -310,6 +380,17 @@ class _BranchPainter extends CustomPainter {
   static const _gold = Color(0xFFE2B33C);
 
   Path _edge(Rect from, Rect to) {
+    if (layout.column) {
+      // a vine: down the left from under the parent, then a soft turn in to
+      // the child's side
+      final x = to.left - 11;
+      const turn = 9.0;
+      return Path()
+        ..moveTo(x, from.bottom)
+        ..lineTo(x, to.center.dy - turn)
+        ..quadraticBezierTo(x, to.center.dy, x + turn, to.center.dy)
+        ..lineTo(to.left, to.center.dy);
+    }
     final a = Offset(from.center.dx, from.bottom);
     final b = Offset(to.center.dx, to.top);
     final dy = (b.dy - a.dy) * 0.55;
@@ -425,6 +506,7 @@ class _NodeCard extends StatelessWidget {
     required this.branching,
     required this.onToggle,
     required this.onBranch,
+    this.row = false,
   });
 
   final TopicNode node;
@@ -434,6 +516,103 @@ class _NodeCard extends StatelessWidget {
   final bool branching;
   final VoidCallback onToggle;
   final VoidCallback onBranch;
+
+  /// One column (a phone): the card is wide and short, so the branch control
+  /// sits at its end instead of under the words.
+  final bool row;
+
+  /// The branch control at the end of a wide, short card: the same tap as
+  /// the tall card's "Branch further", as an arrow with one word under it.
+  Widget _rowControl() {
+    if (!node.canBranch && !node.expanded) return const SizedBox(width: 8);
+    if (branching) {
+      return SizedBox(
+        width: 58,
+        child: Center(
+          child: SizedBox(
+              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Paper.accent)),
+        ),
+      );
+    }
+    return Semantics(
+      button: true,
+      label: open ? 'Hide branches' : (node.expanded ? 'Show branches' : 'Branch further'),
+      child: InkWell(
+        key: ValueKey('branch-${node.id}'),
+        borderRadius: BorderRadius.circular(12),
+        onTap: onBranch,
+        child: SizedBox(
+          width: 58,
+          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: open ? Paper.accentSoft : Colors.transparent,
+                shape: BoxShape.circle,
+                border: Border.all(color: Paper.accent.withValues(alpha: 0.6)),
+              ),
+              child: AnimatedRotation(
+                turns: open ? 0.5 : 0,
+                duration: const Duration(milliseconds: 220),
+                child: Icon(Icons.expand_more_rounded, size: 20, color: Paper.accent),
+              ),
+            ),
+            const SizedBox(height: 4),
+            ExcludeSemantics(
+              child: Text(open ? 'Hide' : (node.expanded ? 'Show' : 'Branch'),
+                  style: sans(10.5, color: Paper.accent, weight: FontWeight.w600)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _rowContent() {
+    return Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Align(
+        alignment: Alignment.topCenter,
+        child: SizedBox(
+          width: 36,
+          height: 40,
+          child: Checkbox(
+            key: ValueKey('select-${node.id}'),
+            value: selected,
+            activeColor: Paper.accent,
+            visualDensity: VisualDensity.compact,
+            onChanged: (_) => onToggle(),
+          ),
+        ),
+      ),
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(2, 10, 4, 8),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(node.title,
+                maxLines: 2, overflow: TextOverflow.ellipsis, style: sans(14, weight: FontWeight.w600, height: 1.25)),
+            if (node.beyondResource)
+              Padding(
+                key: ValueKey('beyond-${node.id}'),
+                padding: const EdgeInsets.only(top: 2),
+                child: Text('BEYOND YOUR RESOURCE', style: mono(8.5, color: Paper.faint)),
+              ),
+            if (node.summary.isNotEmpty)
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Text(node.summary,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: sans(12, color: Paper.muted, height: 1.35)),
+                ),
+              ),
+          ]),
+        ),
+      ),
+      _rowControl(),
+    ]);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -457,7 +636,7 @@ class _NodeCard extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
           onTap: onToggle,
-          child: Padding(
+          child: row ? _rowContent() : Padding(
             padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

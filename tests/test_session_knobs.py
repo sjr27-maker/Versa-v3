@@ -33,19 +33,24 @@ from tests.test_server import (  # noqa: F401  (fixtures)
 # ------------------------------------------------------------ the directive
 
 
-def test_the_default_levels_render_to_the_empty_string():
-    assert render_knob_directive(SessionKnobs()) == ""
+def test_a_slider_at_50_adds_nothing_and_a_new_chat_starts_a_little_shorter():
     assert render_knob_directive(SessionKnobs(answer_length=50, depth=50, breadth=50)) == ""
+    # a new chat's length starts at 40 (2026-10-01), so its prompt carries
+    # the length line and nothing else
+    assert SessionKnobs() == SessionKnobs(answer_length=40, depth=50, breadth=50)
+    untouched = render_knob_directive(SessionKnobs())
+    assert "Length: 40/100" in untouched and "about 109 words" in untouched
+    assert "Depth" not in untouched and "Breadth" not in untouched and untouched.count("\n- ") == 1
 
 
 def test_each_moved_slider_adds_its_own_line():
     only_length = render_knob_directive(SessionKnobs(answer_length=10))
     assert "Length: 10/100" in only_length and "Depth" not in only_length
-    only_depth = render_knob_directive(SessionKnobs(depth=90))
+    only_depth = render_knob_directive(SessionKnobs(answer_length=50, depth=90))
     assert "Depth: 90/100" in only_depth and "rigorous" in only_depth and "Length" not in only_depth
     both = render_knob_directive(SessionKnobs(answer_length=0, depth=0))
     assert both.count("\n- ") == 2
-    only_breadth = render_knob_directive(SessionKnobs(breadth=95))
+    only_breadth = render_knob_directive(SessionKnobs(answer_length=50, breadth=95))
     assert "Breadth: 95/100" in only_breadth and "range widely" in only_breadth
     assert "Depth" not in only_breadth and "Length" not in only_breadth
     assert "exactly what was asked" in render_knob_directive(SessionKnobs(breadth=5))
@@ -123,7 +128,7 @@ async def test_patch_updates_only_the_given_level_and_tone_is_gone(live, new_cha
         second = await client.patch(f"/api/sessions/{sid}/knobs", json={"answer_length": 80})
         third = await client.patch(f"/api/sessions/{sid}/knobs", json={"breadth": 85})
         fetched = await client.get(f"/api/sessions/{sid}/knobs")
-    assert first.json() == {"answer_length": 50, "depth": 20, "breadth": 50}
+    assert first.json() == {"answer_length": 40, "depth": 20, "breadth": 50}
     assert second.json() == {"answer_length": 80, "depth": 20, "breadth": 50}
     assert third.json() == {"answer_length": 80, "depth": 20, "breadth": 85}
     assert fetched.json() == third.json()
@@ -156,7 +161,7 @@ async def test_a_moved_slider_reaches_the_next_final_answer_and_is_recorded(live
 
     first = await node_calls.get_call_for_turn(UUID(sid), 0, "FinalAnswer")
     second = await node_calls.get_call_for_turn(UUID(sid), 1, "FinalAnswer")
-    assert first.input_json["knob_directive"] == ""
+    assert first.input_json["knob_directive"] == render_knob_directive(SessionKnobs())  # where a chat starts
     assert "Length: 10/100" in second.input_json["knob_directive"]
 
 
@@ -193,7 +198,8 @@ async def test_regenerate_rewrites_the_latest_answer_without_touching_the_origin
 
     original = await node_calls.get_call_for_turn(UUID(sid), 0, "FinalAnswer")
     rewrite = await node_calls.get_call_for_turn(UUID(sid), 0, "RegenerateAnswer")
-    assert original.input_json["knob_directive"] == "" and original.output_json == _ANSWER
+    assert original.input_json["knob_directive"] == render_knob_directive(SessionKnobs())
+    assert original.output_json == _ANSWER
     assert "Length: 90/100" in rewrite.input_json["knob_directive"]
     same = {k: v for k, v in rewrite.input_json.items() if k != "knob_directive"}
     assert same == {k: v for k, v in original.input_json.items() if k != "knob_directive"}

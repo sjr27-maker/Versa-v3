@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
+/// Whether the stage and the chat share the room, or one of them has it all.
+enum StageSplitView { split, stageOnly, chatOnly }
+
 /// The stage and the chat with a handle between them that the learner drags
 /// to give either one more room -- a finger on a phone, the mouse on a
 /// laptop. Double-tap the handle to put it back in the middle. On a phone a
@@ -16,12 +19,18 @@ import '../theme.dart';
 /// The size lives here while dragging (so only this widget rebuilds each
 /// frame) and is handed to [onHeight] / [onFraction] when the drag ends --
 /// the screens keep it on ShellState, so it survives leaving the chat.
+///
+/// [view] gives the whole room to one of the two. The other is kept, only
+/// out of sight: a hidden stage goes on being sent each answer's animation
+/// (hiding it is not turning Animations off -- that is the switch), and a
+/// hidden chat keeps its place and whatever was being typed.
 class StageSplit extends StatefulWidget {
   const StageSplit({
     super.key,
     required this.wide,
     required this.stage,
     required this.chat,
+    this.view = StageSplitView.split,
     this.height = defaultHeight,
     this.fraction = 0.5,
     this.onHeight,
@@ -31,6 +40,7 @@ class StageSplit extends StatefulWidget {
   static const defaultHeight = 280.0;
 
   final bool wide;
+  final StageSplitView view;
 
   /// The stage's height on a phone, and its share of the row when wide.
   final double height;
@@ -59,17 +69,38 @@ class _StageSplitState extends State<StageSplit> {
   /// header, a line or two, and the composer.
   static const _minChatHeight = 260.0;
 
+  /// The stage and the chat keep their state as they move between the split
+  /// and the one-at-a-time views.
+  final _stageKey = GlobalKey();
+  final _chatKey = GlobalKey();
+
+  Widget _stage(double? height) => KeyedSubtree(key: _stageKey, child: widget.stage(height));
+  Widget get _chat => KeyedSubtree(key: _chatKey, child: widget.chat);
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, c) {
+      final view = widget.view;
       if (widget.wide) {
         final room = c.maxWidth - ResizeHandle.thickness;
         final lo = (_minStageWidth / room).clamp(0.15, 0.5).toDouble();
         final hi = (1 - _minChatWidth / room).clamp(0.5, 0.85).toDouble();
         final fraction = _fraction.clamp(lo, hi).toDouble();
         final stageWidth = room * fraction;
+        if (view == StageSplitView.stageOnly) {
+          return Row(children: [
+            Expanded(child: _stage(null)),
+            Offstage(child: SizedBox(width: room - stageWidth, height: c.maxHeight, child: _chat)),
+          ]);
+        }
+        if (view == StageSplitView.chatOnly) {
+          return Row(children: [
+            Offstage(child: SizedBox(width: stageWidth, height: c.maxHeight, child: _stage(null))),
+            Expanded(child: _chat),
+          ]);
+        }
         return Row(children: [
-          SizedBox(width: stageWidth, child: widget.stage(null)),
+          SizedBox(width: stageWidth, child: _stage(null)),
           ResizeHandle(
             key: const ValueKey('stage-resize'),
             axis: Axis.horizontal,
@@ -80,14 +111,27 @@ class _StageSplitState extends State<StageSplit> {
               widget.onFraction?.call(_fraction);
             },
           ),
-          Expanded(child: widget.chat),
+          Expanded(child: _chat),
         ]);
       }
       // A phone: keep room below for the chat's header, a few lines and the composer.
       final maxHeight = (c.maxHeight - _minChatHeight).clamp(_minStageHeight + 40, 900.0).toDouble();
       final height = _height.clamp(_minStageHeight, maxHeight).toDouble();
+      if (view == StageSplitView.stageOnly) {
+        // no height: the stage fills the screen
+        return Column(children: [
+          Expanded(child: _stage(null)),
+          Offstage(child: SizedBox(width: c.maxWidth, height: _minChatHeight, child: _chat)),
+        ]);
+      }
+      if (view == StageSplitView.chatOnly) {
+        return Column(children: [
+          Offstage(child: SizedBox(width: c.maxWidth, child: _stage(height))),
+          Expanded(child: _chat),
+        ]);
+      }
       return Column(children: [
-        widget.stage(height),
+        _stage(height),
         ResizeHandle(
           key: const ValueKey('stage-resize'),
           axis: Axis.vertical,
@@ -102,7 +146,7 @@ class _StageSplitState extends State<StageSplit> {
             widget.onHeight?.call(_height);
           },
         ),
-        Expanded(child: widget.chat),
+        Expanded(child: _chat),
       ]);
     });
   }

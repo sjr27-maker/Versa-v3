@@ -139,7 +139,9 @@ def export_backend(out: Path, pkg: str, source_note: str) -> None:
     write(dest / "cli.py", CLI_PY.format(pkg=pkg))
     rooms_doc = ast.get_docstring(ast.parse((SRC / "rooms" / "__init__.py").read_text(encoding="utf-8"))) or ""
     write(dest / "__init__.py", f'"""{rooms_doc}\n"""\n')
-    shutil.copyfile(SRC / "migrations" / "rooms_001_rooms.sql", _mk(dest / "migrations" / "001_rooms.sql"))
+    # every rooms migration, in order: rooms_001_rooms.sql -> 001_rooms.sql, ...
+    for path in sorted((SRC / "migrations").glob("rooms_*.sql")):
+        shutil.copyfile(path, _mk(dest / "migrations" / path.name.removeprefix("rooms_")))
 
     # Tests: the pure rules from tests/test_rooms.py (the end-to-end half
     # needs Versa's server fixtures) and the append-only scan.
@@ -149,7 +151,7 @@ def export_backend(out: Path, pkg: str, source_note: str) -> None:
                    r"from tests\..*|from versa\.llm import .*)\n", "", rules, flags=re.MULTILINE)
     write(out / "tests" / "test_rules.py", rewrite_imports(rules, pkg))
     append_only = (ROOT / "tests" / "test_rooms_append_only.py").read_text(encoding="utf-8")
-    append_only = append_only.replace('("rooms_001_rooms.sql",)', '("001_rooms.sql",)')
+    append_only = append_only.replace('"rooms_0', '"0')  # the migrations' names in the export
     append_only = append_only.replace(".parent.parent / \"migrations\"", ".parent / \"migrations\"")
     write(out / "tests" / "test_append_only.py", rewrite_imports(append_only, pkg))
     write(out / "tests" / "__init__.py", "")

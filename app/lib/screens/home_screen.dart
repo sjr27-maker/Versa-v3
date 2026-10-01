@@ -99,6 +99,16 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final name = context.watch<AppState>().learner?.label ?? '';
+    // Home stays mounted behind the other tabs: the cards' animations
+    // (widgets/scene_preview.dart) only run while it is the one on screen.
+    final showing = context.select<ShellState, bool>((s) => s.tab == ShellState.tabHome);
+    return TickerMode(
+      enabled: showing,
+      child: _page(name),
+    );
+  }
+
+  Widget _page(String name) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(40, 36, 40, 60),
       child: Align(

@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:versa_app/api.dart';
 import 'package:versa_app/main.dart';
+import 'package:versa_app/picture.dart';
 import 'package:versa_app/room/room_api.dart';
 import 'package:versa_app/room/room_controller.dart';
 import 'package:versa_app/room/room_models.dart';
@@ -159,7 +160,7 @@ class RoomHarness {
     }
     return backend.client.send(http.Request(request.method, request.url)
       ..headers.addAll(request.headers)
-      ..body = request.body).then(http.Response.fromStream);
+      ..bodyBytes = request.bodyBytes).then(http.Response.fromStream);
   });
 
   VersaApi get api => VersaApi('http://test', client: client);
@@ -360,6 +361,53 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('room-back')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('room-row-calc-101')), findsOneWidget);
+  });
+
+  testWidgets('a room can be built from a photo: read once, and the room is given the words', (tester) async {
+    final h = RoomHarness();
+    final realPicture = picturePicker, realCamera = canTakePhoto;
+    addTearDown(() {
+      picturePicker = realPicture;
+      canTakePhoto = realCamera;
+    });
+    canTakePhoto = () => false;
+    // a real 1x1 PNG, so the thumbnail can decode it
+    final png = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==');
+    picturePicker = () async => (name: 'notes.png', bytes: png);
+    await _boot(tester, h, size: const Size(390, 844)); // a phone: four ways in still fit
+    await tester.tap(find.byType(NavigationDestination).at(1));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byKey(const ValueKey('mode-study')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('mode-study')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('rooms-create')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Photo'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('create-go')));
+    await tester.pumpAndSettle();
+    expect(find.text('Add a photo of what the room will learn.'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('create-picture')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('create-picture-thumb')), findsOneWidget);
+    await tester.enterText(find.byKey(const ValueKey('create-code')), 'calc-101');
+    await tester.ensureVisible(find.byKey(const ValueKey('create-go')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('create-go')));
+    await _enterRoom(tester);
+
+    expect(find.byKey(const ValueKey('create-error')), findsNothing);
+    expect(h.backend.picturesUploaded, 1);
+    expect(h.creates.last, {
+      'code': 'calc-101',
+      'name': 'Asha',
+      'picture': {'reading': h.backend.pictureReading, 'filename': 'notes.png'},
+    });
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('inside a room: the group chat, the board and "For you"', (tester) async {

@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 
 import '../api.dart';
 import '../app_state.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../topic/topic_widgets.dart';
 import 'room_api.dart';
@@ -370,10 +371,11 @@ class _JoinRoomDialogState extends State<JoinRoomDialog> {
   }
 }
 
-enum _Source { search, pdf, link }
+enum _Source { search, pdf, picture, link }
 
 /// Create a room: your name, a room code to share, and the topic -- searched,
-/// from a PDF, or from a web page (outlined like Learn a topic does).
+/// from a PDF, from a photo (a page, a syllabus, someone's notes) or from a
+/// web page (outlined like Learn a topic does).
 class CreateRoomScreen extends StatefulWidget {
   const CreateRoomScreen({super.key});
 
@@ -388,8 +390,22 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   final _link = TextEditingController();
   _Source _source = _Source.search;
   PickedPdf? _pdf;
+  PickedPicture? _picture;
   String? _error;
   bool _busy = false;
+
+  Future<void> _pickPicture() async {
+    try {
+      final picked = await choosePicture(context);
+      if (picked == null || !mounted) return;
+      setState(() {
+        _picture = picked;
+        _error = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Could not open the picture ($e)');
+    }
+  }
 
   static String _randomCode() {
     const words = ['study', 'learn', 'think', 'quest', 'spark', 'orbit', 'prism', 'atlas'];
@@ -438,6 +454,8 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
         if (_topic.text.trim().isEmpty) return 'What will the room learn? Type a topic.';
       case _Source.pdf:
         if (_pdf == null) return 'Choose a PDF.';
+      case _Source.picture:
+        if (_picture == null) return 'Add a photo of what the room will learn.';
       case _Source.link:
         final uri = Uri.tryParse(_link.text.trim());
         if (uri == null || !(uri.scheme == 'http' || uri.scheme == 'https') || uri.host.isEmpty) {
@@ -457,14 +475,24 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
       _busy = true;
       _error = null;
     });
-    final api = RoomApi.of(context.read<AppState>().api);
+    final app = context.read<AppState>();
+    final api = RoomApi.of(app.api);
     final name = _name.text.trim(), code = _code.text.trim();
     try {
-      final joined = switch (_source) {
-        _Source.search => await api.create(code: code, name: name, topic: _topic.text.trim()),
-        _Source.link => await api.create(code: code, name: name, link: _link.text.trim()),
-        _Source.pdf => await api.createFromPdf(code: code, name: name, filename: _pdf!.name, bytes: _pdf!.bytes),
-      };
+      final RoomJoined joined;
+      switch (_source) {
+        case _Source.search:
+          joined = await api.create(code: code, name: name, topic: _topic.text.trim());
+        case _Source.link:
+          joined = await api.create(code: code, name: name, link: _link.text.trim());
+        case _Source.pdf:
+          joined = await api.createFromPdf(code: code, name: name, filename: _pdf!.name, bytes: _pdf!.bytes);
+        case _Source.picture:
+          // read once on upload; the room gets the words, never the picture
+          final read = await app.api
+              .uploadPicture(app.learner!.id, _picture!.bytes, _picture!.name, asResource: true);
+          joined = await api.create(code: code, name: name, pictureReading: read.reading, pictureName: read.name);
+      }
       if (mounted) Navigator.of(context).pop(joined);
     } on ApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -516,21 +544,28 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                 const SizedBox(height: 22),
                 Text('Topic', style: sans(13, weight: FontWeight.w700)),
                 const SizedBox(height: 8),
-                SegmentedButton<_Source>(
-                  key: const ValueKey('create-source'),
-                  segments: const [
-                    ButtonSegment(value: _Source.search, icon: Icon(Icons.search_rounded, size: 16), label: Text('Search')),
-                    ButtonSegment(value: _Source.pdf, icon: Icon(Icons.picture_as_pdf_outlined, size: 16), label: Text('PDF')),
-                    ButtonSegment(value: _Source.link, icon: Icon(Icons.link_rounded, size: 16), label: Text('Web link')),
-                  ],
-                  selected: {_source},
-                  onSelectionChanged: (s) => setState(() {
-                    _source = s.first;
-                    _error = null;
-                  }),
-                  style: SegmentedButton.styleFrom(
-                    selectedBackgroundColor: Paper.accentSoft,
-                    selectedForegroundColor: Paper.accentDark,
+                // four ways in: on a narrow phone the row slides rather than squeezing its labels
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SegmentedButton<_Source>(
+                    key: const ValueKey('create-source'),
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(value: _Source.search, icon: Icon(Icons.search_rounded, size: 16), label: Text('Search')),
+                      ButtonSegment(value: _Source.pdf, icon: Icon(Icons.picture_as_pdf_outlined, size: 16), label: Text('PDF')),
+                      ButtonSegment(
+                          value: _Source.picture, icon: Icon(Icons.photo_camera_outlined, size: 16), label: Text('Photo')),
+                      ButtonSegment(value: _Source.link, icon: Icon(Icons.link_rounded, size: 16), label: Text('Web link')),
+                    ],
+                    selected: {_source},
+                    onSelectionChanged: (s) => setState(() {
+                      _source = s.first;
+                      _error = null;
+                    }),
+                    style: SegmentedButton.styleFrom(
+                      selectedBackgroundColor: Paper.accentSoft,
+                      selectedForegroundColor: Paper.accentDark,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -548,6 +583,35 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                       onSubmitted: (_) => _submit(),
                       decoration: const InputDecoration(hintText: 'https://…'),
                     ),
+                  _Source.picture => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Row(children: [
+                        if (_picture != null) ...[
+                          ClipRRect(
+                            key: const ValueKey('create-picture-thumb'),
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.memory(_picture!.bytes,
+                                width: 56, height: 56, fit: BoxFit.cover, gaplessPlayback: true),
+                          ),
+                          const SizedBox(width: 12),
+                        ],
+                        OutlinedButton.icon(
+                          key: const ValueKey('create-picture'),
+                          onPressed: _busy ? null : _pickPicture,
+                          icon: Icon(
+                              canTakePhoto() ? Icons.photo_camera_outlined : Icons.add_photo_alternate_outlined,
+                              size: 18),
+                          label: Text(_picture == null
+                              ? (canTakePhoto() ? 'Take or add a photo' : 'Add a picture')
+                              : 'Choose another'),
+                        ),
+                      ]),
+                      const SizedBox(height: 8),
+                      Text(
+                          _picture == null
+                              ? 'A page of a book, a syllabus or someone\'s notes.'
+                              : 'Versa reads it when you create the room.',
+                          style: sans(13, color: Paper.muted)),
+                    ]),
                   _Source.pdf => Row(children: [
                       OutlinedButton.icon(
                         key: const ValueKey('create-pdf'),

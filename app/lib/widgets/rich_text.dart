@@ -14,7 +14,8 @@ import '../theme.dart';
 /// Anything else is shown as written. A lone dollar sign ("costs $5") stays
 /// text: inline maths needs a non-space right inside both dollars, and no
 /// digit straight after the closing one. Half-written maths while an answer
-/// streams in shows as plain text until it closes.
+/// streams in shows as plain text until it closes. Maths the typesetter
+/// can't read is shown as readable symbols ([texToPlain]), never as raw LaTeX.
 class RichMessageText extends StatelessWidget {
   const RichMessageText(this.text, {super.key, this.style, this.selectable = true});
 
@@ -46,7 +47,7 @@ class RichMessageText extends StatelessWidget {
               b.text,
               mathStyle: MathStyle.display,
               textStyle: base.copyWith(fontSize: (base.fontSize ?? 14.5) * 1.1),
-              onErrorFallback: (_) => Text('\$\$${b.text}\$\$', style: base),
+              onErrorFallback: (_) => Text(texToPlain(b.text), style: base),
             ),
           ),
         );
@@ -71,6 +72,89 @@ class RichMessageText extends StatelessWidget {
         return Text.rich(TextSpan(children: inlineSpans(b.text, base)));
     }
   }
+}
+
+const _texSymbols = <String, String>{
+  'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ', 'epsilon': 'ε', 'varepsilon': 'ε', 'zeta': 'ζ',
+  'eta': 'η', 'theta': 'θ', 'vartheta': 'ϑ', 'iota': 'ι', 'kappa': 'κ', 'lambda': 'λ', 'mu': 'μ', 'nu': 'ν',
+  'xi': 'ξ', 'pi': 'π', 'rho': 'ρ', 'sigma': 'σ', 'tau': 'τ', 'upsilon': 'υ', 'phi': 'φ', 'varphi': 'φ',
+  'chi': 'χ', 'psi': 'ψ', 'omega': 'ω', 'Gamma': 'Γ', 'Delta': 'Δ', 'Theta': 'Θ', 'Lambda': 'Λ', 'Xi': 'Ξ',
+  'Pi': 'Π', 'Sigma': 'Σ', 'Phi': 'Φ', 'Psi': 'Ψ', 'Omega': 'Ω',
+  'times': '×', 'cdot': '·', 'div': '÷', 'pm': '±', 'mp': '∓', 'ast': '∗', 'star': '⋆', 'circ': '∘',
+  'leq': '≤', 'le': '≤', 'geq': '≥', 'ge': '≥', 'neq': '≠', 'ne': '≠', 'approx': '≈', 'sim': '∼',
+  'simeq': '≃', 'cong': '≅', 'equiv': '≡', 'propto': '∝', 'll': '≪', 'gg': '≫', 'infty': '∞',
+  'to': '→', 'rightarrow': '→', 'longrightarrow': '→', 'leftarrow': '←', 'leftrightarrow': '↔',
+  'Rightarrow': '⇒', 'implies': '⇒', 'Leftarrow': '⇐', 'Leftrightarrow': '⇔', 'iff': '⇔', 'mapsto': '↦',
+  'uparrow': '↑', 'downarrow': '↓', 'nearrow': '↗', 'searrow': '↘', 'swarrow': '↙', 'nwarrow': '↖',
+  'rightleftharpoons': '⇌', 'sum': '∑', 'prod': '∏', 'int': '∫', 'oint': '∮', 'partial': '∂', 'nabla': '∇',
+  'degree': '°', 'angle': '∠', 'perp': '⊥', 'parallel': '∥', 'triangle': '△', 'in': '∈', 'notin': '∉',
+  'subset': '⊂', 'subseteq': '⊆', 'supset': '⊃', 'cup': '∪', 'cap': '∩', 'emptyset': '∅', 'forall': '∀',
+  'exists': '∃', 'neg': '¬', 'land': '∧', 'lor': '∨', 'therefore': '∴', 'because': '∵', 'hbar': 'ℏ',
+  'ell': 'ℓ', 'prime': '′', 'ldots': '…', 'cdots': '…', 'dots': '…', 'vdots': '⋮', 'langle': '⟨',
+  'rangle': '⟩', 'lvert': '|', 'rvert': '|', 'mid': '|', 'backslash': '\\', 'colon': ':',
+  // spacing and sizing: nothing to show
+  'quad': ' ', 'qquad': ' ', 'left': '', 'right': '', 'big': '', 'Big': '', 'bigg': '', 'Bigg': '',
+  'displaystyle': '', 'textstyle': '', 'limits': '', 'nolimits': '', 'relax': '', 'hfill': ' ',
+};
+
+const _superscripts = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '+': '⁺', '-': '⁻', 'n': 'ⁿ', 'i': 'ⁱ', '(': '⁽', ')': '⁾',
+};
+const _subscripts = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+  '+': '₊', '-': '₋', '(': '₍', ')': '₎',
+};
+
+String _script(String body, Map<String, String> glyphs, String mark) {
+  final t = body.trim();
+  if (t.isEmpty) return '';
+  if (t.split('').every(glyphs.containsKey)) return t.split('').map((c) => glyphs[c]!).join();
+  return t.length == 1 ? '$mark$t' : '$mark($t)';
+}
+
+final _texLayout = RegExp(
+  r'\\(?:hspace|vspace|hskip|vskip|kern|mkern|mskip|rule|raisebox|phantom|hphantom|vphantom)\*?'
+  r'\s*(?:\{[^{}]*\}|-?[\d.]+\s*(?:em|ex|mu|pt|px|cm|mm))?(?:\{[^{}]*\}){0,2}',
+);
+final _texEnv = RegExp(r'\\(?:begin|end)\s*\{[^{}]*\}(?:\{[^{}]*\})?');
+final _texFrac = RegExp(r'\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}');
+final _texRoot = RegExp(r'\\sqrt\s*\{([^{}]*)\}');
+final _texWrap = RegExp(
+  r'\\(?:text|textbf|textit|textrm|texttt|mathrm|mathbf|mathit|mathsf|mathtt|mathcal|mathbb|boldsymbol|bm|'
+  r'operatorname|overline|underline|vec|hat|bar|tilde|boxed|mbox)\s*\{([^{}]*)\}',
+);
+final _texSimple = RegExp(r'^[\w.]+$');
+
+/// LaTeX the typesetter refused -> the same thing in ordinary symbols, so a
+/// formula the model wrote badly still reads ("Symbol: ∼ ↗", "(a + b)/2",
+/// "x² ≤ 4") instead of showing its backslashes and braces.
+String texToPlain(String tex) {
+  var s = tex.replaceAll(_texLayout, ' ').replaceAll(_texEnv, ' ');
+  for (var i = 0; i < 8; i++) {
+    final before = s;
+    s = s.replaceAllMapped(_texFrac, (m) {
+      String part(String p) => _texSimple.hasMatch(p.trim()) ? p.trim() : '(${p.trim()})';
+      return '${part(m[1]!)}/${part(m[2]!)}';
+    });
+    s = s.replaceAllMapped(_texRoot, (m) => '√(${m[1]!.trim()})');
+    s = s.replaceAllMapped(_texWrap, (m) => m[1]!);
+    s = s.replaceAllMapped(RegExp(r'\^\s*\{([^{}]*)\}'), (m) => _script(m[1]!, _superscripts, '^'));
+    s = s.replaceAllMapped(RegExp(r'_\s*\{([^{}]*)\}'), (m) => _script(m[1]!, _subscripts, '_'));
+    if (s == before) break;
+  }
+  s = s.replaceAll(RegExp(r'\^\s*\\circ\b'), '°');
+  s = s.replaceAllMapped(RegExp(r'\^([0-9n+\-])'), (m) => _superscripts[m[1]]!);
+  s = s.replaceAllMapped(RegExp(r'_([0-9])'), (m) => _subscripts[m[1]]!);
+  // a command -> its symbol; one with no symbol keeps its name (\sin -> sin)
+  s = s.replaceAllMapped(RegExp(r'\\([a-zA-Z]+)\s?'), (m) {
+    final symbol = _texSymbols[m[1]];
+    if (symbol == null) return '${m[1]} ';
+    return symbol.isEmpty ? '' : '$symbol ';
+  });
+  s = s.replaceAllMapped(RegExp(r'\\([{}%$&#_])'), (m) => m[1]!); // escaped characters
+  s = s.replaceAll(RegExp(r'\\[,;:! ]|\\\\|~|&'), ' ').replaceAll(RegExp(r'[{}\\]'), '');
+  return s.replaceAll(RegExp(r'\s+'), ' ').replaceAll(RegExp(r' ([,.;:)])'), r'$1').trim();
 }
 
 enum BlockKind { paragraph, heading, item, math }
@@ -190,7 +274,7 @@ List<InlineSpan> inlineSpans(String text, TextStyle style) {
           tex.trim(),
           mathStyle: m.group(1) != null ? MathStyle.display : MathStyle.text,
           textStyle: style.copyWith(fontSize: (style.fontSize ?? 14.5) * 1.05, height: 1.0),
-          onErrorFallback: (_) => Text(m.group(0)!, style: style),
+          onErrorFallback: (_) => Text(texToPlain(tex), style: style),
         ),
       ));
     } else if (m.group(4) != null) {

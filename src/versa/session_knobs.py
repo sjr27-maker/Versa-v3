@@ -2,20 +2,28 @@
 slider levels -- and the one pure function that turns them into a directive
 for `FinalAnswer`.
 
-All at 50 renders to '' on purpose: an untouched session's prompt stays
-byte-identical to what it was before the knobs existed. Every other value
-renders something that differs from its neighbours, so each slider move
-really changes the prompt the regeneration runs with."""
+A slider at 50 adds nothing to the prompt (all three at 50 renders to '').
+Every other value renders something that differs from its neighbours, so each
+slider move really changes the prompt the regeneration runs with.
+
+A new chat's length starts at 40, not 50 (2026-10-01: untouched answers ran
+long on a phone), so an untouched chat's prompt carries the length line --
+about 110 words instead of the ~167 an unprompted answer measured. Depth and
+breadth still start at 50. The column default is migration 094; chats made
+before it keep the level they had."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+# The level at which a slider adds nothing to the prompt.
 DEFAULT_LEVEL = 50
+# Where a new chat's length slider starts.
+DEFAULT_ANSWER_LENGTH = 40
 
 
 class SessionKnobs(BaseModel):
-    answer_length: int = Field(DEFAULT_LEVEL, ge=0, le=100)
+    answer_length: int = Field(DEFAULT_ANSWER_LENGTH, ge=0, le=100)
     depth: int = Field(DEFAULT_LEVEL, ge=0, le=100)
     # narrow -> wide: how far an answer reaches beyond the question itself
     breadth: int = Field(DEFAULT_LEVEL, ge=0, le=100)
@@ -86,7 +94,7 @@ def render_knob_directive(knobs: SessionKnobs) -> str:
     if not lines:
         return ""
     return (
-        "\nThe person set these style controls for this conversation. They are "
+        "\nThese style controls are set for this conversation. They are "
         "requirements on how you write, and they override any default "
         "preference for length or structure elsewhere in this prompt:\n"
         + "".join(f"- {line}\n" for line in lines)

@@ -12,7 +12,7 @@ import versa.rooms.nodes as nodes_module
 import versa.rooms.router as router_module
 import versa.rooms.store as store_module
 
-_MIGRATIONS = ("rooms_001_rooms.sql",)
+_MIGRATIONS = ("rooms_001_rooms.sql", "rooms_002_image_source.sql")
 
 
 def _string_literals(path: Path):

@@ -38,11 +38,27 @@ class RoomApi {
     return jsonDecode(utf8.decode(r.bodyBytes));
   }
 
-  Future<RoomJoined> create({required String code, required String name, String? topic, String? link}) async {
+  /// [pictureReading]: the words read out of a picture the room is built
+  /// from (picture.dart `uploadPicture` with `asResource`) -- a room is given
+  /// the reading, never the picture.
+  Future<RoomJoined> create({
+    required String code,
+    required String name,
+    String? topic,
+    String? link,
+    String? pictureReading,
+    String? pictureName,
+  }) async {
     final r = await _http
         .post(_uri('/rooms'),
             headers: _json,
-            body: jsonEncode({'code': code, 'name': name, 'topic': ?topic, 'link': ?link}))
+            body: jsonEncode({
+              'code': code,
+              'name': name,
+              'topic': ?topic,
+              'link': ?link,
+              if (pictureReading != null) 'picture': {'reading': pictureReading, 'filename': ?pictureName},
+            }))
         .timeout(_generate);
     return RoomJoined.fromJson(_decode(r, 'could not create the room') as Map<String, dynamic>);
   }

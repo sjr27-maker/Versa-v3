@@ -294,7 +294,13 @@ class TranscriptStore:
                         SELECT t2.text FROM turns t2
                         WHERE t2.session_id = s.id
                         ORDER BY t2.turn_index LIMIT 1
-                    ) AS preview
+                    ) AS preview,
+                    (
+                        SELECT nc.output_json FROM node_calls nc
+                        WHERE nc.session_id = s.id AND nc.node_name = 'DescribeChat'
+                          AND nc.output_json ? 'title'
+                        ORDER BY nc.turn_index DESC, nc.seq DESC LIMIT 1
+                    ) AS described
                 FROM sessions s
                 LEFT JOIN turns t ON t.session_id = s.id
                 WHERE s.learner_id = $1 AND ($2::text IS NULL OR s.app_mode = $2)
@@ -304,7 +310,34 @@ class TranscriptStore:
                 learner_id,
                 app_mode,
             )
-        return [ChatSummary(**dict(row)) for row in rows]
+        summaries = []
+        for row in rows:
+            fields = dict(row)
+            # what the chat is about (chat_titles.DescribeChat), when it was described
+            described = fields.pop("described") or {}
+            summaries.append(ChatSummary(
+                **fields, title=described.get("title") or None, about=described.get("about") or None,
+            ))
+        return summaries
+
+    async def latest_scenes(self, session_ids: list[UUID]) -> dict[UUID, list[dict]]:
+        """Each chat's latest stage performance that has anything in it: the
+        script its `StageDirector` call recorded (server.py `_StageRun`) --
+        the picture the Home feed plays on that chat's card."""
+        if not session_ids:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (session_id) session_id, output_json
+                FROM node_calls
+                WHERE session_id = ANY($1::uuid[]) AND node_name = 'StageDirector'
+                  AND jsonb_typeof(output_json) = 'array' AND jsonb_array_length(output_json) > 0
+                ORDER BY session_id, turn_index DESC, seq DESC
+                """,
+                session_ids,
+            )
+        return {row["session_id"]: row["output_json"] for row in rows}
 
     async def count_sessions_for_learner(self, learner_id: UUID) -> int:
         async with self._pool.acquire() as conn:

@@ -52,9 +52,10 @@ class ChatOption {
 }
 
 /// A chat's style controls (server: session_knobs.py): answer length, depth
-/// and breadth as 0-100 slider levels. All at 50 is the untouched default.
+/// and breadth as 0-100 slider levels. A new chat starts with length at 40
+/// and depth and breadth at 50.
 class SessionKnobs {
-  const SessionKnobs({this.answerLength = 50, this.depth = 50, this.breadth = 50});
+  const SessionKnobs({this.answerLength = 40, this.depth = 50, this.breadth = 50});
 
   final int answerLength;
   final int depth;
@@ -63,7 +64,7 @@ class SessionKnobs {
   final int breadth;
 
   factory SessionKnobs.fromJson(Map<String, dynamic> j) => SessionKnobs(
-        answerLength: (j['answer_length'] as num?)?.toInt() ?? 50,
+        answerLength: (j['answer_length'] as num?)?.toInt() ?? 40,
         depth: (j['depth'] as num?)?.toInt() ?? 50,
         breadth: (j['breadth'] as num?)?.toInt() ?? 50,
       );
@@ -761,6 +762,9 @@ class ChatSummary {
     required this.createdAt,
     required this.lastActivityAt,
     this.preview,
+    this.title,
+    this.about,
+    this.scene,
     this.lessonId,
   });
 
@@ -770,6 +774,26 @@ class ChatSummary {
   final DateTime createdAt;
   final DateTime lastActivityAt;
   final String? preview;
+
+  /// What the chat is about, in clean words (server: chat_titles.py): a
+  /// short title and one sentence. Null for a chat that was never described.
+  final String? title;
+  final String? about;
+
+  /// The chat's latest stage performance (a stage script), which the Home
+  /// feed plays as the card's picture. Only the feed sends it.
+  final List<Map<String, dynamic>>? scene;
+
+  /// The chat's opening message as a caption: the words alone, without the
+  /// bracketed reading of a picture sent with them.
+  String? get cleanPreview {
+    final text = preview;
+    if (text == null) return null;
+    final cut = text.indexOf('[Attached picture -- what it shows:');
+    var words = (cut < 0 ? text : text.substring(0, cut)).replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (words.startsWith('(They sent only this picture')) words = '';
+    return words.isEmpty ? 'A picture you sent' : words;
+  }
 
   /// Set on a Learn-a-topic chat: the lesson it belongs to.
   final String? lessonId;
@@ -781,6 +805,9 @@ class ChatSummary {
         createdAt: DateTime.parse(json['created_at'] as String),
         lastActivityAt: DateTime.parse(json['last_activity_at'] as String),
         preview: json['preview'] as String?,
+        title: json['title'] as String?,
+        about: json['about'] as String?,
+        scene: (json['scene'] as List?)?.whereType<Map>().map((a) => a.cast<String, dynamic>()).toList(),
         lessonId: json['lesson_id'] as String?,
       );
 }

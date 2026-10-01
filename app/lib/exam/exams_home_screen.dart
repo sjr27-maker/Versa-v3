@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../app_state.dart';
+import '../picture.dart';
 import '../theme.dart';
 import '../topic/topic_api.dart';
 import '../topic/topic_models.dart';
@@ -11,8 +12,8 @@ import 'exam_api.dart';
 import 'exam_models.dart';
 import 'exams_root.dart';
 
-/// Exam preparation: the person's exams, and the four ways to set one up
-/// (search a subject, a PDF, a web link, or one of their courses).
+/// Exam preparation: the person's exams, and the ways to set one up (search
+/// a subject, a PDF, a photo, a web link, or one of their courses).
 class ExamsHomeScreen extends StatefulWidget {
   const ExamsHomeScreen({super.key});
 
@@ -104,6 +105,26 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
     final (:name, :bytes) = picked;
     final date = _examDate;
     _create('Reading $name…', (api, id) => api.createFromPdf(id, name, bytes, examDate: date));
+  }
+
+  /// A photo of the syllabus, a page or their notes: read on upload, then
+  /// split into units like a PDF.
+  Future<void> _startPicture() async {
+    final PickedPicture? picked;
+    try {
+      picked = await choosePicture(context);
+    } catch (e) {
+      _toast('Could not open the picture ($e)');
+      return;
+    }
+    if (picked == null || !mounted) return;
+    final app = context.read<AppState>();
+    final (:name, :bytes) = picked;
+    final date = _examDate;
+    _create('Reading your picture…', (api, id) async {
+      final picture = await app.api.uploadPicture(id, bytes, name, asResource: true);
+      return api.createFromImage(id, picture.id, examDate: date);
+    });
   }
 
   Future<void> _startLink() async {
@@ -288,6 +309,12 @@ class _ExamsHomeScreenState extends State<ExamsHomeScreen> {
               icon: Icons.picture_as_pdf_outlined,
               label: 'A PDF',
               onTap: _busy == null ? _startPdf : null,
+            ),
+            _SourceButton(
+              buttonKey: const ValueKey('exam-upload-image'),
+              icon: canTakePhoto() ? Icons.photo_camera_outlined : Icons.add_photo_alternate_outlined,
+              label: canTakePhoto() ? 'A photo' : 'A picture',
+              onTap: _busy == null ? _startPicture : null,
             ),
             _SourceButton(
               buttonKey: const ValueKey('exam-link'),

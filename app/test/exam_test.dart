@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,7 @@ import 'package:versa_app/app_state.dart';
 import 'package:versa_app/chat_controller.dart';
 import 'package:versa_app/exam/quiz_screen.dart';
 import 'package:versa_app/main.dart';
+import 'package:versa_app/picture.dart';
 
 import 'support/fakes.dart';
 
@@ -196,7 +198,7 @@ class ExamHarness {
         {'id': 'topic-1', 'title': 'Machine learning', 'percent': 35, 'chapter_count': 2,
          'lesson_count': 3, 'lessons_done': 1, 'updated_at': null},
       ]);
-    } else if (path == '/api/exams' || path == '/api/exams/from-course') {
+    } else if (path == '/api/exams' || path == '/api/exams/from-course' || path == '/api/exams/from-image') {
       createPaths.add(path);
       createBodies.add(json);
       r = _json(exam(path == '/api/exams' ? json['query'] as String : 'Machine learning'));
@@ -490,6 +492,24 @@ void main() {
     await _tapKey(tester, 'exam-course-topic-1');
     expect(h.createPaths.single, '/api/exams/from-course');
     expect(h.createBodies.single['topic_id'], 'topic-1');
+    expect(find.text('Machine learning'), findsWidgets);
+  });
+
+  testWidgets('an exam can be built from a photo of the syllabus', (tester) async {
+    final h = ExamHarness();
+    final realPicture = picturePicker, realCamera = canTakePhoto;
+    addTearDown(() {
+      picturePicker = realPicture;
+      canTakePhoto = realCamera;
+    });
+    canTakePhoto = () => false;
+    picturePicker = () async => (name: 'syllabus.jpg', bytes: Uint8List.fromList([0xFF, 0xD8, 0xFF, 1, 2]));
+    await _boot(tester, h);
+
+    await _tapKey(tester, 'exam-upload-image');
+    expect(h.backend.picturesUploaded, 1, reason: 'read once, on upload');
+    expect(h.createPaths.single, '/api/exams/from-image');
+    expect(h.createBodies.single, {'learner_id': 'learner-Asha', 'image_id': 'img-1'});
     expect(find.text('Machine learning'), findsWidgets);
   });
 

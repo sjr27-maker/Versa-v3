@@ -76,7 +76,7 @@ async def test_every_settled_move_survives_though_the_session_keeps_only_the_las
             "/api/sessions/00000000-0000-0000-0000-000000000000/knobs", json={"depth": 10}
         )
 
-    assert current == {"answer_length": 50, "depth": 90, "breadth": 70}
+    assert current == {"answer_length": 40, "depth": 90, "breadth": 70}
     assert missing.status_code == 404
     events = await KnobEventStore(clean_pool).list_for_session(UUID(sid))
     assert [(e.before.depth, e.after.depth, e.after.breadth) for e in events] == [(50, 20, 50), (20, 90, 70)]
@@ -97,4 +97,4 @@ async def test_a_move_records_how_far_into_the_session_it_came(live, new_chat, c
 
     [event] = await KnobEventStore(clean_pool).list_for_session(UUID(sid))
     assert event.turn_count == 1
-    assert (event.before.answer_length, event.after.answer_length) == (50, 10)
+    assert (event.before.answer_length, event.after.answer_length) == (40, 10)
